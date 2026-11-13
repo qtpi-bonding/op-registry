@@ -356,3 +356,182 @@ fn value_enum_with_default_uses_valueenum_name_not_serde_name() {
     // All paths should agree
     assert_eq!(json_result, clap_result);
 }
+
+#[derive(Debug, PartialEq, OpParams)]
+struct ConflictParams {
+    #[op(conflicts_with = "text")]
+    file: Option<String>,
+    text: Option<String>,
+}
+
+#[test]
+fn op_params_conflicts_with_is_oneof_in_schema() {
+    let schema = ConflictParams::schema();
+    assert_eq!(
+        schema["oneOf"],
+        json!([
+            {"required": ["file"], "not": {"required": ["text"]}},
+            {"required": ["text"], "not": {"required": ["file"]}},
+            {"not": {"anyOf": [{"required": ["file"]}, {"required": ["text"]}]}}
+        ])
+    );
+
+    let both = ConflictParams::from_json(json!({"file": "a", "text": "b"})).unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(&both).code,
+        "op_registry.usage.invalid"
+    );
+    assert!(both.to_string().contains("file"));
+    assert!(both.to_string().contains("text"));
+    assert_eq!(
+        ConflictParams::from_json(json!({"file": "a"}))
+            .unwrap()
+            .file,
+        Some("a".into())
+    );
+
+    assert!(ConflictParams::clap_args(clap::Command::new("t"))
+        .try_get_matches_from(["t", "--file", "a", "--text", "b"])
+        .is_err());
+    let matches = ConflictParams::clap_args(clap::Command::new("t"))
+        .try_get_matches_from(["t", "--file", "a"])
+        .unwrap();
+    assert_eq!(
+        ConflictParams::from_matches(&matches).unwrap().file,
+        Some("a".into())
+    );
+
+    #[allow(dead_code)]
+    #[derive(OpParams)]
+    struct NoConflict {
+        first: Option<String>,
+        second: Option<String>,
+    }
+    assert!(NoConflict::schema().get("oneOf").is_none());
+}
+
+#[derive(Debug, PartialEq, OpParams)]
+struct KeyValueParams {
+    #[op(key_value, keys = ["alpha", "beta"])]
+    set: std::collections::BTreeMap<String, String>,
+}
+
+#[test]
+fn key_value_param_refuses_unknown_and_repeated_key_naming_it() {
+    let matches = KeyValueParams::clap_args(clap::Command::new("t"))
+        .try_get_matches_from(["t", "--set", "alpha=1", "--set", "beta=2"])
+        .unwrap();
+    let params = KeyValueParams::from_matches(&matches).unwrap();
+    assert_eq!(params.set.get("alpha"), Some(&"1".to_string()));
+    assert_eq!(params.set.get("beta"), Some(&"2".to_string()));
+
+    let matches = KeyValueParams::clap_args(clap::Command::new("t"))
+        .try_get_matches_from(["t", "--set", "gamma=1"])
+        .unwrap();
+    let unknown = KeyValueParams::from_matches(&matches).unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(&unknown).code,
+        "op_registry.usage.unknown_key"
+    );
+    assert!(format!("{:#}", unknown).contains("gamma"));
+
+    let matches = KeyValueParams::clap_args(clap::Command::new("t"))
+        .try_get_matches_from(["t", "--set", "alpha=1", "--set", "alpha=2"])
+        .unwrap();
+    let repeated = KeyValueParams::from_matches(&matches).unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(&repeated).code,
+        "op_registry.usage.repeated_key"
+    );
+    assert!(format!("{:#}", repeated).contains("alpha"));
+
+    let json_unknown = KeyValueParams::from_json(json!({"set": {"gamma": "1"}})).unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(&json_unknown).code,
+        "op_registry.usage.unknown_key"
+    );
+    assert!(format!("{:#}", json_unknown).contains("gamma"));
+
+    let matches = KeyValueParams::clap_args(clap::Command::new("t"))
+        .try_get_matches_from(["t", "--set", "noequals"])
+        .unwrap();
+    let invalid = KeyValueParams::from_matches(&matches).unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(&invalid).code,
+        "op_registry.usage.invalid"
+    );
+
+    assert_eq!(
+        KeyValueParams::schema(),
+        json!({
+            "type": "object",
+            "properties": {
+                "set": {
+                    "type": "object",
+                    "properties": {
+                        "alpha": {"type": "string"},
+                        "beta": {"type": "string"}
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        })
+    );
+}
+
+#[test]
+fn key_value_param_is_optional_in_json() {
+    let params = KeyValueParams::from_json(json!({})).unwrap();
+    assert!(params.set.is_empty());
+}
+
+#[derive(Debug, PartialEq, OpParams)]
+struct MultipleConflictParams {
+    #[op(conflicts_with = "text")]
+    file: Option<String>,
+    text: Option<String>,
+    #[op(conflicts_with = "other")]
+    note: Option<String>,
+    other: Option<String>,
+}
+
+#[test]
+fn multiple_conflicts_use_all_of_one_of_schemas() {
+    let schema = MultipleConflictParams::schema();
+    assert_eq!(
+        schema,
+        json!({
+            "type": "object",
+            "properties": {
+                "file": {"type": "string", "description": ""},
+                "text": {"type": "string", "description": ""},
+                "note": {"type": "string", "description": ""},
+                "other": {"type": "string", "description": ""}
+            },
+            "required": [],
+            "additionalProperties": false,
+            "allOf": [
+                {"oneOf": [
+                    {"required": ["file"], "not": {"required": ["text"]}},
+                    {"required": ["text"], "not": {"required": ["file"]}},
+                    {"not": {"anyOf": [{"required": ["file"]}, {"required": ["text"]}]}}
+                ]},
+                {"oneOf": [
+                    {"required": ["note"], "not": {"required": ["other"]}},
+                    {"required": ["other"], "not": {"required": ["note"]}},
+                    {"not": {"anyOf": [{"required": ["note"]}, {"required": ["other"]}]}}
+                ]}
+            ]
+        })
+    );
+    assert!(schema.get("oneOf").is_none());
+    assert!(MultipleConflictParams::from_json(json!({})).is_ok());
+}
+
+#[test]
+fn conflict_with_null_is_treated_as_absent() {
+    let params = ConflictParams::from_json(json!({"file": "a", "text": null})).unwrap();
+    assert_eq!(params.file.as_deref(), Some("a"));
+    assert_eq!(params.text, None);
+}

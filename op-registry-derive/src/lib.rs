@@ -20,6 +20,9 @@ struct Field {
     required_unless: Option<String>,
     doc: String,
     schema: Option<syn::Path>,
+    conflicts_with: Option<String>,
+    key_value: bool,
+    keys: Vec<String>,
 }
 
 fn meta(attrs: &[Attribute], key: &str) -> Option<syn::Meta> {
@@ -46,6 +49,9 @@ fn validate_attrs(attrs: &[Attribute]) -> Result<(), syn::Error> {
         "value_delimiter",
         "required_unless_present",
         "schema",
+        "conflicts_with",
+        "key_value",
+        "keys",
     ];
     for attr in attrs.iter().filter(|a| a.path().is_ident("op")) {
         let metas = attr
@@ -80,6 +86,23 @@ fn validate_attrs(attrs: &[Attribute]) -> Result<(), syn::Error> {
                     if !matches!(&m, syn::Meta::NameValue(v) if matches!(&v.value, Expr::Lit(x) if matches!(x.lit, syn::Lit::Char(_))))
                     {
                         return Err(bad("this #[op] option requires a character literal"));
+                    }
+                }
+                "conflicts_with" => {
+                    if !matches!(&m, syn::Meta::NameValue(v) if matches!(&v.value, Expr::Lit(x) if matches!(x.lit, syn::Lit::Str(_))))
+                    {
+                        return Err(bad("conflicts_with requires a string literal"));
+                    }
+                }
+                "key_value" => {
+                    if !matches!(m, syn::Meta::Path(_)) {
+                        return Err(bad("this #[op] option takes no value"));
+                    }
+                }
+                "keys" => {
+                    if !matches!(&m, syn::Meta::NameValue(v) if matches!(&v.value, Expr::Array(_)))
+                    {
+                        return Err(bad("keys requires an array of string literals"));
                     }
                 }
                 "default" if !matches!(m, syn::Meta::NameValue(_)) => {
@@ -142,6 +165,47 @@ fn type_name(t: &Type) -> String {
     quote!(#t).to_string().replace(' ', "")
 }
 
+fn map_type(ty: &Type) -> bool {
+    if let Type::Path(p) = ty {
+        if let Some(segment) = p.path.segments.last() {
+            if segment.ident == "BTreeMap" {
+                if let syn::PathArguments::AngleBracketed(a) = &segment.arguments {
+                    let types = a
+                        .args
+                        .iter()
+                        .filter_map(|arg| match arg {
+                            syn::GenericArgument::Type(t) => Some(type_name(t)),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    return types == ["String", "String"];
+                }
+            }
+        }
+    }
+    false
+}
+
+fn keys_meta(attrs: &[Attribute]) -> Vec<String> {
+    match meta(attrs, "keys") {
+        Some(syn::Meta::NameValue(v)) => match v.value {
+            Expr::Array(a) => a
+                .elems
+                .iter()
+                .filter_map(|e| match e {
+                    Expr::Lit(x) => match &x.lit {
+                        syn::Lit::Str(s) => Some(s.value()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
 #[proc_macro_derive(OpParams, attributes(op))]
 pub fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -201,11 +265,15 @@ pub fn derive(input: TokenStream) -> TokenStream {
             None => None,
         };
         let (_, _, inner) = type_info(&f.ty);
+        let key_value = has(&f.attrs, "key_value");
+        let keys = keys_meta(&f.attrs);
+        let conflicts_with = string_meta(&f.attrs, "conflicts_with");
         let inner_name = type_name(&inner);
         let supported = matches!(
             inner_name.as_str(),
             "String" | "bool" | "i32" | "i64" | "u16" | "u32" | "u64" | "usize" | "f64"
-        ) || has(&f.attrs, "value_enum");
+        ) || has(&f.attrs, "value_enum")
+            || key_value;
         if !supported {
             return syn::Error::new_spanned(
                 &f.ty,
@@ -218,6 +286,24 @@ pub fn derive(input: TokenStream) -> TokenStream {
             .into();
         }
         let (opt, _, _) = type_info(&f.ty);
+        if key_value && (!map_type(&f.ty) || keys.is_empty()) {
+            return syn::Error::new_spanned(
+                &f.ty,
+                format!(
+                    "field `{fname}` with key_value must be BTreeMap<String, String> and have keys"
+                ),
+            )
+            .to_compile_error()
+            .into();
+        }
+        if conflicts_with.is_some() && !opt {
+            return syn::Error::new_spanned(
+                &f.ty,
+                format!("field `{fname}` with conflicts_with must be Option<T>"),
+            )
+            .to_compile_error()
+            .into();
+        }
         let required_unless = string_meta(&f.attrs, "required_unless_present");
         if required_unless.is_some() && !opt {
             return syn::Error::new_spanned(
@@ -241,6 +327,9 @@ pub fn derive(input: TokenStream) -> TokenStream {
             required_unless: string_meta(&f.attrs, "required_unless_present"),
             doc,
             schema,
+            conflicts_with,
+            key_value,
+            keys,
         });
     }
     let names = fs.iter().map(|f| &f.name).collect::<Vec<_>>();
@@ -257,7 +346,15 @@ pub fn derive(input: TokenStream) -> TokenStream {
         let tn = type_name(&inner);
         let desc = &f.doc;
         let enum_schema = quote!({let n=<#inner as ::op_registry::__private::clap::ValueEnum>::value_variants().iter().filter_map(|v|v.to_possible_value()).map(|v|v.get_name().to_string()).collect::<Vec<_>>();::op_registry::__private::serde_json::json!({"type":"string","enum":n})});
-        let frag = if let Some(p) = &f.schema {
+        let frag = if f.key_value {
+            let key_props = f.keys.iter().map(|k| quote!(properties.insert(#k.to_string(), ::op_registry::__private::serde_json::json!({"type":"string"}));));
+            quote!({
+                let mut properties = ::std::collections::BTreeMap::new();
+                #(#key_props)*
+                let mut x = ::op_registry::__private::serde_json::json!({"type":"object", "properties": properties, "additionalProperties": false});
+                x
+            })
+        } else if let Some(p) = &f.schema {
             quote!(#p())
         } else if f.value_enum {
             if vec {
@@ -286,8 +383,18 @@ pub fn derive(input: TokenStream) -> TokenStream {
             quote!(::op_registry::__private::serde_json::json!({"type":"integer"}))
         };
         let def=f.default.as_ref().map(|e|quote!(o.insert("default".into(),::op_registry::__private::serde_json::to_value(&(#e)).unwrap());)).unwrap_or_default();
-        props.push(quote! { properties.insert(#key.to_string(), { let mut x = #frag; let o = x.as_object_mut().unwrap(); o.insert("description".into(), ::op_registry::__private::serde_json::json!(#desc)); #def x }); });
-        if !opt && !vec && tn != "bool" && f.default.is_none() && f.required_unless.is_none() {
+        if f.key_value {
+            props.push(quote! { properties.insert(#key.to_string(), #frag); });
+        } else {
+            props.push(quote! { properties.insert(#key.to_string(), { let mut x = #frag; let o = x.as_object_mut().unwrap(); o.insert("description".into(), ::op_registry::__private::serde_json::json!(#desc)); #def x }); });
+        }
+        if !opt
+            && !vec
+            && !f.key_value
+            && tn != "bool"
+            && f.default.is_none()
+            && f.required_unless.is_none()
+        {
             req.push(quote!(#key));
         }
         // Note: plain bool fields without default should NOT be in required list
@@ -296,7 +403,20 @@ pub fn derive(input: TokenStream) -> TokenStream {
         let invalid_enum = quote!(::op_registry::__private::usage(::op_registry::UsageError::InvalidField{name:#key.to_string(),reason:"invalid enum".to_string()}));
         let invalid_json = quote!(::op_registry::__private::usage(::op_registry::UsageError::InvalidField{name:#key.to_string(),reason:e.to_string()}));
         let missing = quote!(::op_registry::__private::usage(::op_registry::UsageError::MissingField{name:#key.to_string()}));
-        let decode = if f.value_enum && vec {
+        let decode = if f.key_value {
+            let allowed = f.keys.iter().map(|k| quote!(#k));
+            quote!({
+                let input: ::std::collections::BTreeMap<String, String> = ::op_registry::__private::serde_json::from_value(v.clone()).map_err(|e| #invalid_json)?;
+                let mut output = ::std::collections::BTreeMap::new();
+                for (key, value) in input {
+                    if ![#(#allowed),*].contains(&key.as_str()) {
+                        return Err(::op_registry::__private::usage(::op_registry::UsageError::UnknownKey { param: #key.to_string(), key }));
+                    }
+                    output.insert(key, value);
+                }
+                output
+            })
+        } else if f.value_enum && vec {
             quote!({let values:Vec<String>=::op_registry::__private::serde_json::from_value(v.clone()).map_err(|_|#invalid_expected)?; values.into_iter().map(|s| <#inner as ::op_registry::__private::clap::ValueEnum>::from_str(&s,true).map_err(|_|#invalid_enum)).collect::<::std::result::Result<Vec<_>,_>>()?})
         } else if f.value_enum && opt {
             quote!({let value:Option<String>=::op_registry::__private::serde_json::from_value(v.clone()).map_err(|_|#invalid_expected)?; value.map(|s| <#inner as ::op_registry::__private::clap::ValueEnum>::from_str(&s,true).map_err(|_|#invalid_enum)).transpose()?})
@@ -309,6 +429,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
             quote!(None)
         } else if let Some(other) = &f.required_unless {
             quote!(if object.contains_key(#other) { None } else { return Err(#missing) })
+        } else if f.key_value {
+            quote!(::std::collections::BTreeMap::new())
         } else if vec {
             quote!(Vec::new())
         } else if let Some(e) = &f.default {
@@ -338,6 +460,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
         if let Some(d) = f.delimiter {
             arg = quote!(#arg.value_delimiter(#d));
         }
+        if let Some(other) = &f.conflicts_with {
+            arg = quote!(#arg.conflicts_with(#other));
+        }
+        if f.key_value {
+            arg = quote!(#arg.action(::op_registry::__private::clap::ArgAction::Append));
+            arg = quote!(#arg.value_parser(::op_registry::__private::clap::value_parser!(String)));
+        }
         if let Some(u) = &f.required_unless {
             let other_is_positional = fs.iter().any(|other| other.name == *u && other.positional);
             if !other_is_positional {
@@ -354,7 +483,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
         if f.value_enum {
             arg = quote!(#arg.value_parser(::op_registry::__private::clap::builder::PossibleValuesParser::new(<#inner as ::op_registry::__private::clap::ValueEnum>::value_variants().iter().filter_map(|v|v.to_possible_value()))));
-        } else if tn != "String" && tn != "bool" {
+        } else if !f.key_value && tn != "String" && tn != "bool" {
             arg = quote!(#arg.value_parser(::op_registry::__private::clap::value_parser!(#inner)));
             // Allow negative numbers for signed integer and float types
             if matches!(tn.as_str(), "i32" | "i64" | "f64") {
@@ -395,7 +524,24 @@ pub fn derive(input: TokenStream) -> TokenStream {
             }
         }
         args.push(quote!(cmd=cmd.arg(#arg);));
-        let get = if f.value_enum && vec {
+        let get = if f.key_value {
+            let allowed = f.keys.iter().map(|k| quote!(#k));
+            quote!({
+                let mut output = ::std::collections::BTreeMap::new();
+                if let Some(values) = matches.get_many::<String>(#key) {
+                    for value in values {
+                        let (map_key, map_value) = value.split_once('=').ok_or_else(|| ::op_registry::__private::usage(::op_registry::UsageError::InvalidField { name: #key.to_string(), reason: "expected key=value".to_string() }))?;
+                        if ![#(#allowed),*].contains(&map_key) {
+                            return Err(::op_registry::__private::usage(::op_registry::UsageError::UnknownKey { param: #key.to_string(), key: map_key.to_string() }));
+                        }
+                        if output.insert(map_key.to_string(), map_value.to_string()).is_some() {
+                            return Err(::op_registry::__private::usage(::op_registry::UsageError::RepeatedKey { param: #key.to_string(), key: map_key.to_string() }));
+                        }
+                    }
+                }
+                output
+            })
+        } else if f.value_enum && vec {
             quote!(matches.get_many::<String>(#key).map(|values| values.map(|value| <#inner as ::op_registry::__private::clap::ValueEnum>::from_str(value, true).map_err(|_| #invalid_enum)).collect::<::std::result::Result<Vec<_>,_>>()).transpose()?.unwrap_or_default())
         } else if f.value_enum && opt {
             quote!(matches.get_one::<String>(#key).map(|value| <#inner as ::op_registry::__private::clap::ValueEnum>::from_str(value, true).map_err(|_| #invalid_enum)).transpose()?)
@@ -430,5 +576,43 @@ pub fn derive(input: TokenStream) -> TokenStream {
         gets.push(quote!(let #id=#get;));
     }
     let ids = fs.iter().map(|f| &f.ident).collect::<Vec<_>>();
-    quote!{impl ::op_registry::OpParams for #name{fn schema()->::op_registry::__private::serde_json::Value{let mut properties=::std::collections::BTreeMap::new();#(#props)*let required: Vec<&str>=vec![#(#req),*];::op_registry::__private::serde_json::json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})}fn from_json(value: ::op_registry::__private::serde_json::Value)->::op_registry::__private::anyhow::Result<Self>{let object=value.as_object().ok_or_else(||::op_registry::__private::usage(::op_registry::UsageError::InvalidField{name:"params".into(),reason:"expected object".into()}))?;for k in object.keys(){if ![#(#names),*].contains(&k.as_str()){return Err(::op_registry::__private::usage(::op_registry::UsageError::InvalidField{name:k.clone(),reason:"unknown field".into()}));}}#(#jsons)*Ok(Self{#(#ids),*})}fn clap_args(mut cmd: ::op_registry::__private::clap::Command)->::op_registry::__private::clap::Command{#(#args)*cmd}fn from_matches(matches:&::op_registry::__private::clap::ArgMatches)->::op_registry::__private::anyhow::Result<Self>{#(#gets)*Ok(Self{#(#ids),*})}}}.into()
+    let conflict_pairs = fs
+        .iter()
+        .filter_map(|f| {
+            f.conflicts_with
+                .as_ref()
+                .map(|other| (f.name.clone(), other.clone()))
+        })
+        .map(|(a, b)| if a < b { (a, b) } else { (b, a) })
+        .fold(Vec::<(String, String)>::new(), |mut pairs, pair| {
+            if !pairs.contains(&pair) {
+                pairs.push(pair);
+            }
+            pairs
+        });
+    let conflict_schema = conflict_pairs
+        .iter()
+        .map(|(a, b)| {
+            quote!([{"required":[#a],"not":{"required":[#b]}},{"required":[#b],"not":{"required":[#a]}},{"not":{"anyOf":[{"required":[#a]},{"required":[#b]}]}}])
+        })
+        .collect::<Vec<_>>();
+    let conflict_allof = conflict_schema
+        .iter()
+        .map(|pair| quote!({"oneOf": #pair}))
+        .collect::<Vec<_>>();
+    let conflict_json = fs.iter().filter_map(|f| f.conflicts_with.as_ref().map(|other| { let a=&f.name; quote!(if object.get(#a).is_some_and(|value| !value.is_null()) && object.get(#other).is_some_and(|value| !value.is_null()) { return Err(::op_registry::__private::usage(::op_registry::UsageError::InvalidField{name:#a.to_string(),reason:format!("conflicts with {}",#other)})); }) })).collect::<Vec<_>>();
+    let schema_extra = if conflict_schema.is_empty() {
+        quote!()
+    } else if conflict_schema.len() == 1 {
+        quote!(schema["oneOf"] = ::op_registry::__private::serde_json::json!(#(#conflict_schema)*);)
+    } else {
+        quote!(schema["allOf"] = ::op_registry::__private::serde_json::json!([#(#conflict_allof),*]);)
+    };
+    let only_key_values = fs.iter().all(|field| field.key_value);
+    let remove_empty_required = if only_key_values {
+        quote!(schema.as_object_mut().unwrap().remove("required");)
+    } else {
+        quote!()
+    };
+    quote!{impl ::op_registry::OpParams for #name{fn schema()->::op_registry::__private::serde_json::Value{let mut properties=::std::collections::BTreeMap::new();#(#props)*let required: Vec<&str>=vec![#(#req),*];let mut schema=::op_registry::__private::serde_json::json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});#remove_empty_required #schema_extra schema}fn from_json(value: ::op_registry::__private::serde_json::Value)->::op_registry::__private::anyhow::Result<Self>{let object=value.as_object().ok_or_else(||::op_registry::__private::usage(::op_registry::UsageError::InvalidField{name:"params".into(),reason:"expected object".into()}))?;for k in object.keys(){if ![#(#names),*].contains(&k.as_str()){return Err(::op_registry::__private::usage(::op_registry::UsageError::InvalidField{name:k.clone(),reason:"unknown field".into()}));}}#(#conflict_json)*#(#jsons)*Ok(Self{#(#ids),*})}fn clap_args(mut cmd: ::op_registry::__private::clap::Command)->::op_registry::__private::clap::Command{#(#args)*cmd}fn from_matches(matches:&::op_registry::__private::clap::ArgMatches)->::op_registry::__private::anyhow::Result<Self>{#(#gets)*Ok(Self{#(#ids),*})}}}.into()
 }
