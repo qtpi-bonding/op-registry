@@ -4,13 +4,13 @@ use op_registry::{registry, CallOptions, Cursor, OpParams};
 use serde::Deserialize;
 use serde_json::json;
 
-#[derive(Clone, Debug, Deserialize, OpParams)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize, OpParams)]
 #[allow(dead_code)]
 struct Empty {
     value: Option<i32>,
 }
 
-#[derive(Clone, Debug, Deserialize, OpParams)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize, OpParams)]
 struct Input {
     value: i32,
 }
@@ -490,4 +490,56 @@ fn duplicate_name_between_unary_and_stream_is_refused() {
             },
         ]
     };
+}
+
+#[test]
+fn library_crate_can_contribute_entries_without_the_macro() {
+    futures_executor::block_on(async {
+        let mut contributed = op_registry::Registry::<FirstCtx>::new();
+        contributed.push_unary::<Input, Output, _>(
+            op_registry::Descriptor::new("lib", "double")
+                .description("doubles")
+                .audience(op_registry::Audience::Agent)
+                .input_schema(Input::schema()),
+            |_ctx, params, _opts| {
+                Box::pin(async move {
+                    Ok(Output {
+                        result: params.value * 2,
+                    })
+                })
+            },
+            op_registry::CliHooks::for_params::<Input>(),
+        );
+        let mut registry = registry_for_calls();
+        registry.merge(contributed);
+        assert_eq!(registry.names(), vec!["failing", "value_get", "lib_double"]);
+        let out = registry
+            .call(
+                "lib_double",
+                json!({"value": 21}),
+                &FirstCtx { value: 0 },
+                CallOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out["result"], 42);
+        let hooks = registry
+            .cli_hooks("lib_double")
+            .expect("hooks for lib_double");
+        let cmd = (hooks.add_args)(clap::Command::new("double"));
+        let matches = cmd
+            .try_get_matches_from(["double", "--value", "5"])
+            .unwrap();
+        assert_eq!((hooks.parse)(&matches).unwrap(), json!({"value": 5}));
+        assert!(registry.cli_hooks("value_get").is_some());
+        assert!(registry.cli_hooks("missing").is_none());
+    });
+}
+
+#[test]
+#[should_panic(expected = "duplicate operation name")]
+fn merge_refuses_a_duplicate_name() {
+    let mut first = registry_for_calls();
+    let second = registry_for_calls();
+    first.merge(second);
 }
