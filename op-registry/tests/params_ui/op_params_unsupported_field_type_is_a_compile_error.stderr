@@ -1,0 +1,5 @@
+error: unsupported OpParams field `value` of type `std::path::PathBuf`
+ --> tests/params_ui/op_params_unsupported_field_type_is_a_compile_error.rs:5:12
+  |
+5 |     value: std::path::PathBuf,
+  |            ^^^^^^^^^^^^^^^^^^
