@@ -91,6 +91,15 @@ impl<C: Sync> Registry<C> {
             entries: Vec::new(),
         }
     }
+    fn assert_unique(&self, name: &str) {
+        if self
+            .entries
+            .iter()
+            .any(|entry| entry.descriptor.name == name)
+        {
+            panic!("duplicate operation name {:?}", name);
+        }
+    }
     pub fn descriptors(&self) -> Vec<&Descriptor> {
         self.entries.iter().map(|e| &e.descriptor).collect()
     }
@@ -117,12 +126,16 @@ impl<C: Sync> Registry<C> {
             })
     }
     #[doc(hidden)]
+    /// # Panics
+    ///
+    /// Panics if the descriptor name is already registered.
     pub fn push_unary<P, O, F>(&mut self, descriptor: Descriptor, f: F)
     where
         P: OpParams + 'static,
         O: serde::Serialize + 'static,
         F: for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync + 'static,
     {
+        self.assert_unique(&descriptor.name);
         let f = Arc::new(f);
         let call: UnaryCall<C> = Box::new(move |ctx, args, opts| {
             unary_dispatch::<C, P, O, F>(Arc::clone(&f), ctx, args, opts)
@@ -133,6 +146,9 @@ impl<C: Sync> Registry<C> {
         });
     }
     #[doc(hidden)]
+    /// # Panics
+    ///
+    /// Panics if the descriptor name is already registered.
     pub fn push_stream<P, O, F, S>(&mut self, descriptor: Descriptor, f: F)
     where
         P: OpParams + 'static,
@@ -143,6 +159,7 @@ impl<C: Sync> Registry<C> {
             + Sync
             + 'static,
     {
+        self.assert_unique(&descriptor.name);
         let f = Arc::new(f);
         let call: StreamCall<C> = Box::new(move |ctx, args, opts, cursor| {
             stream_dispatch::<C, P, O, F, S>(Arc::clone(&f), ctx, args, opts, cursor)
@@ -161,7 +178,7 @@ impl<C: Sync> Default for Registry<C> {
 
 /// Declares a registry; each entry lists `params`, `output`, then its `op` or
 /// `stream_op`, followed optionally by `output_schema` and the remaining
-/// descriptor fields.
+/// descriptor fields. A duplicate operation name panics.
 #[macro_export]
 macro_rules! registry {
     (Ctx = $ctx:ty; entries: [ $( {
