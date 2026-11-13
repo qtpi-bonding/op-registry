@@ -21,7 +21,13 @@ pub mod __private {
     pub use anyhow;
     pub use clap;
     pub use futures_util;
+    pub use schemars;
     pub use serde_json;
+
+    /// Returns the JSON schema generated for an operation output type.
+    pub fn output_schema_of<O: schemars::JsonSchema>() -> serde_json::Value {
+        serde_json::to_value(schemars::schema_for!(O)).unwrap()
+    }
     #[macro_export]
     macro_rules! access {
         (reads) => {

@@ -8,7 +8,7 @@ use std::sync::Arc;
 pub trait Operation: crate::__private::Sealed {
     type Ctx;
     type Params: OpParams;
-    type Output: serde::Serialize;
+    type Output: serde::Serialize + schemars::JsonSchema;
     fn descriptor() -> Descriptor;
 }
 
@@ -159,12 +159,15 @@ impl<C: Sync> Default for Registry<C> {
     }
 }
 
+/// Declares a registry; each entry lists `params`, `output`, then its `op` or
+/// `stream_op`, followed optionally by `output_schema` and the remaining
+/// descriptor fields.
 #[macro_export]
 macro_rules! registry {
     (Ctx = $ctx:ty; entries: [ $( {
         $(name: $name:expr,)? noun: $noun:expr, verb: $verb:expr, description: $desc:expr,
         access: $access:ident, audience: $aud:ident, params: $params:ty, output: $output:ty,
-        $(output_schema: $out_schema:expr,)? $kind:ident: $op:path,
+        $kind:ident: $op:path, $(output_schema: $out_schema:expr,)?
         $(renders_text: $renders:expr,)? $(exit_code_on_ok: $exit:expr,)?
         $(requires: [$($req:expr),* $(,)?],)? $(hidden: $hidden:expr,)?
         $(since: $since:expr,)? $(deprecated: $deprecated:expr,)? $(aliases: [$($alias:expr),* $(,)?],)?
@@ -181,7 +184,7 @@ macro_rules! registry {
                     .audience($crate::Audience::$aud)
                     .streaming(matches!(stringify!($kind), "stream_op"))
                     .input_schema(<$params as $crate::OpParams>::schema())
-                    .output_schema($crate::__private::serde_json::Value::Null)
+                    .output_schema($crate::__private::output_schema_of::<$output>())
                     $(.output_schema($out_schema))?
                     $(.renders_text($renders))? $(.exit_code_on_ok($exit))?
                     $(.requires(vec![$($req.to_string()),*]))? $(.hidden($hidden))?
