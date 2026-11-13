@@ -442,8 +442,8 @@ fn explicit_output_schema_overrides_the_derived_one() {
         entries: [{
             noun: "value", verb: "get", description: "override",
             access: reads, audience: Agent, params: Empty, output: Output,
-            output_schema: json!({"type": "string"}),
             op: get_action,
+            output_schema: json!({"type": "string"}),
         }]
     };
     assert_eq!(
