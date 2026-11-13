@@ -10,7 +10,7 @@ pub use call::{CallOptions, Cursor};
 pub use descriptor::*;
 pub use op_registry_derive::OpParams;
 pub use params::*;
-pub use registry::{Operation, Registry};
+pub use registry::{CliHooks, Operation, Registry};
 
 #[doc(hidden)]
 pub mod __private {

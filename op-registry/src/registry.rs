@@ -4,6 +4,34 @@ use futures_util::{future::BoxFuture, stream::BoxStream};
 use serde_json::Value;
 use std::sync::Arc;
 
+/// Command-line adapters for an operation's parameter type.
+#[derive(Clone, Copy)]
+pub struct CliHooks {
+    pub add_args: fn(clap::Command) -> clap::Command,
+    pub parse: fn(&clap::ArgMatches) -> anyhow::Result<Value>,
+}
+
+impl CliHooks {
+    /// Creates command-line adapters for `P`.
+    pub fn for_params<P>() -> Self
+    where
+        P: OpParams + serde::Serialize + 'static,
+    {
+        fn parse<P>(matches: &clap::ArgMatches) -> anyhow::Result<Value>
+        where
+            P: OpParams + serde::Serialize + 'static,
+        {
+            let params = P::from_matches(matches)?;
+            serde_json::to_value(params).map_err(anyhow::Error::from)
+        }
+
+        Self {
+            add_args: P::clap_args,
+            parse: parse::<P>,
+        }
+    }
+}
+
 /// A registered operation's typed contract. Only `registry!` implements it.
 pub trait Operation: crate::__private::Sealed {
     type Ctx;
@@ -33,6 +61,7 @@ pub(crate) enum EntryCall<C> {
 pub(crate) struct Entry<C> {
     pub descriptor: Descriptor,
     pub call: EntryCall<C>,
+    pub hooks: CliHooks,
 }
 
 /// A declaration-ordered collection of operations.
@@ -115,6 +144,18 @@ impl<C: Sync> Registry<C> {
             .map(|e| e.descriptor.name.as_str())
             .collect()
     }
+    pub fn cli_hooks(&self, name: &str) -> Option<&CliHooks> {
+        self.entries
+            .iter()
+            .find(|entry| entry.descriptor.name == name)
+            .map(|entry| &entry.hooks)
+    }
+    pub fn merge(&mut self, other: Registry<C>) {
+        for entry in other.entries {
+            self.assert_unique(&entry.descriptor.name);
+            self.entries.push(entry);
+        }
+    }
     pub(crate) fn entry(&self, name: &str) -> Result<&Entry<C>> {
         self.entries
             .iter()
@@ -125,11 +166,13 @@ impl<C: Sync> Registry<C> {
                 })
             })
     }
-    #[doc(hidden)]
+    /// Adds a unary operation to the registry.
+    ///
     /// # Panics
     ///
-    /// Panics if the descriptor name is already registered.
-    pub fn push_unary<P, O, F>(&mut self, descriptor: Descriptor, f: F)
+    /// Panics if the descriptor name is already registered, with the
+    /// duplicate name quoted in the panic message.
+    pub fn push_unary<P, O, F>(&mut self, descriptor: Descriptor, f: F, hooks: CliHooks)
     where
         P: OpParams + 'static,
         O: serde::Serialize + 'static,
@@ -143,13 +186,16 @@ impl<C: Sync> Registry<C> {
         self.entries.push(Entry {
             descriptor,
             call: EntryCall::Unary(call),
+            hooks,
         });
     }
-    #[doc(hidden)]
+    /// Adds a streaming operation to the registry.
+    ///
     /// # Panics
     ///
-    /// Panics if the descriptor name is already registered.
-    pub fn push_stream<P, O, F, S>(&mut self, descriptor: Descriptor, f: F)
+    /// Panics if the descriptor name is already registered, with the
+    /// duplicate name quoted in the panic message.
+    pub fn push_stream<P, O, F, S>(&mut self, descriptor: Descriptor, f: F, hooks: CliHooks)
     where
         P: OpParams + 'static,
         O: serde::Serialize + 'static,
@@ -167,6 +213,7 @@ impl<C: Sync> Registry<C> {
         self.entries.push(Entry {
             descriptor,
             call: EntryCall::Stream(call),
+            hooks,
         });
     }
 }
@@ -178,7 +225,8 @@ impl<C: Sync> Default for Registry<C> {
 
 /// Declares a registry; each entry lists `params`, `output`, then its `op` or
 /// `stream_op`, followed optionally by `output_schema` and the remaining
-/// descriptor fields. A duplicate operation name panics.
+/// descriptor fields. Parameter types must implement `serde::Serialize`.
+/// A duplicate operation name panics.
 #[macro_export]
 macro_rules! registry {
     (Ctx = $ctx:ty; entries: [ $( {
@@ -220,11 +268,11 @@ macro_rules! registry {
     (@push $registry:ident, op, $params:ty, $output:ty, $op:path, $ctx:ty, $descriptor:ident) => {
         $registry.push_unary::<$params, $output, _>($descriptor, |ctx, params, opts| {
             Box::pin(async move { let _ = opts; $op(ctx, params).await })
-        });
+        }, $crate::CliHooks::for_params::<$params>());
     };
     (@push $registry:ident, stream_op, $params:ty, $output:ty, $op:path, $ctx:ty, $descriptor:ident) => {
         $registry.push_stream::<$params, $output, _, _>($descriptor, |ctx, params, cursor, opts| {
             Box::pin(async move { let _ = opts; $op(ctx, params, cursor).await })
-        });
+        }, $crate::CliHooks::for_params::<$params>());
     };
 }
