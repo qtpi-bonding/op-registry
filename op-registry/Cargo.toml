@@ -1,0 +1,21 @@
+[package]
+name = "op-registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description.workspace = true
+
+[dependencies]
+op-registry-derive = { path = "../op-registry-derive", version = "0.1.0" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+futures-util = { workspace = true }
+coded-error = { workspace = true }
+thiserror = "2"
+
+[dev-dependencies]
+trybuild = "1"
+futures-executor = "0.3"
