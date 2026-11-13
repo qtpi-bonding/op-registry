@@ -21,6 +21,9 @@ pub enum CallError {
     #[error("operation {name} has the wrong call shape")]
     #[coded(code = "wrong_shape", class = Logical)]
     WrongShape { name: String },
+    #[error("operation {name} is not available to this audience")]
+    #[coded(code = "outside_audience", class = Logical)]
+    OutsideAudience { name: String },
 }
 
 impl<C: Sync> Registry<C> {

@@ -3,6 +3,7 @@
 mod call;
 pub mod cli;
 mod descriptor;
+pub mod mcp;
 mod params;
 mod registry;
 
