@@ -15,12 +15,12 @@ struct Input {
     value: i32,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, schemars::JsonSchema)]
 struct Output {
     result: i32,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, schemars::JsonSchema)]
 struct TextOutput {
     text: String,
 }
@@ -152,76 +152,86 @@ fn registry_names_derive_noun_verb_and_honour_explicit_name() {
 
 #[test]
 fn two_registries_in_one_crate_do_not_collide() {
-    let first = registry! {
-        Ctx = FirstCtx;
-        entries: [{
-            noun: "same", verb: "thing", description: "first",
-            access: reads, audience: Agent, params: Empty, output: Output,
-            op: first_value,
-        }]
-    };
-    let second = registry! {
-        Ctx = SecondCtx;
-        entries: [{
-            noun: "same", verb: "thing", description: "second",
-            access: reads, audience: Agent, params: Empty, output: Output,
-            op: second_value,
-        }]
-    };
-    let first_value = first
-        .call(
-            "same_thing",
-            json!({}),
-            &FirstCtx { value: 11 },
-            CallOptions::default(),
-        )
-        .unwrap();
-    let second_value = second
-        .call(
-            "same_thing",
-            json!({}),
-            &SecondCtx { value: 22 },
-            CallOptions::default(),
-        )
-        .unwrap();
-    assert_eq!(first_value["result"], 11);
-    assert_eq!(second_value["result"], 22);
+    futures_executor::block_on(async {
+        let first = registry! {
+            Ctx = FirstCtx;
+            entries: [{
+                noun: "same", verb: "thing", description: "first",
+                access: reads, audience: Agent, params: Empty, output: Output,
+                op: first_value,
+            }]
+        };
+        let second = registry! {
+            Ctx = SecondCtx;
+            entries: [{
+                noun: "same", verb: "thing", description: "second",
+                access: reads, audience: Agent, params: Empty, output: Output,
+                op: second_value,
+            }]
+        };
+        let first_value = first
+            .call(
+                "same_thing",
+                json!({}),
+                &FirstCtx { value: 11 },
+                CallOptions::default(),
+            )
+            .await
+            .unwrap();
+        let second_value = second
+            .call(
+                "same_thing",
+                json!({}),
+                &SecondCtx { value: 22 },
+                CallOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first_value["result"], 11);
+        assert_eq!(second_value["result"], 22);
+    });
 }
 
 #[test]
 fn mixed_registry_preserves_order_shapes_and_calls() {
-    let registry = mixed_registry();
-    let descriptors = registry.descriptors();
-    assert_eq!(descriptors[0].name, "value_get");
-    assert!(!descriptors[0].streaming);
-    assert_eq!(descriptors[0].input_schema, Empty::schema());
-    assert_eq!(descriptors[1].name, "value_stream");
-    assert!(descriptors[1].streaming);
-    assert_eq!(descriptors[1].input_schema, Input::schema());
+    futures_executor::block_on(async {
+        let registry = mixed_registry();
+        let descriptors = registry.descriptors();
+        assert_eq!(descriptors[0].name, "value_get");
+        assert!(!descriptors[0].streaming);
+        assert_eq!(descriptors[0].input_schema, Empty::schema());
+        assert_eq!(descriptors[1].name, "value_stream");
+        assert!(descriptors[1].streaming);
+        assert_eq!(descriptors[1].input_schema, Input::schema());
 
-    let value = registry
-        .call(
-            "value_get",
-            json!({}),
-            &FirstCtx { value: 5 },
-            CallOptions::default(),
-        )
-        .unwrap();
-    assert_eq!(value, json!({"result": 5}));
-    let stream = registry
-        .call_stream(
-            "value_stream",
-            json!({"value": 8}),
-            &FirstCtx { value: 0 },
-            CallOptions::default(),
-            None,
-        )
-        .unwrap();
-    let values = futures_executor::block_on(stream.collect::<Vec<_>>())
-        .into_iter()
-        .collect::<anyhow::Result<Vec<_>>>()
-        .unwrap();
-    assert_eq!(values.len(), 2);
+        let value = registry
+            .call(
+                "value_get",
+                json!({}),
+                &FirstCtx { value: 5 },
+                CallOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(value, json!({"result": 5}));
+        let stream = registry
+            .call_stream(
+                "value_stream",
+                json!({"value": 8}),
+                &FirstCtx { value: 0 },
+                CallOptions::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        let values = stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<anyhow::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(values.len(), 2);
+    });
 }
 
 // The macro's operation type is intentionally local to the expression, so it
@@ -230,130 +240,254 @@ fn mixed_registry_preserves_order_shapes_and_calls() {
 
 #[test]
 fn call_returns_coded_error_chain_intact() {
-    let registry = registry_for_calls();
-    let streams = stream_registry();
-    let error = registry
-        .call(
-            "failing",
-            json!({"value": 1}),
-            &FirstCtx { value: 0 },
-            CallOptions::default(),
-        )
-        .unwrap_err();
-    let facts = coded_error::facts_anyhow(&error);
-    assert_eq!(facts.code, "test.operation.failed");
-    assert_eq!(facts.class, ErrorClass::Logical);
-    assert!(format!("{:#}", error).contains("while doing x"));
-    assert!(format!("{:#}", error).contains("original failure"));
+    futures_executor::block_on(async {
+        let registry = registry_for_calls();
+        let streams = stream_registry();
+        let error = registry
+            .call(
+                "failing",
+                json!({"value": 1}),
+                &FirstCtx { value: 0 },
+                CallOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        let facts = coded_error::facts_anyhow(&error);
+        assert_eq!(facts.code, "test.operation.failed");
+        assert_eq!(facts.class, ErrorClass::Logical);
+        assert!(format!("{:#}", error).contains("while doing x"));
+        assert!(format!("{:#}", error).contains("original failure"));
 
-    let unknown = registry
-        .call(
-            "missing",
-            json!({}),
-            &FirstCtx { value: 0 },
-            CallOptions::default(),
-        )
-        .unwrap_err();
-    assert_eq!(
-        coded_error::facts_anyhow(&unknown).code,
-        "op_registry.call.unknown_operation"
-    );
+        let unknown = registry
+            .call(
+                "missing",
+                json!({}),
+                &FirstCtx { value: 0 },
+                CallOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            coded_error::facts_anyhow(&unknown).code,
+            "op_registry.call.unknown_operation"
+        );
 
-    let bad_args = registry
-        .call(
-            "failing",
-            json!({"unknown": true}),
-            &FirstCtx { value: 0 },
-            CallOptions::default(),
-        )
-        .unwrap_err();
-    assert!(coded_error::facts_anyhow(&bad_args)
-        .code
-        .starts_with("op_registry.usage."));
+        let bad_args = registry
+            .call(
+                "failing",
+                json!({"unknown": true}),
+                &FirstCtx { value: 0 },
+                CallOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(coded_error::facts_anyhow(&bad_args)
+            .code
+            .starts_with("op_registry.usage."));
 
-    let output = registry
-        .call(
-            "value_get",
-            json!({}),
-            &FirstCtx { value: 7 },
-            CallOptions::default(),
-        )
-        .unwrap();
-    assert_eq!(output, json!({"result": 7}));
+        let output = registry
+            .call(
+                "value_get",
+                json!({}),
+                &FirstCtx { value: 7 },
+                CallOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(output, json!({"result": 7}));
 
-    let stream_error = match streams.call(
-        "value_stream",
-        json!({"value": 3}),
-        &FirstCtx { value: 0 },
-        CallOptions::default(),
-    ) {
-        Ok(_) => panic!("stream operation unexpectedly accepted by call"),
-        Err(error) => error,
-    };
-    assert_eq!(
-        coded_error::facts_anyhow(&stream_error).code,
-        "op_registry.call.wrong_shape"
-    );
-    let unary_error = match registry.call_stream(
-        "value_get",
-        json!({}),
-        &FirstCtx { value: 0 },
-        CallOptions::default(),
-        None,
-    ) {
-        Ok(_) => panic!("unary operation unexpectedly accepted by call_stream"),
-        Err(error) => error,
-    };
-    assert_eq!(
-        coded_error::facts_anyhow(&unary_error).code,
-        "op_registry.call.wrong_shape"
-    );
+        let stream_error = match streams
+            .call(
+                "value_stream",
+                json!({"value": 3}),
+                &FirstCtx { value: 0 },
+                CallOptions::default(),
+            )
+            .await
+        {
+            Ok(_) => panic!("stream operation unexpectedly accepted by call"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            coded_error::facts_anyhow(&stream_error).code,
+            "op_registry.call.wrong_shape"
+        );
+        let unary_error = match registry
+            .call_stream(
+                "value_get",
+                json!({}),
+                &FirstCtx { value: 0 },
+                CallOptions::default(),
+                None,
+            )
+            .await
+        {
+            Ok(_) => panic!("unary operation unexpectedly accepted by call_stream"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            coded_error::facts_anyhow(&unary_error).code,
+            "op_registry.call.wrong_shape"
+        );
 
-    let stream = streams
-        .call_stream(
-            "value_stream",
-            json!({"value": 3}),
-            &FirstCtx { value: 0 },
-            CallOptions::default(),
-            None,
-        )
-        .unwrap();
-    let values = futures_executor::block_on(stream.collect::<Vec<_>>())
-        .into_iter()
-        .collect::<anyhow::Result<Vec<_>>>()
-        .unwrap();
-    assert_eq!(
-        values,
-        vec![json!({"text": "3-one"}), json!({"text": "3-two"})]
-    );
+        let stream = streams
+            .call_stream(
+                "value_stream",
+                json!({"value": 3}),
+                &FirstCtx { value: 0 },
+                CallOptions::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        let values = stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<anyhow::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            values,
+            vec![json!({"text": "3-one"}), json!({"text": "3-two"})]
+        );
+    });
 }
 
 #[test]
 fn coded_error_round_trips_through_json() {
-    let facts = Facts {
-        code: "test.transport.failed",
-        class: ErrorClass::Logical,
-        overrides: Overrides::NONE,
-    };
-    let info = ErrorInfo::from_facts(&facts, "registry test");
-    let encoded = serde_json::to_string(&info).unwrap();
-    let decoded: ErrorInfo = serde_json::from_str(&encoded).unwrap();
-    assert_eq!(decoded.code, facts.code);
-    assert_eq!(decoded.class, facts.class);
+    futures_executor::block_on(async {
+        let facts = Facts {
+            code: "test.transport.failed",
+            class: ErrorClass::Logical,
+            overrides: Overrides::NONE,
+        };
+        let info = ErrorInfo::from_facts(&facts, "registry test");
+        let encoded = serde_json::to_string(&info).unwrap();
+        let decoded: ErrorInfo = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.code, facts.code);
+        assert_eq!(decoded.class, facts.class);
 
-    let registry = registry_for_calls();
-    let error = registry
-        .call(
-            "does_not_exist",
-            json!({}),
-            &FirstCtx { value: 0 },
-            CallOptions::default(),
-        )
-        .unwrap_err();
-    let error_facts = coded_error::facts_anyhow(&error);
-    let error_info = ErrorInfo::from_facts(&error_facts, "registry call");
-    let error_json = serde_json::to_string(&error_info).unwrap();
-    let error_back: ErrorInfo = serde_json::from_str(&error_json).unwrap();
-    assert_eq!(error_back.code, "op_registry.call.unknown_operation");
-    assert_eq!(error_back.class, ErrorClass::Logical);
+        let registry = registry_for_calls();
+        let error = registry
+            .call(
+                "does_not_exist",
+                json!({}),
+                &FirstCtx { value: 0 },
+                CallOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        let error_facts = coded_error::facts_anyhow(&error);
+        let error_info = ErrorInfo::from_facts(&error_facts, "registry call");
+        let error_json = serde_json::to_string(&error_info).unwrap();
+        let error_back: ErrorInfo = serde_json::from_str(&error_json).unwrap();
+        assert_eq!(error_back.code, "op_registry.call.unknown_operation");
+        assert_eq!(error_back.class, ErrorClass::Logical);
+    });
+}
+
+async fn slow_value(ctx: &FirstCtx, _: Empty) -> anyhow::Result<Output> {
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    Ok(Output { result: ctx.value })
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn call_does_not_block_a_current_thread_runtime() {
+    let registry = registry! {
+        Ctx = FirstCtx;
+        entries: [{
+            noun: "slow", verb: "get", description: "waits on a tokio timer",
+            access: reads, audience: Agent, params: Empty, output: Output,
+            op: slow_value,
+        }]
+    };
+    let ctx = FirstCtx { value: 9 };
+    let value = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        registry.call("slow_get", json!({}), &ctx, CallOptions::default()),
+    )
+    .await
+    .expect("call must yield to the runtime instead of blocking it")
+    .unwrap();
+    assert_eq!(value, json!({"result": 9}));
+}
+
+#[test]
+fn output_schema_is_derived_from_the_output_type() {
+    let registry = mixed_registry();
+    let unary = registry.get("value_get").unwrap();
+    assert_eq!(
+        unary.output_schema,
+        serde_json::to_value(schemars::schema_for!(Output)).unwrap()
+    );
+    assert_eq!(
+        unary.output_schema["properties"]["result"]["type"],
+        "integer"
+    );
+    let streamed = registry.get("value_stream").unwrap();
+    assert_eq!(
+        streamed.output_schema,
+        serde_json::to_value(schemars::schema_for!(TextOutput)).unwrap()
+    );
+    assert_eq!(
+        streamed.output_schema["properties"]["text"]["type"],
+        "string"
+    );
+}
+
+#[test]
+fn explicit_output_schema_overrides_the_derived_one() {
+    let registry = registry! {
+        Ctx = FirstCtx;
+        entries: [{
+            noun: "value", verb: "get", description: "override",
+            access: reads, audience: Agent, params: Empty, output: Output,
+            output_schema: json!({"type": "string"}),
+            op: get_action,
+        }]
+    };
+    assert_eq!(
+        registry.get("value_get").unwrap().output_schema,
+        json!({"type": "string"})
+    );
+}
+
+#[test]
+#[should_panic(expected = "duplicate operation name")]
+fn duplicate_operation_name_is_refused_when_the_registry_is_built() {
+    let _ = registry! {
+        Ctx = FirstCtx;
+        entries: [
+            {
+                noun: "value", verb: "get", description: "first",
+                access: reads, audience: Agent, params: Empty, output: Output,
+                op: get_action,
+            },
+            {
+                name: "value_get", noun: "other", verb: "thing", description: "same name",
+                access: reads, audience: Agent, params: Empty, output: Output,
+                op: explicit_action,
+            },
+        ]
+    };
+}
+
+#[test]
+#[should_panic(expected = "duplicate operation name")]
+fn duplicate_name_between_unary_and_stream_is_refused() {
+    let _ = registry! {
+        Ctx = FirstCtx;
+        entries: [
+            {
+                noun: "value", verb: "stream", description: "unary",
+                access: reads, audience: Agent, params: Empty, output: Output,
+                op: get_action,
+            },
+            {
+                noun: "value", verb: "stream", description: "stream",
+                access: reads, audience: Agent, params: Input, output: TextOutput,
+                stream_op: stream_values,
+            },
+        ]
+    };
 }

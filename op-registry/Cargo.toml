@@ -15,7 +15,9 @@ clap = { workspace = true }
 futures-util = { workspace = true }
 coded-error = { workspace = true }
 thiserror = "2"
+schemars = { workspace = true }
 
 [dev-dependencies]
 trybuild = "1"
 futures-executor = "0.3"
+tokio = { version = "1", features = ["rt", "time", "macros"] }
