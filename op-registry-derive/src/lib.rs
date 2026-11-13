@@ -290,6 +290,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
         if !opt && !vec && tn != "bool" && f.default.is_none() && f.required_unless.is_none() {
             req.push(quote!(#key));
         }
+        // Note: plain bool fields without default should NOT be in required list
+        // because they default to false when absent
         let invalid_expected = quote!(::op_registry::__private::usage(::op_registry::UsageError::InvalidField{name:#key.to_string(),reason:"expected enum".to_string()}));
         let invalid_enum = quote!(::op_registry::__private::usage(::op_registry::UsageError::InvalidField{name:#key.to_string(),reason:"invalid enum".to_string()}));
         let invalid_json = quote!(::op_registry::__private::usage(::op_registry::UsageError::InvalidField{name:#key.to_string(),reason:e.to_string()}));
@@ -311,6 +313,9 @@ pub fn derive(input: TokenStream) -> TokenStream {
             quote!(Vec::new())
         } else if let Some(e) = &f.default {
             quote!(::op_registry::__private::serde_json::from_value(::op_registry::__private::serde_json::to_value(&(#e)).unwrap()).unwrap())
+        } else if !opt && tn == "bool" {
+            // Plain bool field without default defaults to false
+            quote!(false)
         } else {
             quote!(return Err(#missing))
         };
@@ -351,33 +356,43 @@ pub fn derive(input: TokenStream) -> TokenStream {
             arg = quote!(#arg.value_parser(::op_registry::__private::clap::builder::PossibleValuesParser::new(<#inner as ::op_registry::__private::clap::ValueEnum>::value_variants().iter().filter_map(|v|v.to_possible_value()))));
         } else if tn != "String" && tn != "bool" {
             arg = quote!(#arg.value_parser(::op_registry::__private::clap::value_parser!(#inner)));
+            // Allow negative numbers for signed integer and float types
+            if matches!(tn.as_str(), "i32" | "i64" | "f64") {
+                arg = quote!(#arg.allow_negative_numbers(true));
+            }
         }
         if vec {
             arg = quote!(#arg.action(::op_registry::__private::clap::ArgAction::Append));
         } else if tn == "bool" {
+            // Use SetTrue for both bool and Option<bool>
             arg = quote!(#arg.action(::op_registry::__private::clap::ArgAction::SetTrue));
         }
         if let Some(e) = &f.default {
-            let literal = match e {
-                Expr::Lit(value) => match &value.lit {
-                    syn::Lit::Str(value) => LitStr::new(&value.value(), value.span()),
-                    syn::Lit::Char(value) => LitStr::new(&value.value().to_string(), value.span()),
-                    other => LitStr::new(
-                        &other.to_token_stream().to_string().replace(' ', ""),
-                        other.span(),
+            // For value_enum fields, don't use default_value in clap; handle it in get code instead
+            if !f.value_enum {
+                let literal = match e {
+                    Expr::Lit(value) => match &value.lit {
+                        syn::Lit::Str(value) => LitStr::new(&value.value(), value.span()),
+                        syn::Lit::Char(value) => {
+                            LitStr::new(&value.value().to_string(), value.span())
+                        }
+                        other => LitStr::new(
+                            &other.to_token_stream().to_string().replace(' ', ""),
+                            other.span(),
+                        ),
+                    },
+                    Expr::Unary(value) => LitStr::new(
+                        &value.to_token_stream().to_string().replace(' ', ""),
+                        value.span(),
                     ),
-                },
-                Expr::Unary(value) => LitStr::new(
-                    &value.to_token_stream().to_string().replace(' ', ""),
-                    value.span(),
-                ),
-                _ => {
-                    return syn::Error::new_spanned(e, "default must be a literal")
-                        .to_compile_error()
-                        .into()
-                }
-            };
-            arg = quote!(#arg.default_value(#literal));
+                    _ => {
+                        return syn::Error::new_spanned(e, "default must be a literal")
+                            .to_compile_error()
+                            .into()
+                    }
+                };
+                arg = quote!(#arg.default_value(#literal));
+            }
         }
         args.push(quote!(cmd=cmd.arg(#arg);));
         let get = if f.value_enum && vec {
@@ -385,9 +400,26 @@ pub fn derive(input: TokenStream) -> TokenStream {
         } else if f.value_enum && opt {
             quote!(matches.get_one::<String>(#key).map(|value| <#inner as ::op_registry::__private::clap::ValueEnum>::from_str(value, true).map_err(|_| #invalid_enum)).transpose()?)
         } else if f.value_enum {
-            quote!(matches.get_one::<String>(#key).cloned().ok_or_else(||#missing).and_then(|value| <#inner as ::op_registry::__private::clap::ValueEnum>::from_str(&value, true).map_err(|_| #invalid_enum))?)
+            if let Some(e) = &f.default {
+                // For value_enum with default, if no value provided, use the default via serde_json
+                quote!({
+                    if let Some(value) = matches.get_one::<String>(#key).cloned() {
+                        <#inner as ::op_registry::__private::clap::ValueEnum>::from_str(&value, true).map_err(|_| #invalid_enum)?
+                    } else {
+                        ::op_registry::__private::serde_json::from_value(::op_registry::__private::serde_json::to_value(&(#e)).unwrap()).unwrap()
+                    }
+                })
+            } else {
+                quote!(matches.get_one::<String>(#key).cloned().ok_or_else(||#missing).and_then(|value| <#inner as ::op_registry::__private::clap::ValueEnum>::from_str(&value, true).map_err(|_| #invalid_enum))?)
+            }
         } else if vec {
             quote!(matches.get_many::<#inner>(#key).map(|x|x.cloned().collect()).unwrap_or_default())
+        } else if opt && tn == "bool" {
+            // Option<bool>: get_flag returns false when absent, convert to None
+            quote!({
+                let flag = matches.get_flag(#key);
+                if flag { Some(true) } else { None }
+            })
         } else if opt {
             quote!(matches.get_one::<#inner>(#key).cloned())
         } else if tn == "bool" {

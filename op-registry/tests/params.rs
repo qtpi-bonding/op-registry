@@ -208,3 +208,151 @@ fn conditional_target_missing_agrees_between_json_and_clap() {
     let clap_error = ConditionalParams::from_matches(&matches).unwrap_err();
     assert!(clap_error.to_string().contains("target"));
 }
+
+#[derive(Clone, Debug, Deserialize, PartialEq, OpParams)]
+struct PlainBoolParams {
+    flag: bool,
+}
+
+#[test]
+fn plain_bool_field_absent_is_false_in_both_json_and_clap() {
+    // JSON: absent plain bool should default to false (not MissingField)
+    let result = PlainBoolParams::from_json(json!({})).unwrap();
+    assert!(!result.flag);
+
+    // Clap: absent bool should be false
+    let matches = PlainBoolParams::clap_args(clap::Command::new("t"))
+        .try_get_matches_from(["t"])
+        .unwrap();
+    let result = PlainBoolParams::from_matches(&matches).unwrap();
+    assert!(!result.flag);
+
+    // Both paths should agree
+    let json_result = PlainBoolParams::from_json(json!({})).unwrap();
+    let clap_result = PlainBoolParams::from_matches(
+        &PlainBoolParams::clap_args(clap::Command::new("t"))
+            .try_get_matches_from(["t"])
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(json_result, clap_result);
+}
+
+#[test]
+fn plain_bool_field_is_not_required_in_schema() {
+    let schema = PlainBoolParams::schema();
+    let required = &schema["required"];
+    // flag should not be in required array
+    assert!(!required
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str() == Some("flag")));
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, OpParams)]
+struct NegativeNumberParams {
+    #[op(default = -1)]
+    offset: i32,
+    #[op(default = -1.5)]
+    threshold: f64,
+}
+
+#[test]
+fn negative_numbers_work_in_clap_with_negative_flag() {
+    // JSON with negative numbers
+    let json_result =
+        NegativeNumberParams::from_json(json!({"offset": -5, "threshold": -2.5})).unwrap();
+    assert_eq!(json_result.offset, -5);
+    assert_eq!(json_result.threshold, -2.5);
+
+    // Clap with negative numbers should work
+    let matches = NegativeNumberParams::clap_args(clap::Command::new("t"))
+        .try_get_matches_from(["t", "--offset", "-5", "--threshold", "-2.5"])
+        .unwrap();
+    let clap_result = NegativeNumberParams::from_matches(&matches).unwrap();
+    assert_eq!(clap_result.offset, -5);
+    assert_eq!(clap_result.threshold, -2.5);
+
+    // Both paths should agree
+    assert_eq!(json_result, clap_result);
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, OpParams)]
+struct OptionalBoolParams {
+    flag: Option<bool>,
+}
+
+#[test]
+fn option_bool_absent_is_none_in_both_json_and_clap() {
+    // JSON: absent Option<bool> should be None
+    let json_result = OptionalBoolParams::from_json(json!({})).unwrap();
+    assert_eq!(json_result.flag, None);
+
+    // Clap: absent Option<bool> should be None (not Some(false))
+    let matches = OptionalBoolParams::clap_args(clap::Command::new("t"))
+        .try_get_matches_from(["t"])
+        .unwrap();
+    let clap_result = OptionalBoolParams::from_matches(&matches).unwrap();
+    assert_eq!(clap_result.flag, None);
+
+    // Both paths should agree
+    assert_eq!(json_result, clap_result);
+}
+
+#[test]
+fn option_bool_present_is_some_true_in_both_json_and_clap() {
+    // JSON: present Option<bool> should be Some(true)
+    let json_result = OptionalBoolParams::from_json(json!({"flag": true})).unwrap();
+    assert_eq!(json_result.flag, Some(true));
+
+    // Clap: present flag should be Some(true)
+    let matches = OptionalBoolParams::clap_args(clap::Command::new("t"))
+        .try_get_matches_from(["t", "--flag"])
+        .unwrap();
+    let clap_result = OptionalBoolParams::from_matches(&matches).unwrap();
+    assert_eq!(clap_result.flag, Some(true));
+
+    // Both paths should agree
+    assert_eq!(json_result, clap_result);
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, ValueEnum)]
+enum Speed {
+    Fast,
+    Slow,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, OpParams)]
+struct EnumDefaultParams {
+    #[op(value_enum, default = "Fast")]
+    speed: Speed,
+}
+
+#[test]
+fn value_enum_with_default_uses_valueenum_name_not_serde_name() {
+    // JSON: absent value_enum with default should use the ValueEnum name (kebab-case)
+    let json_result = EnumDefaultParams::from_json(json!({})).unwrap();
+    assert_eq!(json_result.speed, Speed::Fast);
+
+    // JSON: explicitly set via ValueEnum name (kebab-case)
+    let json_result_explicit = EnumDefaultParams::from_json(json!({"speed": "fast"})).unwrap();
+    assert_eq!(json_result_explicit.speed, Speed::Fast);
+
+    // Clap: absent with default should give Fast
+    let matches = EnumDefaultParams::clap_args(clap::Command::new("t"))
+        .try_get_matches_from(["t"])
+        .unwrap();
+    let clap_result = EnumDefaultParams::from_matches(&matches).unwrap();
+    assert_eq!(clap_result.speed, Speed::Fast);
+
+    // Clap: with explicit value
+    let matches = EnumDefaultParams::clap_args(clap::Command::new("t"))
+        .try_get_matches_from(["t", "--speed", "fast"])
+        .unwrap();
+    let clap_result_explicit = EnumDefaultParams::from_matches(&matches).unwrap();
+    assert_eq!(clap_result_explicit.speed, Speed::Fast);
+
+    // All paths should agree
+    assert_eq!(json_result, clap_result);
+}
