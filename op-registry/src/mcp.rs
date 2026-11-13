@@ -32,7 +32,7 @@ pub struct ToolError(pub anyhow::Error);
 
 impl std::fmt::Display for ToolError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(formatter)
+        std::fmt::Display::fmt(&self.0, formatter)
     }
 }
 
