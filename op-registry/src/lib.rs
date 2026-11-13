@@ -1,6 +1,7 @@
 //! op-registry: declare operations once, derive the adapters.
 
 mod call;
+pub mod cli;
 mod descriptor;
 mod params;
 mod registry;
