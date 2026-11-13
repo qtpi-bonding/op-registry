@@ -22,6 +22,7 @@ pub fn command<C: Sync>(registry: &Registry<C>, name: &str, about: &str) -> Comm
         .about(about.to_owned())
         .subcommand_required(true);
     let mut groups: Vec<(String, Command)> = Vec::new();
+    let mut explicit: Vec<String> = Vec::new();
 
     for descriptor in registry.descriptors() {
         let cli_name = descriptor.cli_name();
@@ -47,6 +48,11 @@ pub fn command<C: Sync>(registry: &Registry<C>, name: &str, about: &str) -> Comm
         }
 
         if descriptor.cli_name() == format!("{} {}", descriptor.noun, descriptor.verb) {
+            assert!(
+                !explicit.contains(&descriptor.noun),
+                "noun {:?} collides with an explicit operation name",
+                descriptor.noun
+            );
             if let Some((_, group)) = groups.iter_mut().find(|(noun, _)| noun == &descriptor.noun) {
                 *group = group.clone().subcommand(leaf);
             } else {
@@ -56,6 +62,12 @@ pub fn command<C: Sync>(registry: &Registry<C>, name: &str, about: &str) -> Comm
                 groups.push((descriptor.noun.clone(), group));
             }
         } else {
+            assert!(
+                !groups.iter().any(|(noun, _)| noun == &descriptor.name),
+                "explicit operation name {:?} collides with a noun group",
+                descriptor.name
+            );
+            explicit.push(descriptor.name.clone());
             groups.push((descriptor.name.clone(), leaf));
         }
     }
