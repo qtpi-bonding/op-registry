@@ -1,3 +1,4 @@
+#![allow(clippy::err_expect, clippy::ok_expect)]
 use futures_util::stream;
 use op_registry::cli;
 use op_registry::mcp::{self, ToolSpec};

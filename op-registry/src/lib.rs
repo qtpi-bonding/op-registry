@@ -5,6 +5,7 @@ pub mod cli;
 mod descriptor;
 pub mod mcp;
 mod params;
+pub mod parity;
 mod registry;
 
 pub use call::{call, call_stream, CallError};

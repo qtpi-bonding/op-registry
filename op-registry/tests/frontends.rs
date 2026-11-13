@@ -1,3 +1,4 @@
+#![allow(clippy::err_expect, clippy::ok_expect)]
 use clap::ValueEnum;
 use coded_error::cli::ExitTable;
 use coded_error::ErrorClass;
@@ -6,8 +7,6 @@ use op_registry::cli::{self, CliOutput};
 use op_registry::mcp::{self, ToolSpec};
 use op_registry::{registry, Audience, CallOptions, Cursor, OpParams, Registry};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::Layer;
 
@@ -636,37 +635,51 @@ fn cli_shows_full_message_mcp_redacts_non_logical() {
     });
 }
 
-struct CountErrors(Arc<AtomicUsize>);
+thread_local! {
+    static ERRORS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+struct CountErrors;
 
 impl<S: tracing::Subscriber> Layer<S> for CountErrors {
     fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
         if *event.metadata().level() == tracing::Level::ERROR {
-            self.0.fetch_add(1, Ordering::SeqCst);
+            ERRORS.with(|n| n.set(n.get() + 1));
         }
     }
+}
+
+/// Counts ERROR events emitted on this thread while `run` executes. A single
+/// global subscriber keeps tracing's callsite interest cache stable when other
+/// tests run concurrently; the count is per thread.
+fn errors_during(run: impl FnOnce()) -> usize {
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| {
+        let subscriber = tracing_subscriber::registry().with(CountErrors);
+        tracing::subscriber::set_global_default(subscriber).expect("install subscriber");
+    });
+    ERRORS.with(|n| n.set(0));
+    run();
+    ERRORS.with(|n| n.get())
 }
 
 #[test]
 fn one_failed_call_produces_one_error_event() {
     let registry = toy();
-    let count = Arc::new(AtomicUsize::new(0));
-    let subscriber = tracing_subscriber::registry().with(CountErrors(count.clone()));
-    tracing::subscriber::with_default(subscriber, || {
+    let count = errors_during(|| {
         futures_executor::block_on(async {
             let _ = cli_error(&registry, &["err", "logical"]).await;
         });
     });
-    assert_eq!(count.load(Ordering::SeqCst), 1, "dispatch");
+    assert_eq!(count, 1, "dispatch");
 
-    let count = Arc::new(AtomicUsize::new(0));
-    let subscriber = tracing_subscriber::registry().with(CountErrors(count.clone()));
-    tracing::subscriber::with_default(subscriber, || {
+    let count = errors_during(|| {
         futures_executor::block_on(async {
             let err = tool_error_of(&registry, "err_infra").await;
             let _ = mcp::tool_error(&err, "test");
         });
     });
-    assert_eq!(count.load(Ordering::SeqCst), 1, "call_tool");
+    assert_eq!(count, 1, "call_tool");
 }
 
 #[test]
