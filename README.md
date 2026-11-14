@@ -4,6 +4,8 @@ Declare operations once; derive CLI, tool-list and call adapters from the descri
 
 The `op-listen` crate (`op-listen/`) adds a shared streaming listener on top of op-registry, with cursors, frames, a per-app gate and a reconnecting follower.
 
+The `op-status` crate (`op-status/`) adds shared status types, a `StatusSource` trait and a `status get` operation; see [op-status/README.md](op-status/README.md).
+
 ## Quick start
 
 Define parameter and output types, then register the operation. Parameter types must
