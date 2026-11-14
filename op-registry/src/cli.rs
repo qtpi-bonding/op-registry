@@ -16,27 +16,132 @@ pub enum CliError {
     UnknownCommand { name: String },
 }
 
+/// A node in the command tree built from descriptors.
+enum Node {
+    /// A group of subcommands keyed by word, kept in insertion order.
+    Group {
+        /// The operation name that first created this group.
+        first_op: String,
+        /// Child words with their nodes.
+        children: Vec<(String, Node)>,
+    },
+    /// A leaf command backed by one operation.
+    Leaf {
+        /// The operation name.
+        op: String,
+        /// The clap command for the leaf.
+        command: Command,
+    },
+}
+
+/// Returns the operation name recorded on a node.
+fn node_op(node: &Node) -> &str {
+    match node {
+        Node::Group { first_op, .. } => first_op,
+        Node::Leaf { op, .. } => op,
+    }
+}
+
+/// Inserts a leaf under the given group path, creating groups as needed.
+///
+/// `path` holds the group words, outermost first; `leaf_word` is the verb or
+/// explicit name. Panics when a word would be both a leaf and a group.
+fn insert(
+    children: &mut Vec<(String, Node)>,
+    path: &[&str],
+    leaf_word: &str,
+    op: &str,
+    command: Command,
+) {
+    match path.split_first() {
+        None => {
+            if let Some((_, existing)) = children.iter().find(|(word, _)| word == leaf_word) {
+                let other = node_op(existing);
+                match existing {
+                    Node::Group { .. } => panic!(
+                        "{:?} collides with {:?}: a word cannot be both a leaf and a group",
+                        other, op
+                    ),
+                    Node::Leaf { .. } => panic!(
+                        "{:?} and {:?} both define the command {:?}",
+                        other, op, leaf_word
+                    ),
+                }
+            }
+            children.push((
+                leaf_word.to_owned(),
+                Node::Leaf {
+                    op: op.to_owned(),
+                    command,
+                },
+            ));
+        }
+        Some((word, rest)) => {
+            let index = match children.iter().position(|(w, _)| w == word) {
+                Some(index) => index,
+                None => {
+                    children.push((
+                        (*word).to_owned(),
+                        Node::Group {
+                            first_op: op.to_owned(),
+                            children: Vec::new(),
+                        },
+                    ));
+                    children.len() - 1
+                }
+            };
+            match &mut children[index].1 {
+                Node::Group {
+                    children: inner, ..
+                } => insert(inner, rest, leaf_word, op, command),
+                Node::Leaf { op: other, .. } => panic!(
+                    "{:?} collides with {:?}: a word cannot be both a leaf and a group",
+                    other, op
+                ),
+            }
+        }
+    }
+}
+
+/// Converts a tree node into a clap command.
+fn to_command(word: &str, node: Node) -> Command {
+    match node {
+        Node::Leaf { command, .. } => command,
+        Node::Group { children, .. } => {
+            let mut group = Command::new(word.to_owned()).subcommand_required(true);
+            for (child_word, child) in children {
+                group = group.subcommand(to_command(&child_word, child));
+            }
+            group
+        }
+    }
+}
+
 /// Builds the clap command for a registry.
+///
+/// A descriptor whose CLI name is `<noun words...> <verb>` becomes a leaf named
+/// by its verb, nested in one group per noun word. An explicit name becomes a
+/// top-level leaf.
 pub fn command<C: Sync>(registry: &Registry<C>, name: &str, about: &str) -> Command {
     let mut root = Command::new(name.to_owned())
         .about(about.to_owned())
         .subcommand_required(true);
-    let mut groups: Vec<(String, Command)> = Vec::new();
-    let mut explicit: Vec<String> = Vec::new();
+    let mut top: Vec<(String, Node)> = Vec::new();
 
     for descriptor in registry.descriptors() {
         let cli_name = descriptor.cli_name();
         let hooks = registry
             .cli_hooks(&descriptor.name)
             .expect("descriptor must have CLI hooks");
-        let mut leaf = Command::new(
-            if cli_name == format!("{} {}", descriptor.noun, descriptor.verb) {
-                descriptor.verb.clone()
-            } else {
-                cli_name
-            },
-        )
-        .about(descriptor.description.clone());
+        let is_path = cli_name == format!("{} {}", descriptor.noun, descriptor.verb);
+        let words: Vec<&str> = descriptor.noun.split_whitespace().collect();
+
+        let leaf_word = if is_path {
+            descriptor.verb.clone()
+        } else {
+            cli_name.clone()
+        };
+        let mut leaf = Command::new(leaf_word.clone()).about(descriptor.description.clone());
         leaf = (hooks.add_args)(leaf);
         if descriptor.streaming {
             leaf = leaf.arg(
@@ -47,33 +152,12 @@ pub fn command<C: Sync>(registry: &Registry<C>, name: &str, about: &str) -> Comm
             );
         }
 
-        if descriptor.cli_name() == format!("{} {}", descriptor.noun, descriptor.verb) {
-            assert!(
-                !explicit.contains(&descriptor.noun),
-                "noun {:?} collides with an explicit operation name",
-                descriptor.noun
-            );
-            if let Some((_, group)) = groups.iter_mut().find(|(noun, _)| noun == &descriptor.noun) {
-                *group = group.clone().subcommand(leaf);
-            } else {
-                let group = Command::new(descriptor.noun.clone())
-                    .subcommand_required(true)
-                    .subcommand(leaf);
-                groups.push((descriptor.noun.clone(), group));
-            }
-        } else {
-            assert!(
-                !groups.iter().any(|(noun, _)| noun == &descriptor.name),
-                "explicit operation name {:?} collides with a noun group",
-                descriptor.name
-            );
-            explicit.push(descriptor.name.clone());
-            groups.push((descriptor.name.clone(), leaf));
-        }
+        let path: &[&str] = if is_path { &words } else { &[] };
+        insert(&mut top, path, &leaf_word, &descriptor.name, leaf);
     }
 
-    for (_, group) in groups {
-        root = root.subcommand(group);
+    for (word, node) in top {
+        root = root.subcommand(to_command(&word, node));
     }
     root
 }
