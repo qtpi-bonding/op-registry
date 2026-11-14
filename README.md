@@ -56,6 +56,23 @@ let value = op_registry::mcp::call_tool(
 The `output_schema:` override comes after `op:` in a `registry!` entry. The
 parameter derive includes `Serialize` because CLI arguments pass through JSON.
 
+## Noun paths
+
+A `noun` may be a path of space-separated words, e.g.
+`noun: "agent dispatch-target", verb: "set"`. The derived operation name (and
+MCP tool name) joins the words with `_`, turns every `-` in the noun into `_`,
+and appends `_verb`: `agent_dispatch_target_set`. An explicit `name:` still
+wins. The CLI keeps the words as written (`agent dispatch-target set`) and
+`cli::command` builds one nested group per word, so `agent get` and
+`agent dispatch-target set` share one `agent` group; any depth. A word that is
+both a leaf (a verb or explicit name) and a group at the same level panics at
+construction, naming both operations. `parity::cli_surface` walks the whole
+tree and names each leaf by its path joined with `_` (hyphens kept);
+`assert_parity` matches those names to registry names after `-` becomes `_`,
+while the allow-lists stay exact strings.
+
+`access: destructive` means writes plus destructive (`Access::destructive()`).
+
 ## Output contract
 
 For the CLI, stdout carries exactly one JSON value per call. A streaming
