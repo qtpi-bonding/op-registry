@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["op-registry", "op-registry-derive", "op-listen"]
+members = ["op-registry", "op-registry-derive", "op-listen", "op-status"]
 
 [workspace.package]
 version = "0.1.0"
