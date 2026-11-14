@@ -9,7 +9,7 @@ pub mod parity;
 mod registry;
 
 pub use call::{call, call_stream, CallError};
-pub use call::{CallOptions, Cursor};
+pub use call::{CallOptions, Caller, Cursor};
 pub use descriptor::*;
 pub use op_registry_derive::OpParams;
 pub use params::*;

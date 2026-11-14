@@ -21,7 +21,10 @@ fn authorize_refusal_sends_no_frame_and_surfaces_the_apps_coded_error() {
         let res = listen_stream(&l, &Ctx, params("t"), None, caller("mallory"), opts()).await;
         let err = res.err().expect("refusal must be an error, not a stream");
         assert_eq!(code_of(&err), "test.app.denied");
-        assert!(l.open_calls().is_empty(), "open must never run after a refusal");
+        assert!(
+            l.open_calls().is_empty(),
+            "open must never run after a refusal"
+        );
         assert_eq!(l.authorize_calls().len(), 1);
     });
 }
@@ -67,7 +70,10 @@ fn call_options_carry_the_caller_to_the_gate() {
             frames,
             vec![json!({"frame": "item", "item": "a", "cursor": "0:1"})]
         );
-        assert_eq!(l.authorize_calls(), vec![("bob".to_owned(), "t".to_owned())]);
+        assert_eq!(
+            l.authorize_calls(),
+            vec![("bob".to_owned(), "t".to_owned())]
+        );
 
         // No caller means anonymous (the empty caller).
         let frames = registry
@@ -81,10 +87,7 @@ fn call_options_carry_the_caller_to_the_gate() {
             .await
             .unwrap();
         frames_json(frames).await;
-        assert_eq!(
-            l.authorize_calls()[1],
-            (String::new(), "u".to_owned())
-        );
+        assert_eq!(l.authorize_calls()[1], (String::new(), "u".to_owned()));
     });
 }
 
@@ -151,8 +154,8 @@ async fn grant_default_never_rechecks() {
 
 #[tokio::test(start_paused = true)]
 async fn recheck_false_sends_stop_then_ends() {
-    let mut l = LogListener::new(vec![(1, "a")])
-        .with_grant(grant(None, Some(Duration::from_secs(10))));
+    let mut l =
+        LogListener::new(vec![(1, "a")]).with_grant(grant(None, Some(Duration::from_secs(10))));
     l.tail_pending = true;
     l.allowed.store(false, Ordering::SeqCst);
     let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"), opts())
@@ -199,7 +202,10 @@ async fn recheck_does_not_hold_back_frames_while_still_allowed_is_pending() {
         .expect("frame must not wait for the pending check")
         .unwrap()
         .unwrap();
-    assert_eq!(frame, json!({"frame": "item", "item": "a", "cursor": "0:1"}));
+    assert_eq!(
+        frame,
+        json!({"frame": "item", "item": "a", "cursor": "0:1"})
+    );
     assert_eq!(l.still_allowed_count(), 1);
 
     // Further ticks do not start a second check while one is pending.
@@ -211,8 +217,7 @@ async fn recheck_does_not_hold_back_frames_while_still_allowed_is_pending() {
 
 #[tokio::test(start_paused = true)]
 async fn recheck_runs_at_most_every_recheck_every() {
-    let mut l = LogListener::new(vec![])
-        .with_grant(grant(None, Some(Duration::from_secs(10))));
+    let mut l = LogListener::new(vec![]).with_grant(grant(None, Some(Duration::from_secs(10))));
     l.tail_pending = true;
     let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"), opts())
         .await
@@ -222,7 +227,11 @@ async fn recheck_runs_at_most_every_recheck_every() {
     assert!(tokio::time::timeout(Duration::from_secs(5), s.next())
         .await
         .is_err());
-    assert_eq!(l.still_allowed_count(), 0, "first check only after the interval");
+    assert_eq!(
+        l.still_allowed_count(),
+        0,
+        "first check only after the interval"
+    );
 
     assert!(tokio::time::timeout(Duration::from_secs(20), s.next())
         .await

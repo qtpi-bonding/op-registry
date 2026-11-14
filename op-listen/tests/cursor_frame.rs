@@ -14,7 +14,10 @@ fn listen_cursor_round_trips_and_rejects_garbage() {
     assert_eq!("3:17".parse::<ListenCursor>().unwrap(), c);
     let max = ListenCursor::new(u64::MAX, u64::MAX);
     assert_eq!(max.to_string().parse::<ListenCursor>().unwrap(), max);
-    assert_eq!("0:0".parse::<ListenCursor>().unwrap(), ListenCursor::new(0, 0));
+    assert_eq!(
+        "0:0".parse::<ListenCursor>().unwrap(),
+        ListenCursor::new(0, 0)
+    );
 
     // Ord: epoch first, then seq.
     assert!(ListenCursor::new(0, 9) < ListenCursor::new(1, 0));
@@ -32,7 +35,19 @@ fn listen_cursor_round_trips_and_rejects_garbage() {
     assert_eq!(ListenCursor::try_from(&wire).unwrap(), c);
 
     for bad in [
-        "", "1", "a:b", "1:2:3", "-1:2", " 1:2", "1:2 ", "1: 2", "+1:2", "1::2", ":", "1:", ":2",
+        "",
+        "1",
+        "a:b",
+        "1:2:3",
+        "-1:2",
+        " 1:2",
+        "1:2 ",
+        "1: 2",
+        "+1:2",
+        "1::2",
+        ":",
+        "1:",
+        ":2",
         "18446744073709551616:0",
     ] {
         let err = bad.parse::<ListenCursor>().err().expect(bad);

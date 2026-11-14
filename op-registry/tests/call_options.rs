@@ -1,5 +1,5 @@
 use futures_util::{future::BoxFuture, stream::BoxStream, FutureExt, StreamExt};
-use op_registry::{Caller, CallOptions, CliHooks, Cursor, Descriptor, OpParams, Registry};
+use op_registry::{CallOptions, Caller, CliHooks, Cursor, Descriptor, OpParams, Registry};
 use serde_json::json;
 
 struct Ctx;

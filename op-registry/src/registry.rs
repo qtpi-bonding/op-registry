@@ -108,10 +108,42 @@ where
     let fut = f(ctx, parsed, cursor, opts);
     Box::pin(async move {
         let stream = fut.await?;
-        Ok(Box::pin(futures_util::StreamExt::map(stream, |item| {
-            item.and_then(|v| serde_json::to_value(v).map_err(Into::into))
-        })) as BoxStream<'a, Result<Value>>)
+        Ok(map_stream_values(Box::pin(stream)))
     })
+}
+
+fn map_stream_values<'a, O>(stream: BoxStream<'a, Result<O>>) -> BoxStream<'a, Result<Value>>
+where
+    O: serde::Serialize + 'static,
+{
+    Box::pin(futures_util::StreamExt::map(stream, |item| {
+        item.and_then(|v| serde_json::to_value(v).map_err(Into::into))
+    }))
+}
+
+fn stream_dispatch_borrowed<'a, C, P, O, F>(
+    f: Arc<F>,
+    ctx: &'a C,
+    args: Value,
+    opts: CallOptions,
+    cursor: Option<Cursor>,
+) -> BoxFuture<'a, Result<BoxStream<'a, Result<Value>>>>
+where
+    P: OpParams + 'static,
+    O: serde::Serialize + 'static,
+    F: for<'b> Fn(
+        &'b C,
+        P,
+        Option<Cursor>,
+        CallOptions,
+    ) -> BoxFuture<'b, Result<BoxStream<'b, Result<O>>>>,
+{
+    let parsed = match P::from_json(args) {
+        Ok(p) => p,
+        Err(e) => return Box::pin(async move { Err(e) }),
+    };
+    let fut = f(ctx, parsed, cursor, opts);
+    Box::pin(async move { Ok(map_stream_values(fut.await?)) })
 }
 
 impl<C: Sync> Registry<C> {
@@ -209,6 +241,38 @@ impl<C: Sync> Registry<C> {
         let f = Arc::new(f);
         let call: StreamCall<C> = Box::new(move |ctx, args, opts, cursor| {
             stream_dispatch::<C, P, O, F, S>(Arc::clone(&f), ctx, args, opts, cursor)
+        });
+        self.entries.push(Entry {
+            descriptor,
+            call: EntryCall::Stream(call),
+            hooks,
+        });
+    }
+
+    /// Adds a streaming operation whose stream may borrow the registry context.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the descriptor name is already registered, with the
+    /// duplicate name quoted in the panic message.
+    pub fn push_stream_borrowed<P, O, F>(&mut self, descriptor: Descriptor, f: F, hooks: CliHooks)
+    where
+        P: OpParams + 'static,
+        O: serde::Serialize + 'static,
+        F: for<'a> Fn(
+                &'a C,
+                P,
+                Option<Cursor>,
+                CallOptions,
+            ) -> BoxFuture<'a, Result<BoxStream<'a, Result<O>>>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.assert_unique(&descriptor.name);
+        let f = Arc::new(f);
+        let call: StreamCall<C> = Box::new(move |ctx, args, opts, cursor| {
+            stream_dispatch_borrowed::<C, P, O, F>(Arc::clone(&f), ctx, args, opts, cursor)
         });
         self.entries.push(Entry {
             descriptor,

@@ -126,7 +126,10 @@ async fn follow_prints_one_json_line_per_frame() {
     let mut o = opts();
     o.initial_cursor = Some(lc(0, 1));
     let res = follow(connect, sink, o).await;
-    assert_eq!(code_of(&res.err().expect("logical error ends it")), "test.app.denied");
+    assert_eq!(
+        code_of(&res.err().expect("logical error ends it")),
+        "test.app.denied"
+    );
     assert_eq!(
         parsed(&lines),
         vec![snap(false, "0:1"), item("a", "0:2"), item("b", "0:3")]
@@ -188,9 +191,15 @@ async fn follow_marker_resync_is_true_only_for_a_resync_snapshot() {
 #[tokio::test(start_paused = true)]
 async fn follow_does_not_reconnect_on_a_logical_error() {
     // From the stream.
-    let (connect, connects) = scripted(vec![Step::Frames(vec![Ok(item("a", "0:1")), Err(denied())])]);
+    let (connect, connects) = scripted(vec![Step::Frames(vec![
+        Ok(item("a", "0:1")),
+        Err(denied()),
+    ])]);
     let (sink, lines) = make_sink();
-    let err = follow(connect, sink, opts()).await.err().expect("must fail");
+    let err = follow(connect, sink, opts())
+        .await
+        .err()
+        .expect("must fail");
     assert_eq!(code_of(&err), "test.app.denied");
     assert_eq!(connects.lock().unwrap().len(), 1);
     assert_eq!(parsed(&lines), vec![item("a", "0:1")], "no marker");
@@ -198,7 +207,10 @@ async fn follow_does_not_reconnect_on_a_logical_error() {
     // From connect itself.
     let (connect, connects) = scripted(vec![Step::ConnectErr(denied())]);
     let (sink, lines) = make_sink();
-    let err = follow(connect, sink, opts()).await.err().expect("must fail");
+    let err = follow(connect, sink, opts())
+        .await
+        .err()
+        .expect("must fail");
     assert_eq!(code_of(&err), "test.app.denied");
     assert_eq!(connects.lock().unwrap().len(), 1);
     assert!(lines.lock().unwrap().is_empty());
@@ -248,10 +260,16 @@ async fn follow_backoff_is_capped_and_max_retries_is_honoured() {
     let mut o = opts();
     o.backoff_max = ms(2000);
     o.max_retries = Some(5);
-    let err = follow(connect, sink, o).await.err().expect("retries exhausted");
+    let err = follow(connect, sink, o)
+        .await
+        .err()
+        .expect("retries exhausted");
     assert_eq!(code_of(&err), "test.app.transient");
     assert_eq!(connects.lock().unwrap().len(), 6);
-    assert_eq!(gaps(&connects), vec![ms(250), ms(500), ms(1000), ms(2000), ms(2000)]);
+    assert_eq!(
+        gaps(&connects),
+        vec![ms(250), ms(500), ms(1000), ms(2000), ms(2000)]
+    );
     assert!(lines.lock().unwrap().is_empty());
 
     // Defaults.
@@ -275,7 +293,10 @@ async fn follow_backoff_is_capped_and_max_retries_is_honoured() {
     let (sink, _) = make_sink();
     let mut o = opts();
     o.max_retries = Some(1);
-    let err = follow(connect, sink, o).await.err().expect("retries exhausted");
+    let err = follow(connect, sink, o)
+        .await
+        .err()
+        .expect("retries exhausted");
     assert_eq!(code_of(&err), "op_listen.ended");
     assert_eq!(connects.lock().unwrap().len(), 2);
 
@@ -287,7 +308,10 @@ async fn follow_backoff_is_capped_and_max_retries_is_honoured() {
         Step::ConnectErr(denied()),
     ]);
     let (sink, _) = make_sink();
-    let err = follow(connect, sink, opts()).await.err().expect("logical ends it");
+    let err = follow(connect, sink, opts())
+        .await
+        .err()
+        .expect("logical ends it");
     assert_eq!(code_of(&err), "test.app.denied");
     assert_eq!(gaps(&connects), vec![ms(250), ms(500), ms(250)]);
 }

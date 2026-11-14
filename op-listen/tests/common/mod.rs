@@ -356,5 +356,6 @@ where
     S: serde::Serialize + Send + 'a,
     I: serde::Serialize + Send + 'a,
 {
-    s.map(|r| r.map(|f| serde_json::to_value(f).unwrap())).boxed()
+    s.map(|r| r.map(|f| serde_json::to_value(f).unwrap()))
+        .boxed()
 }

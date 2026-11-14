@@ -5,7 +5,21 @@ use serde_json::Value;
 
 #[non_exhaustive]
 #[derive(Clone, Debug, Default)]
-pub struct CallOptions {}
+pub struct CallOptions {
+    pub caller: Option<Caller>,
+}
+
+/// Identifies the caller of an operation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Caller(pub String);
+
+impl CallOptions {
+    /// Returns these options with the caller set.
+    pub fn with_caller(mut self, caller: Caller) -> Self {
+        self.caller = Some(caller);
+        self
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Cursor(pub String);
