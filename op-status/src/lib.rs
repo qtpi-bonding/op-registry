@@ -12,3 +12,8 @@ pub use types::*;
 
 #[cfg(feature = "registry")]
 pub mod ops;
+
+#[cfg(feature = "listen")]
+pub mod listen;
+#[cfg(feature = "listen")]
+pub use listen::StatusListener;

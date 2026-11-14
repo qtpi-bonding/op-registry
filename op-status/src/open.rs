@@ -170,6 +170,7 @@ pub async fn open_status<'a, S: StatusSource + ?Sized>(
 ) -> Result<OpenedStatus<'a>> {
     let window = source.seq_window();
     let seq = window.newest;
+    let epoch = source.epoch();
     let snapshot = take_snapshot(source, filter, limit).await?;
 
     let inner = source
@@ -178,7 +179,7 @@ pub async fn open_status<'a, S: StatusSource + ?Sized>(
 
     let resync = match cursor {
         None => true,
-        Some(c) => c.epoch != source.epoch() || !(window.oldest <= c.seq && c.seq <= window.newest),
+        Some(c) => c.epoch != epoch || !(window.oldest <= c.seq && c.seq <= window.newest),
     };
 
     let allowed = source.allowed_attr_keys();

@@ -23,6 +23,8 @@ pub struct StatusOptions {
     pub audience: Audience,
     /// Largest number of components one call may return.
     pub max_components: usize,
+    /// Register `status watch` when the source provides watch.
+    pub watch: bool,
 }
 
 impl Default for StatusOptions {
@@ -30,6 +32,7 @@ impl Default for StatusOptions {
         Self {
             audience: Audience::Agent,
             max_components: 1000,
+            watch: true,
         }
     }
 }
@@ -51,6 +54,12 @@ impl StatusOptions {
         self.max_components = max;
         self
     }
+
+    /// Sets whether `status watch` is registered when the source provides watch.
+    pub fn watch(mut self, watch: bool) -> Self {
+        self.watch = watch;
+        self
+    }
 }
 
 /// Parameters of `status get`.
@@ -67,18 +76,21 @@ pub struct GetParams {
     pub limit: Option<u32>,
 }
 
+/// Clamps a requested component limit to `max`. `None` means `max`.
+pub(crate) fn clamp_limit(requested: Option<u32>, max: usize) -> usize {
+    match requested {
+        Some(requested) => usize::try_from(requested).unwrap_or(usize::MAX).min(max),
+        None => max,
+    }
+}
+
 fn get_op<'a, C: StatusSource + Sync>(
     source: &'a C,
     params: GetParams,
     max_components: usize,
 ) -> BoxFuture<'a, Result<StatusSnapshot>> {
     Box::pin(async move {
-        let limit = match params.limit {
-            Some(requested) => usize::try_from(requested)
-                .unwrap_or(usize::MAX)
-                .min(max_components),
-            None => max_components,
-        };
+        let limit = clamp_limit(params.limit, max_components);
         let filter = StatusFilter {
             kind: params.kind,
             id: params.id,
@@ -91,10 +103,12 @@ fn get_op<'a, C: StatusSource + Sync>(
 pub fn status_registry<C: StatusSource + Sync + 'static>(opts: StatusOptions) -> Registry<C> {
     let mut registry = Registry::<C>::new();
     let max = opts.max_components;
+    let watch = opts.watch;
+    let audience = opts.audience;
     let descriptor = Descriptor::new("status", "get")
         .description("Reads component status snapshots")
         .access(Access::reads())
-        .audience(opts.audience)
+        .audience(audience)
         .streaming(false)
         .input_schema(<GetParams as OpParams>::schema())
         .output_schema(op_registry::__private::output_schema_of::<StatusSnapshot>());
@@ -103,5 +117,18 @@ pub fn status_registry<C: StatusSource + Sync + 'static>(opts: StatusOptions) ->
         move |ctx: &C, params: GetParams, _opts: CallOptions| get_op(ctx, params, max),
         CliHooks::for_params::<GetParams>(),
     );
+    #[cfg(feature = "listen")]
+    if watch && C::provides_watch() {
+        op_listen::listen_entry(
+            &mut registry,
+            std::sync::Arc::new(crate::listen::StatusListener::new(max)),
+            Descriptor::new("status", "watch")
+                .description("Streams component status changes after a snapshot")
+                .access(Access::reads())
+                .audience(audience),
+        );
+    }
+    #[cfg(not(feature = "listen"))]
+    let _ = (watch, audience);
     registry
 }

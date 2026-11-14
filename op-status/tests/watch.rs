@@ -361,8 +361,14 @@ async fn status_listener_open_matches_open_status() {
         assert_eq!(changes.len(), 2);
     }
     // The cursor mapping gives the expected resync values.
+    let (listener_ref, src_ref) = (&listener, &src);
     let r = |c| async move {
-        match listener.open(&src, gp(), c, None).await.ok().expect("open") {
+        match listener_ref
+            .open(src_ref, gp(), c, None)
+            .await
+            .ok()
+            .expect("open")
+        {
             Opened::Snapshot { resync, .. } => resync,
             _ => panic!("snapshot"),
         }
@@ -510,7 +516,7 @@ async fn follow_over_status_watch_prints_marker_and_resnapshots_after_an_epoch_c
 
     assert_eq!(
         *connects.lock().unwrap(),
-        vec![None, Some(lc(7, 5))],
+        vec![None, Some(lc(7, 5)), Some(lc(8, 2))],
         "reconnect resumes from the last cursor"
     );
     let parsed: Vec<Value> = lines

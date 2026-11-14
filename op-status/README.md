@@ -90,7 +90,11 @@ Implement `StatusSource`:
   yourself, and return **at most `max + 1`** components so the caller can
   detect truncation.
 - `allowed_attr_keys()`: the static allow-list of attribute keys.
-- `watch()`: optional hook, defaults to `None`, not used yet.
+- `watch(from_seq)`: optional; returns the changes with seq above `from_seq`
+  (`None` = live changes only), replaying the retained backlog first. Defaults
+  to `None`. A source that implements it also overrides `provides_watch()` to
+  return `true` and `seq_window()` to report `SeqWindow { oldest, newest }`: a
+  cursor seq is retained iff `oldest <= seq <= newest`.
 
 Then register the operation and merge it into the app registry:
 
@@ -131,12 +135,50 @@ Every returned component is checked against `check_component`.
 Do not rely on release behaviour for correctness; fix the source so that debug
 builds pass.
 
-## Not in this crate yet
+## `status watch` (feature `listen`)
 
-`status watch`, the stream frames and cursor, and the client `resnapshot: true`
-marker are **not** part of op-status yet. They arrive with a later job on
-`op-listen`. `watch` is not an exact resume: it may not replay every change. For
-exact resume, use an events log.
+With the `listen` feature (off by default; adds the `op-listen` dependency)
+`status_registry` also registers `status watch` when `StatusOptions::watch` is
+on (the default) and the source returns `true` from `provides_watch()`. It is a
+CLI-only streaming entry (never an MCP tool), `reads` access, with the
+audience from the options. Parameters are those of `status get`.
+
+The stream is an `op-listen` stream: it shares the `epoch:seq` cursor, the
+frame envelope, the follower and the gate. The first frame is a full filtered
+snapshot (the same path as `status get`, including `truncated`), then one item
+frame per changed component. Change components pass the same attribute and
+length checks as `status get`.
+
+`watch` is **not an exact resume**. The snapshot's `resync` flag tells the
+client what to do with it:
+
+- `resync: true`: no cursor, a different epoch, or a seq the source no longer
+  retains. Discard local state and rebuild it from the snapshot.
+- `resync: false`: epoch matches and the seq is retained. The snapshot is a
+  refresh; keep local state and apply the items that follow.
+
+The change buffer is bounded (`WATCH_BUFFER`, 256). On overflow the stream
+fails with `op_status.lagged` (Transient), which `StatusListener` maps to
+`op_listen.lagged`; op-listen then opens again and sends a fresh snapshot with
+`resync: true`. For exact resume use an events log.
+
+`StatusListener::authorize` grants everyone (no floor, no recheck): who can
+call is decided by the app's reachability and `StatusOptions::audience`. An app
+that needs a gate wraps `StatusListener` or passes its own `Listener`.
+`Listener::epoch` has no ctx, so `StatusListener` reports the epoch of the
+source seen by its latest `open`. `listen_entry` leaks one listener per
+registration; build the registry once.
+
+### Supplying `watch` from a service
+
+Implement `watch`, `seq_window` and `provides_watch` on your `StatusSource`.
+`watch(Some(n))` must yield exactly the retained changes with seq above `n`
+then live ones, in strictly increasing seq. grorg's server can implement its
+`WatchStatus` rpc by calling `op_status::open_status` directly (no `op-listen`
+needed), so the resync rules exist once. `open_status` reads
+`seq_window().newest`, takes the snapshot, then subscribes with
+`watch(Some(newest))`: a change emitted in between appears exactly once, in the
+stream.
 
 ## Testing sources
 
@@ -145,7 +187,8 @@ an observed attribute key is not on the allow-list. Use it in source tests.
 
 ## Free-text fields
 
-Only `attrs` is allow-listed and length-bounded. `kind`, `id` and
-`last_error_message` are free text and are passed on as the source returns
-them; a source must keep message bodies, paths and other forbidden content out
-of them.
+`kind`, `id`, `last_error_code`, `last_error_message` (and the snapshot's
+`service` and `version`) are bounded to 256 bytes too. Debug builds refuse a
+longer value with `op_status.field_too_long` (Logical, naming the field);
+release builds truncate at a char boundary. A source must still keep message
+bodies, paths and other forbidden content out of them.
