@@ -166,7 +166,7 @@ fails with `op_status.lagged` (Transient), which `StatusListener` maps to
 call is decided by the app's reachability and `StatusOptions::audience`. An app
 that needs a gate wraps `StatusListener` or passes its own `Listener`.
 `Listener::epoch` has no ctx, so `StatusListener` reports the epoch of the
-source seen by its latest `open`. `listen_entry` leaks one listener per
+source seen by its latest `open`; the epoch is one shared cell, so if a source's epoch changes while streams are live, older streams' later frames carry the new epoch (epochs change on restart in practice, which ends all streams). A proper fix needs `op-listen`'s `Listener::epoch` to take the ctx. `listen_entry` leaks one listener per
 registration; build the registry once.
 
 ### Supplying `watch` from a service
