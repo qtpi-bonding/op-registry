@@ -4,6 +4,11 @@ use crate::{mcp::ToolSpec, Audience, Registry};
 use clap::Command;
 use std::collections::BTreeSet;
 
+/// Normalises a name for matching: `-` becomes `_`.
+fn normalise(name: &str) -> String {
+    name.replace('-', "_")
+}
+
 /// The operation names exposed by a frontend.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Surface {
@@ -13,25 +18,28 @@ pub struct Surface {
 /// Collects operation names from a clap command.
 pub fn cli_surface(cmd: &Command) -> Surface {
     let mut names = BTreeSet::new();
+    collect_leaves(cmd, &mut Vec::new(), &mut names);
+    Surface { names }
+}
 
+/// Walks every level of the clap tree below `cmd`, recording each leaf by its
+/// path from the root joined with `_`. `help` subcommands are skipped.
+fn collect_leaves(cmd: &Command, path: &mut Vec<String>, names: &mut BTreeSet<String>) {
     for subcommand in cmd.get_subcommands() {
         if subcommand.get_name() == "help" {
             continue;
         }
-
-        let leaves: Vec<&Command> = subcommand.get_subcommands().collect();
-        if leaves.is_empty() {
-            names.insert(subcommand.get_name().to_owned());
+        path.push(subcommand.get_name().to_owned());
+        if subcommand
+            .get_subcommands()
+            .any(|child| child.get_name() != "help")
+        {
+            collect_leaves(subcommand, path, names);
         } else {
-            for leaf in leaves {
-                if leaf.get_name() != "help" {
-                    names.insert(format!("{}_{}", subcommand.get_name(), leaf.get_name()));
-                }
-            }
+            names.insert(path.join("_"));
         }
+        path.pop();
     }
-
-    Surface { names }
 }
 
 /// A complete description of frontend parity failures.
@@ -62,6 +70,8 @@ pub fn assert_parity<C: Sync>(
         .into_iter()
         .map(|descriptor| descriptor.name.clone())
         .collect();
+    let registry_normalised: BTreeSet<String> =
+        registry_names.iter().map(|name| normalise(name)).collect();
     let expected_mcp: BTreeSet<String> = registry
         .descriptors()
         .into_iter()
@@ -73,11 +83,19 @@ pub fn assert_parity<C: Sync>(
     let allow_mcp: BTreeSet<&str> = allow_mcp_only.iter().copied().collect();
     let mut problems = Vec::new();
 
-    for name in registry_names.difference(&cli.names) {
+    let cli_normalised: BTreeSet<String> = cli.names.iter().map(|name| normalise(name)).collect();
+    for name in registry_names
+        .iter()
+        .filter(|name| !cli_normalised.contains(&normalise(name)))
+    {
         problems.push(format!("operation {name} is missing from the CLI"));
     }
 
-    for name in cli.names.difference(&registry_names) {
+    for name in cli
+        .names
+        .iter()
+        .filter(|name| !registry_normalised.contains(&normalise(name)))
+    {
         if !allow_cli.contains(name.as_str()) {
             problems.push(format!(
                 "CLI command {name} is not a registry operation and is not in allow_cli_only"
@@ -118,7 +136,7 @@ pub fn assert_parity<C: Sync>(
     }
 
     for name in allow_cli_only {
-        let is_extra = cli.names.contains(*name) && !registry_names.contains(*name);
+        let is_extra = cli.names.contains(*name) && !registry_normalised.contains(&normalise(name));
         if !is_extra {
             problems.push(format!("allow_cli_only entry {name} matches nothing"));
         }
