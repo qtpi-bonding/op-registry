@@ -30,7 +30,7 @@ enum Node {
         /// The operation name.
         op: String,
         /// The clap command for the leaf.
-        command: Command,
+        command: Box<Command>,
     },
 }
 
@@ -72,7 +72,7 @@ fn insert(
                 leaf_word.to_owned(),
                 Node::Leaf {
                     op: op.to_owned(),
-                    command,
+                    command: Box::new(command),
                 },
             ));
         }
@@ -106,7 +106,7 @@ fn insert(
 /// Converts a tree node into a clap command.
 fn to_command(word: &str, node: Node) -> Command {
     match node {
-        Node::Leaf { command, .. } => command,
+        Node::Leaf { command, .. } => *command,
         Node::Group { children, .. } => {
             let mut group = Command::new(word.to_owned()).subcommand_required(true);
             for (child_word, child) in children {

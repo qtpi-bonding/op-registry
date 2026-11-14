@@ -147,6 +147,9 @@ fn noun_path_derives_the_underscore_name_and_keeps_the_cli_words() {
     // A single-word noun is unchanged, hyphen in a verb included.
     assert_eq!(Descriptor::new("item", "get").name, "item_get");
     assert_eq!(Descriptor::new("item", "get").cli_name(), "item get");
+    // A single hyphenated word is not a path: its name is as before.
+    assert_eq!(Descriptor::new("foo-bar", "get").name, "foo-bar_get");
+    assert_eq!(Descriptor::new("foo-bar", "get").cli_name(), "foo-bar get");
 
     let registry = pathed();
     let tools = mcp::tool_list(&registry, Audience::Agent);

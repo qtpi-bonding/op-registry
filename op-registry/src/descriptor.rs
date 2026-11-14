@@ -243,6 +243,11 @@ impl Descriptor {
 /// `_`, and the verb is appended after another `_`.
 fn derive_name(noun: &str, verb: &str) -> String {
     let words: Vec<&str> = noun.split_whitespace().collect();
-    let path = words.join("_").replace('-', "_");
+    // A single-word noun is kept exactly as written; only paths are normalised.
+    let path = if words.len() == 1 {
+        words[0].to_owned()
+    } else {
+        words.join("_").replace('-', "_")
+    };
     format!("{path}_{verb}")
 }
