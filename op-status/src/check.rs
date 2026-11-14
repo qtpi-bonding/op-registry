@@ -27,22 +27,32 @@ pub const MAX_ATTR_KEY_BYTES: usize = 64;
 pub const MAX_ATTR_VALUE_BYTES: usize = 256;
 
 /// Errors raised when a component's attributes break the status rules.
-#[derive(Debug, thiserror::Error, coded_error::CodedError)]
-#[coded(namespace = "op_status")]
+#[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum AttrError {
     #[error("attribute key {key} is not on the allow-list")]
-    #[coded(code = "attr_not_allowed", class = Logical)]
     NotAllowed { key: String },
     #[error("component has {count} attributes, the maximum is {max}")]
-    #[coded(code = "attr_too_many", class = Logical)]
     TooMany { count: usize, max: usize },
     #[error("attribute key {key} is {len} bytes, the maximum is {max}")]
-    #[coded(code = "attr_key_too_long", class = Logical)]
     KeyTooLong { key: String, len: usize, max: usize },
     #[error("attribute {key} value is {len} bytes, the maximum is {max}")]
-    #[coded(code = "attr_value_too_long", class = Logical)]
     ValueTooLong { key: String, len: usize, max: usize },
+}
+
+impl coded_error::CodedError for AttrError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::NotAllowed { .. } => "op_status.attr_not_allowed",
+            Self::TooMany { .. } => "op_status.attr_too_many",
+            Self::KeyTooLong { .. } => "op_status.attr_key_too_long",
+            Self::ValueTooLong { .. } => "op_status.attr_value_too_long",
+        }
+    }
+
+    fn class(&self) -> coded_error::ErrorClass {
+        coded_error::ErrorClass::Logical
+    }
 }
 
 /// Checks one component's attributes against the count, length and allow-list rules.
@@ -83,10 +93,7 @@ pub fn check_component(component: &Component, allowed: &[&str]) -> Result<(), At
 /// Panics when any observed attribute key is not in `source_keys`.
 ///
 /// Intended for source tests. The panic message names the offending key.
-pub fn assert_allowed_keys<'a>(
-    source_keys: &[&str],
-    observed: impl IntoIterator<Item = &'a str>,
-) {
+pub fn assert_allowed_keys<'a>(source_keys: &[&str], observed: impl IntoIterator<Item = &'a str>) {
     for key in observed {
         assert!(
             source_keys.contains(&key),
