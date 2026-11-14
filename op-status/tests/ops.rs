@@ -315,3 +315,24 @@ fn status_get_json_shape_is_pinned() {
     });
     assert_eq!(v, expected);
 }
+
+#[test]
+fn error_message_cannot_carry_a_long_payload_through_status_get_or_watch() {
+    // The `status watch` half lives in tests/watch.rs.
+    let src = ToySource::new(vec![
+        Component::new("room", "r1", State::Degraded).last_error("e.code", "m".repeat(10_000))
+    ]);
+    let reg = status_registry::<ToySource>(StatusOptions::new());
+    let result = call(&reg, &src, json!({}));
+    if cfg!(debug_assertions) {
+        let err = result.err().expect("debug refuses");
+        let facts = coded_error::facts_anyhow(&err);
+        assert_eq!(facts.code, "op_status.field_too_long");
+        assert_eq!(facts.class, coded_error::ErrorClass::Logical);
+        assert!(format!("{err:#}").contains("last_error_message"));
+    } else {
+        let v = result.unwrap();
+        let msg = v["components"][0]["last_error_message"].as_str().unwrap();
+        assert!(msg.len() <= 256, "{}", msg.len());
+    }
+}

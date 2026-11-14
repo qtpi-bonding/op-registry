@@ -87,3 +87,62 @@ fn assert_allowed_keys_fails_on_an_unlisted_key() {
     // Failing case: panics naming the key.
     assert_allowed_keys(&["a", "b"], ["a", "leaky_key"]);
 }
+
+fn refused(err: op_status::AttrError) -> (&'static str, ErrorClass, String) {
+    code_and_message(err)
+}
+
+#[test]
+fn check_component_bounds_kind_id_and_last_error_free_text() {
+    let long = "x".repeat(MAX_ATTR_VALUE_BYTES + 1);
+    let exact = "x".repeat(MAX_ATTR_VALUE_BYTES);
+    type Set = fn(&mut Component, String);
+    let setters: [(&str, Set); 4] = [
+        ("kind", |c, v| c.kind = v),
+        ("id", |c, v| c.id = v),
+        ("last_error_code", |c, v| c.last_error_code = v),
+        ("last_error_message", |c, v| c.last_error_message = v),
+    ];
+    for (field, set) in setters {
+        let mut ok = base();
+        set(&mut ok, exact.clone());
+        assert!(check_component(&ok, ALLOWED).is_ok(), "{field} at 256 bytes");
+
+        let mut bad = base();
+        set(&mut bad, long.clone());
+        let (code, class, msg) = refused(check_component(&bad, ALLOWED).err().expect(field));
+        assert_eq!(code, "op_status.field_too_long", "{field}");
+        assert_eq!(class, ErrorClass::Logical);
+        assert!(msg.contains(field), "{field}: {msg}");
+        assert!(msg.contains("257") && msg.contains("256"), "{msg}");
+    }
+    // Multibyte text is measured in bytes.
+    let mut bad = base();
+    bad.last_error_message = "\u{e9}".repeat(129);
+    assert_eq!(bad.last_error_message.len(), 258);
+    let (code, _, _) = refused(check_component(&bad, ALLOWED).err().expect("bytes"));
+    assert_eq!(code, "op_status.field_too_long");
+}
+
+#[test]
+fn check_service_info_bounds_name_and_version() {
+    use op_status::{check_service_info, ServiceInfo};
+    let info = |name: &str, version: &str| ServiceInfo {
+        name: name.into(),
+        version: version.into(),
+    };
+    let long = "x".repeat(MAX_ATTR_VALUE_BYTES + 1);
+    let exact = "x".repeat(MAX_ATTR_VALUE_BYTES);
+    assert!(check_service_info(&info(&exact, &exact)).is_ok());
+
+    let (code, class, msg) = refused(check_service_info(&info(&long, "1.0")).err().expect("name"));
+    assert_eq!(code, "op_status.field_too_long");
+    assert_eq!(class, ErrorClass::Logical);
+    assert!(msg.contains("service"), "{msg}");
+
+    let (code, class, msg) =
+        refused(check_service_info(&info("toy", &long)).err().expect("version"));
+    assert_eq!(code, "op_status.field_too_long");
+    assert_eq!(class, ErrorClass::Logical);
+    assert!(msg.contains("version"), "{msg}");
+}
