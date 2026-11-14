@@ -31,7 +31,9 @@ where
         descriptor,
         move |ctx: &C, params: L::Params, cursor: Option<Cursor>, opts: CallOptions| {
             async move {
-                let caller = opts.caller.unwrap_or_default();
+                let Some(caller) = opts.caller else {
+                    return Err(coded_error::into_anyhow(crate::ListenError::NoCaller));
+                };
                 let cursor = match cursor {
                     Some(cursor) => Some(ListenCursor::try_from(&cursor)?),
                     None => None,

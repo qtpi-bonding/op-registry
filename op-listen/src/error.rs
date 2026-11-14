@@ -15,6 +15,8 @@ pub enum ListenError {
     ResnapshotFailed,
     #[error("listen stream ended")]
     Ended,
+    #[error("listen request has no caller")]
+    NoCaller,
 }
 
 impl coded_error::CodedError for ListenError {
@@ -26,12 +28,15 @@ impl coded_error::CodedError for ListenError {
             Self::OutOfOrder { .. } => "op_listen.out_of_order",
             Self::ResnapshotFailed => "op_listen.resnapshot_failed",
             Self::Ended => "op_listen.ended",
+            Self::NoCaller => "op_listen.no_caller",
         }
     }
 
     fn class(&self) -> coded_error::ErrorClass {
         match self {
-            Self::BadCursor { .. } | Self::Revoked { .. } => coded_error::ErrorClass::Logical,
+            Self::BadCursor { .. } | Self::Revoked { .. } | Self::NoCaller => {
+                coded_error::ErrorClass::Logical
+            }
             Self::Lagged { .. } | Self::Ended => coded_error::ErrorClass::Transient,
             Self::OutOfOrder { .. } | Self::ResnapshotFailed => {
                 coded_error::ErrorClass::Infrastructure

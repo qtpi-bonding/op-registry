@@ -62,9 +62,10 @@ where
     }
 
     /// Records `seq` as the newest sequence, or reports it as out of order.
-    fn advance(&mut self, seq: u64) -> anyhow::Result<()> {
+    /// Items must strictly increase; a snapshot may repeat the last seq.
+    fn advance(&mut self, seq: u64, snapshot: bool) -> anyhow::Result<()> {
         if let Some(previous) = self.last_seq {
-            if seq <= previous {
+            if seq < previous || (seq == previous && !snapshot) {
                 return Err(out_of_order(previous, seq));
             }
         }
@@ -162,7 +163,7 @@ where
                 if state.floor.is_some_and(|floor| seq <= floor.seq) {
                     continue;
                 }
-                if let Err(error) = state.advance(seq) {
+                if let Err(error) = state.advance(seq, false) {
                     state.done = true;
                     return Some((Err(error), state));
                 }
@@ -186,7 +187,7 @@ where
                         stream,
                         ..
                     }) => {
-                        if let Err(error) = state.advance(seq) {
+                        if let Err(error) = state.advance(seq, true) {
                             state.done = true;
                             return Some((Err(error), state));
                         }

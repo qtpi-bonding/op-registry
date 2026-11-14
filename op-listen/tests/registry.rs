@@ -5,7 +5,7 @@ use common::*;
 use op_listen::listen_entry;
 use op_registry::mcp;
 use op_registry::parity::cli_surface;
-use op_registry::{cli, Audience, CallOptions, Cursor, Descriptor, Registry};
+use op_registry::{cli, Audience, CallOptions, Caller, Cursor, Descriptor, Registry};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -51,7 +51,7 @@ fn listen_entry_is_a_cli_only_streaming_op_and_absent_from_the_tool_list() {
                 "log_listen",
                 json!({"topic": "t"}),
                 &Ctx,
-                CallOptions::default(),
+                CallOptions::default().with_caller(Caller("tester".to_owned())),
                 Some(Cursor("garbage".to_owned())),
             )
             .await
@@ -65,7 +65,7 @@ fn listen_entry_is_a_cli_only_streaming_op_and_absent_from_the_tool_list() {
                 "log_listen",
                 json!({"topic": "t"}),
                 &Ctx,
-                CallOptions::default(),
+                CallOptions::default().with_caller(Caller("tester".to_owned())),
                 Some(Cursor("0:2".to_owned())),
             )
             .await
