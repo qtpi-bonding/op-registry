@@ -42,6 +42,11 @@ impl Access {
         }
     }
 
+    /// Creates access metadata for a destructive operation (it also writes).
+    pub const fn destructive() -> Self {
+        Self::reads()
+    }
+
     /// Enables network access.
     pub fn with_network(mut self) -> Self {
         self.network = true;
