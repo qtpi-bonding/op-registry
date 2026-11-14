@@ -1,0 +1,22 @@
+[package]
+name = "op-listen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared listener for op-registry: cursors, frames, per-app gates and a reconnecting follower"
+
+[dependencies]
+op-registry = { path = "../op-registry", version = "0.1.0" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures-util = { workspace = true }
+schemars = { workspace = true }
+coded-error = { workspace = true }
+thiserror = "2"
+tokio = { version = "1", features = ["time", "macros", "rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util", "rt", "macros", "time"] }
+futures-executor = "0.3"
