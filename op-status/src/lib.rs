@@ -5,7 +5,7 @@ pub mod types;
 
 pub mod check;
 pub use check::*;
-pub use source::StatusSource;
+pub use source::{SeqWindow, StatusSource};
 pub use types::*;
 
 #[cfg(feature = "registry")]

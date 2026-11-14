@@ -11,6 +11,18 @@ use futures_util::stream::BoxStream;
 
 use crate::types::{Component, ServiceInfo, StatusFilter};
 
+/// The retained sequence window of a source.
+///
+/// A cursor seq `s` is retained iff `oldest <= s <= newest`. `newest` is the
+/// newest seq the source has emitted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SeqWindow {
+    /// Oldest seq still retained.
+    pub oldest: u64,
+    /// Newest seq the source has emitted.
+    pub newest: u64,
+}
+
 /// A read-only provider of component status.
 pub trait StatusSource: Send + Sync {
     /// Identity of the service that owns this source.
@@ -36,13 +48,29 @@ pub trait StatusSource: Send + Sync {
         max: usize,
     ) -> BoxFuture<'a, anyhow::Result<Vec<Component>>>;
 
-    /// Optional change stream starting after `from_seq`. Not used yet; defaults to `None`.
+    /// Returns the changes with seq greater than `from_seq`.
+    ///
+    /// `from_seq` of `None` means only live changes. Otherwise the retained
+    /// backlog is replayed first, then live changes follow. Defaults to `None`.
     fn watch(
         &self,
         from_seq: Option<u64>,
     ) -> Option<BoxStream<'_, anyhow::Result<(u64, Component)>>> {
         let _ = from_seq;
         None
+    }
+
+    /// The retained sequence window. Defaults to an empty window at zero.
+    fn seq_window(&self) -> SeqWindow {
+        SeqWindow::default()
+    }
+
+    /// Whether this source implements [`StatusSource::watch`].
+    fn provides_watch() -> bool
+    where
+        Self: Sized,
+    {
+        false
     }
 
     /// Attribute keys this source may report. Anything else is dropped or rejected.

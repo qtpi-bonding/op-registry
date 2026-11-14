@@ -38,6 +38,43 @@ pub enum AttrError {
     KeyTooLong { key: String, len: usize, max: usize },
     #[error("attribute {key} value is {len} bytes, the maximum is {max}")]
     ValueTooLong { key: String, len: usize, max: usize },
+    #[error("field {field} is {len} bytes, the maximum is {max}")]
+    FieldTooLong {
+        field: String,
+        len: usize,
+        max: usize,
+    },
+}
+
+/// Checks that a free-text field is at most `MAX_ATTR_VALUE_BYTES` bytes long.
+fn check_field_len(field: &str, text: &str) -> Result<(), AttrError> {
+    let len = text.len();
+    if len > MAX_ATTR_VALUE_BYTES {
+        return Err(AttrError::FieldTooLong {
+            field: field.to_owned(),
+            len,
+            max: MAX_ATTR_VALUE_BYTES,
+        });
+    }
+    Ok(())
+}
+
+/// Checks the service name and version against the free-text length bound.
+pub fn check_service_info(info: &crate::types::ServiceInfo) -> Result<(), AttrError> {
+    check_field_len("service", &info.name)?;
+    check_field_len("version", &info.version)
+}
+
+/// Truncates `text` to the largest prefix of at most `max` bytes that ends on a char boundary.
+pub fn truncate_at_char_boundary(text: &mut String, max: usize) {
+    if text.len() <= max {
+        return;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
 }
 
 impl coded_error::CodedError for AttrError {
@@ -47,6 +84,7 @@ impl coded_error::CodedError for AttrError {
             Self::TooMany { .. } => "op_status.attr_too_many",
             Self::KeyTooLong { .. } => "op_status.attr_key_too_long",
             Self::ValueTooLong { .. } => "op_status.attr_value_too_long",
+            Self::FieldTooLong { .. } => "op_status.field_too_long",
         }
     }
 
@@ -59,6 +97,10 @@ impl coded_error::CodedError for AttrError {
 ///
 /// Keys are checked in `BTreeMap` order. The first failing rule is returned.
 pub fn check_component(component: &Component, allowed: &[&str]) -> Result<(), AttrError> {
+    check_field_len("kind", &component.kind)?;
+    check_field_len("id", &component.id)?;
+    check_field_len("last_error_code", &component.last_error_code)?;
+    check_field_len("last_error_message", &component.last_error_message)?;
     let count = component.attrs.len();
     if count > MAX_ATTRS {
         return Err(AttrError::TooMany {

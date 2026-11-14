@@ -39,10 +39,17 @@ fn lc(epoch: u64, seq: u64) -> ListenCursor {
 type Frames = Vec<anyhow::Result<Value>>;
 
 async fn frames(src: &Toy, listener: &StatusListener, cursor: Option<ListenCursor>) -> Frames {
-    let stream = listen_stream(listener, src, gp(), cursor, caller(), ListenOptions::default())
-        .await
-        .ok()
-        .expect("listen_stream");
+    let stream = listen_stream(
+        listener,
+        src,
+        gp(),
+        cursor,
+        caller(),
+        ListenOptions::default(),
+    )
+    .await
+    .ok()
+    .expect("listen_stream");
     stream
         .map(|f| f.and_then(|f| Ok(serde_json::to_value(f)?)))
         .collect()
@@ -116,7 +123,13 @@ async fn watch_frames_carry_an_increasing_cursor() {
     for (i, expected) in ["snapshot", "item", "item", "item"].iter().enumerate() {
         let f = ok(&out, i);
         assert_eq!(f["frame"], *expected);
-        cursors.push(f["cursor"].as_str().unwrap().parse::<ListenCursor>().unwrap());
+        cursors.push(
+            f["cursor"]
+                .as_str()
+                .unwrap()
+                .parse::<ListenCursor>()
+                .unwrap(),
+        );
     }
     assert_eq!(cursors[0].to_string(), "7:3");
     assert!(cursors.iter().all(|c| c.epoch == 7));
@@ -159,12 +172,18 @@ async fn watch_overflow_emits_a_fresh_snapshot_and_continues() {
         .map(|f| f.and_then(|f| Ok(serde_json::to_value(f)?)))
         .collect()
         .await;
-    assert!(rest.iter().all(|f| f.is_ok()), "lag must not surface as an error");
+    assert!(
+        rest.iter().all(|f| f.is_ok()),
+        "lag must not surface as an error"
+    );
     let kinds: Vec<&str> = rest
         .iter()
         .map(|f| f.as_ref().unwrap()["frame"].as_str().unwrap())
         .collect();
-    let snap_at = kinds.iter().position(|k| *k == "snapshot").expect("a fresh snapshot");
+    let snap_at = kinds
+        .iter()
+        .position(|k| *k == "snapshot")
+        .expect("a fresh snapshot");
     assert!(kinds[..snap_at].iter().all(|k| *k == "item"));
     assert!(snap_at <= WATCH_BUFFER);
     assert_eq!(kinds.iter().filter(|k| **k == "snapshot").count(), 1);
@@ -198,7 +217,12 @@ fn status_watch_is_absent_when_the_source_has_no_watch_or_opts_say_no() {
 #[tokio::test]
 async fn watch_change_for_an_unlisted_attr_key_is_refused_in_debug_and_dropped_in_release() {
     let src = Toy::new();
-    src.push(4, comp("bad").attr("count", 1i64).attr("leaked_path", "/home/x"));
+    src.push(
+        4,
+        comp("bad")
+            .attr("count", 1i64)
+            .attr("leaked_path", "/home/x"),
+    );
     src.set_window(1, 3);
     let listener = StatusListener::new(100);
     let out = frames(&src, &listener, None).await;
@@ -214,7 +238,12 @@ async fn watch_change_for_an_unlisted_attr_key_is_refused_in_debug_and_dropped_i
 #[tokio::test]
 async fn watch_change_for_an_unlisted_attr_key_is_refused_in_debug_and_dropped_in_release() {
     let src = Toy::new();
-    src.push(4, comp("bad").attr("count", 1i64).attr("leaked_path", "/home/x"));
+    src.push(
+        4,
+        comp("bad")
+            .attr("count", 1i64)
+            .attr("leaked_path", "/home/x"),
+    );
     src.set_window(1, 3);
     let listener = StatusListener::new(100);
     let out = frames(&src, &listener, None).await;
@@ -345,7 +374,11 @@ async fn status_listener_open_matches_open_status() {
     // epoch() follows the source seen by the most recent open.
     assert_eq!(<StatusListener as Listener<Toy>>::epoch(&listener), 7);
     src.set_epoch(9);
-    let _ = listener.open(&src, gp(), None, None).await.ok().expect("open");
+    let _ = listener
+        .open(&src, gp(), None, None)
+        .await
+        .ok()
+        .expect("open");
     assert_eq!(<StatusListener as Listener<Toy>>::epoch(&listener), 9);
 }
 
@@ -382,7 +415,12 @@ async fn status_listener_clamps_limit_and_reports_truncated() {
         let src = &src;
         let listener = &listener;
         async move {
-            match listener.open(src, params, None, None).await.ok().expect("open") {
+            match listener
+                .open(src, params, None, None)
+                .await
+                .ok()
+                .expect("open")
+            {
                 Opened::Snapshot { snapshot, .. } => snapshot,
                 _ => panic!("snapshot"),
             }
@@ -391,13 +429,25 @@ async fn status_listener_clamps_limit_and_reports_truncated() {
     let s = snap(gp()).await;
     assert_eq!(ids(&s.components), vec!["r0", "r1", "r2"]);
     assert!(s.truncated);
-    let s = snap(GetParams { limit: Some(2), ..gp() }).await;
+    let s = snap(GetParams {
+        limit: Some(2),
+        ..gp()
+    })
+    .await;
     assert_eq!(s.components.len(), 2);
     assert!(s.truncated);
-    let s = snap(GetParams { limit: Some(100), ..gp() }).await;
+    let s = snap(GetParams {
+        limit: Some(100),
+        ..gp()
+    })
+    .await;
     assert_eq!(s.components.len(), 3);
     assert!(s.truncated);
-    let s = snap(GetParams { id: Some("r4".into()), ..gp() }).await;
+    let s = snap(GetParams {
+        id: Some("r4".into()),
+        ..gp()
+    })
+    .await;
     assert_eq!(ids(&s.components), vec!["r4"]);
     assert!(!s.truncated);
 }

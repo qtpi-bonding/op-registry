@@ -5,8 +5,7 @@ use coded_error::ErrorClass;
 use common::*;
 use futures_util::StreamExt;
 use op_status::{
-    open_status, Component, OpenedStatus, StatusCursorRef, StatusFilter, StatusSource,
-    WATCH_BUFFER,
+    open_status, Component, OpenedStatus, StatusCursorRef, StatusFilter, StatusSource, WATCH_BUFFER,
 };
 
 async fn open<'a, S: StatusSource + ?Sized>(
@@ -93,7 +92,10 @@ async fn watch_snapshot_and_changes_have_no_gap_or_duplicate_at_the_boundary() {
     src.inject_during_snapshot(4, comp("late"));
 
     let opened = open(&src, 10, cur(7, 3)).await.ok().expect("open");
-    assert_eq!(opened.seq, 3, "seq is the newest seq read before the snapshot");
+    assert_eq!(
+        opened.seq, 3,
+        "seq is the newest seq read before the snapshot"
+    );
     assert!(!opened.resync);
     let changes: Vec<(u64, Component)> = drain(opened)
         .await
@@ -101,7 +103,11 @@ async fn watch_snapshot_and_changes_have_no_gap_or_duplicate_at_the_boundary() {
         .map(|r| r.ok().expect("change"))
         .collect();
     let seqs: Vec<u64> = changes.iter().map(|(s, _)| *s).collect();
-    assert_eq!(seqs, vec![4], "backlog <= seq is not replayed, seq 4 appears once");
+    assert_eq!(
+        seqs,
+        vec![4],
+        "backlog <= seq is not replayed, seq 4 appears once"
+    );
     assert_eq!(changes[0].1.id, "late");
     assert_eq!(src.watch_froms(), vec![Some(3)]);
 }
@@ -120,7 +126,10 @@ async fn open_status_overflow_yields_a_coded_transient_lagged_error_and_ends() {
         match stream.next().await {
             Some(Ok((seq, _))) => oks.push(seq),
             Some(Err(e)) => break e,
-            None => panic!("stream ended without a lagged error after {} items", oks.len()),
+            None => panic!(
+                "stream ended without a lagged error after {} items",
+                oks.len()
+            ),
         }
     };
     assert!(oks.len() <= WATCH_BUFFER, "got {} items", oks.len());
@@ -137,7 +146,10 @@ async fn open_status_overflow_yields_a_coded_transient_lagged_error_and_ends() {
     let all = drain(opened).await;
     assert_eq!(all.len(), WATCH_BUFFER);
     let seqs: Vec<u64> = all.into_iter().map(|r| r.ok().expect("no lag").0).collect();
-    assert_eq!(seqs, (1001..=1000 + WATCH_BUFFER as u64).collect::<Vec<_>>());
+    assert_eq!(
+        seqs,
+        (1001..=1000 + WATCH_BUFFER as u64).collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test]
@@ -196,7 +208,10 @@ async fn open_status_change_items_are_checked_like_the_snapshot() {
     let src = Toy::new();
     fill(&src, 10, 0);
     src.push_tail(Ok((11, comp("ok").attr("count", 1i64))));
-    src.push_tail(Ok((12, comp("bad").attr("count", 1i64).attr("leaked_path", "/x"))));
+    src.push_tail(Ok((
+        12,
+        comp("bad").attr("count", 1i64).attr("leaked_path", "/x"),
+    )));
     let opened = open(&src, 10, None).await.ok().expect("open");
     let items = drain(opened).await;
     assert_eq!(items.len(), 2);

@@ -106,7 +106,10 @@ fn check_component_bounds_kind_id_and_last_error_free_text() {
     for (field, set) in setters {
         let mut ok = base();
         set(&mut ok, exact.clone());
-        assert!(check_component(&ok, ALLOWED).is_ok(), "{field} at 256 bytes");
+        assert!(
+            check_component(&ok, ALLOWED).is_ok(),
+            "{field} at 256 bytes"
+        );
 
         let mut bad = base();
         set(&mut bad, long.clone());
@@ -140,8 +143,11 @@ fn check_service_info_bounds_name_and_version() {
     assert_eq!(class, ErrorClass::Logical);
     assert!(msg.contains("service"), "{msg}");
 
-    let (code, class, msg) =
-        refused(check_service_info(&info("toy", &long)).err().expect("version"));
+    let (code, class, msg) = refused(
+        check_service_info(&info("toy", &long))
+            .err()
+            .expect("version"),
+    );
     assert_eq!(code, "op_status.field_too_long");
     assert_eq!(class, ErrorClass::Logical);
     assert!(msg.contains("version"), "{msg}");

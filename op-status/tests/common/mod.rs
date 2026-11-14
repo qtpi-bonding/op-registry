@@ -100,7 +100,10 @@ impl<const W: bool> ToyW<W> {
     }
 
     pub fn inject_during_snapshot(&self, seq: u64, component: Component) {
-        self.inject_on_snapshot.lock().unwrap().push((seq, component));
+        self.inject_on_snapshot
+            .lock()
+            .unwrap()
+            .push((seq, component));
     }
 
     pub fn push_tail(&self, item: Item) {
