@@ -69,7 +69,9 @@ both a leaf (a verb or explicit name) and a group at the same level panics at
 construction, naming both operations. `parity::cli_surface` walks the whole
 tree and names each leaf by its path joined with `_` (hyphens kept);
 `assert_parity` matches those names to registry names after `-` becomes `_`,
-while the allow-lists stay exact strings.
+while the allow-lists stay exact strings. A hyphen in the verb also becomes `_` in
+the derived name (`action` + `set-parent` gives `action_set_parent`, CLI
+`action set-parent`); a single-word noun keeps its own hyphens.
 
 `access: destructive` means writes plus destructive (`Access::destructive()`).
 

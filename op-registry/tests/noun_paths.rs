@@ -144,7 +144,15 @@ fn noun_path_derives_the_underscore_name_and_keeps_the_cli_words() {
     assert_eq!(descriptor.cli_name(), "agent dispatch-target set");
     assert_eq!(descriptor.noun, "agent dispatch-target");
 
-    // A single-word noun is unchanged, hyphen in a verb included.
+    // A hyphen in the verb becomes `_` in the name; the CLI words are as written.
+    assert_eq!(
+        Descriptor::new("action", "set-parent").name,
+        "action_set_parent"
+    );
+    assert_eq!(
+        Descriptor::new("action", "set-parent").cli_name(),
+        "action set-parent"
+    );
     assert_eq!(Descriptor::new("item", "get").name, "item_get");
     assert_eq!(Descriptor::new("item", "get").cli_name(), "item get");
     // A single hyphenated word is not a path: its name is as before.
@@ -157,6 +165,35 @@ fn noun_path_derives_the_underscore_name_and_keeps_the_cli_words() {
     assert!(tools
         .iter()
         .any(|t| t.name == "agent_dispatch_target_deep_go"));
+}
+
+#[test]
+fn hyphenated_verb_cli_and_mcp_names_agree_and_parity_holds() {
+    let registry: Registry<Ctx> = registry! {
+        Ctx = Ctx;
+        entries: [
+            { noun: "action", verb: "set-parent", description: "sets parent",
+              access: writes, audience: Agent, params: Empty, output: Done, op: set, },
+        ]
+    };
+    let command = cli::command(&registry, "app", "toy");
+    assert_eq!(names_of(&command), ["action"]);
+    assert_eq!(names_of(child(&command, "action")), ["set-parent"]);
+
+    let tools = mcp::tool_list(&registry, Audience::Agent);
+    assert!(tools.iter().any(|t| t.name == "action_set_parent"));
+    assert!(!tools.iter().any(|t| t.name == "action_set-parent"));
+
+    let cli = cli_surface(&command);
+    assert_parity(&registry, &cli, &tools, &[], &[], Audience::Agent)
+        .unwrap_or_else(|report| panic!("parity must hold:\n{report}"));
+}
+
+#[test]
+fn verb_hyphen_normalisation_does_not_touch_a_single_word_noun() {
+    let descriptor = Descriptor::new("agent-x", "set-y");
+    assert_eq!(descriptor.name, "agent-x_set_y");
+    assert_eq!(descriptor.cli_name(), "agent-x set-y");
 }
 
 #[test]
@@ -232,7 +269,7 @@ fn a_word_that_is_both_leaf_and_group_panics_naming_both() {
         };
         cli::command(&registry, "app", "toy");
     });
-    assert!(text.contains("\"agent_dispatch-target\""), "{text}");
+    assert!(text.contains("\"agent_dispatch_target\""), "{text}");
     assert!(text.contains("\"agent_dispatch_target_set\""), "{text}");
 
     // The other order.
@@ -248,7 +285,7 @@ fn a_word_that_is_both_leaf_and_group_panics_naming_both() {
         };
         cli::command(&registry, "app", "toy");
     });
-    assert!(text.contains("\"agent_dispatch-target\""), "{text}");
+    assert!(text.contains("\"agent_dispatch_target\""), "{text}");
     assert!(text.contains("\"agent_dispatch_target_set\""), "{text}");
 }
 

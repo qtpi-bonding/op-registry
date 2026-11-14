@@ -240,7 +240,8 @@ impl Descriptor {
 /// Derives an operation name from a noun path and a verb.
 ///
 /// The noun's whitespace-separated words are joined with `_`, every `-` becomes
-/// `_`, and the verb is appended after another `_`.
+/// `_`, and the verb is appended after another `_` with its own `-` also turned
+/// into `_` (the CLI keeps the verb as written).
 fn derive_name(noun: &str, verb: &str) -> String {
     let words: Vec<&str> = noun.split_whitespace().collect();
     // A single-word noun is kept exactly as written; only paths are normalised.
@@ -249,5 +250,5 @@ fn derive_name(noun: &str, verb: &str) -> String {
     } else {
         words.join("_").replace('-', "_")
     };
-    format!("{path}_{verb}")
+    format!("{path}_{}", verb.replace('-', "_"))
 }
