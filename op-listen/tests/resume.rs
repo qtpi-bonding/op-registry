@@ -1,3 +1,4 @@
+#![allow(clippy::err_expect, clippy::ok_expect)]
 mod common;
 
 use common::*;

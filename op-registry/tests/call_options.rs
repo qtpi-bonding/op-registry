@@ -1,3 +1,4 @@
+#![allow(clippy::err_expect, clippy::ok_expect)]
 use futures_util::{future::BoxFuture, stream::BoxStream, FutureExt, StreamExt};
 use op_registry::{CallOptions, Caller, CliHooks, Cursor, Descriptor, OpParams, Registry};
 use serde_json::json;

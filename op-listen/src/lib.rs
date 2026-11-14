@@ -3,6 +3,7 @@
 pub mod cursor;
 pub mod entry;
 pub mod error;
+pub mod follow;
 pub mod frame;
 pub mod listener;
 pub mod run;
@@ -10,6 +11,7 @@ pub mod run;
 pub use cursor::ListenCursor;
 pub use entry::listen_entry;
 pub use error::{lagged, ListenError};
+pub use follow::{follow, FollowEnd, FollowOptions};
 pub use frame::ListenFrame;
 pub use listener::{Grant, Listener, Opened, OverflowPolicy};
 pub use op_registry::Caller;

@@ -210,7 +210,7 @@ impl Listener<Ctx> for LogListener {
             let replay: Vec<anyhow::Result<(u64, String)>> = self
                 .log
                 .iter()
-                .filter(|(seq, _)| after.map_or(true, |a| *seq > a))
+                .filter(|(seq, _)| after.is_none_or(|a| *seq > a))
                 .cloned()
                 .map(Ok)
                 .collect();

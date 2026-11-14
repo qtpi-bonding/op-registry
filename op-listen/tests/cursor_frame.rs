@@ -1,3 +1,4 @@
+#![allow(clippy::err_expect, clippy::ok_expect)]
 use op_listen::{ListenCursor, ListenFrame};
 use op_registry::Cursor;
 use serde_json::{json, Value};
