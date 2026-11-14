@@ -142,3 +142,10 @@ exact resume, use an events log.
 
 `check::assert_allowed_keys(source_keys, observed)` panics, naming the key, when
 an observed attribute key is not on the allow-list. Use it in source tests.
+
+## Free-text fields
+
+Only `attrs` is allow-listed and length-bounded. `kind`, `id` and
+`last_error_message` are free text and are passed on as the source returns
+them; a source must keep message bodies, paths and other forbidden content out
+of them.
