@@ -47,7 +47,7 @@ pub mod __private {
             }
         };
         (destructive) => {
-            $crate::Access::default()
+            $crate::Access::destructive()
         };
         (none) => {
             $crate::Access::default()

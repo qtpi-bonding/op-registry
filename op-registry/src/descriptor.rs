@@ -44,7 +44,13 @@ impl Access {
 
     /// Creates access metadata for a destructive operation (it also writes).
     pub const fn destructive() -> Self {
-        Self::reads()
+        Self {
+            reads: false,
+            writes: true,
+            network: false,
+            spawns: false,
+            destructive: true,
+        }
     }
 
     /// Enables network access.
@@ -140,7 +146,7 @@ impl Descriptor {
     pub fn new(noun: impl Into<String>, verb: impl Into<String>) -> Self {
         let noun = noun.into();
         let verb = verb.into();
-        let name = format!("{noun}_{verb}");
+        let name = derive_name(&noun, &verb);
         Self {
             name,
             noun,
@@ -222,10 +228,21 @@ impl Descriptor {
 
     /// Returns the name used by a command-line interface.
     pub fn cli_name(&self) -> String {
-        if self.name != format!("{}_{}", self.noun, self.verb) {
+        if self.name != derive_name(&self.noun, &self.verb) {
             self.name.clone()
         } else {
-            format!("{} {}", self.noun, self.verb)
+            let words: Vec<&str> = self.noun.split_whitespace().collect();
+            format!("{} {}", words.join(" "), self.verb)
         }
     }
+}
+
+/// Derives an operation name from a noun path and a verb.
+///
+/// The noun's whitespace-separated words are joined with `_`, every `-` becomes
+/// `_`, and the verb is appended after another `_`.
+fn derive_name(noun: &str, verb: &str) -> String {
+    let words: Vec<&str> = noun.split_whitespace().collect();
+    let path = words.join("_").replace('-', "_");
+    format!("{path}_{verb}")
 }
