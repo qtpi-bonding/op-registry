@@ -75,20 +75,6 @@ fn call_options_carry_the_caller_to_the_gate() {
             l.authorize_calls(),
             vec![("bob".to_owned(), "t".to_owned())]
         );
-
-        // No caller means anonymous (the empty caller).
-        let frames = registry
-            .call_stream(
-                "log_listen",
-                json!({"topic": "u"}),
-                &Ctx,
-                CallOptions::default(),
-                None,
-            )
-            .await
-            .unwrap();
-        frames_json(frames).await;
-        assert_eq!(l.authorize_calls()[1], (String::new(), "u".to_owned()));
     });
 }
 
@@ -245,4 +231,29 @@ async fn recheck_runs_at_most_every_recheck_every() {
         .is_err());
     // t = 55s: ticks at 10, 20, 30, 40, 50.
     assert_eq!(l.still_allowed_count(), 5);
+}
+
+#[test]
+fn missing_caller_is_refused_before_authorize_is_called() {
+    futures_executor::block_on(async {
+        let l = Arc::new(LogListener::new(vec![(1, "a")]));
+        let mut registry: Registry<Ctx> = Registry::new();
+        listen_entry(&mut registry, l.clone(), Descriptor::new("log", "listen"));
+        let err = registry
+            .call_stream(
+                "log_listen",
+                json!({"topic": "u"}),
+                &Ctx,
+                CallOptions::default(),
+                None,
+            )
+            .await
+            .err()
+            .expect("no caller must be refused");
+        let facts = coded_error::facts_anyhow(&err);
+        assert_eq!(facts.code, "op_listen.no_caller");
+        assert_eq!(facts.class, coded_error::ErrorClass::Logical);
+        assert!(l.authorize_calls().is_empty(), "authorize must not run");
+        assert!(l.open_calls().is_empty());
+    });
 }

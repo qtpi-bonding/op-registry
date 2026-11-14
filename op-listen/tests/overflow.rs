@@ -65,3 +65,43 @@ fn lagged_item_with_end_policy_ends_the_stream_with_the_coded_lagged_error() {
         assert_eq!(l.open_calls().len(), 1, "End policy never reopens");
     });
 }
+
+#[test]
+fn resnapshot_at_an_equal_seq_continues_but_a_smaller_one_is_out_of_order() {
+    futures_executor::block_on(async {
+        // A lag that dropped no items: the fresh snapshot is at the last seq.
+        let l = StateListener::new(1, state(&[]), 2).with_policy(OverflowPolicy::Resnapshot);
+        l.queue(state(&[]), 2, source(vec![ok(3, "x"), Err(lagged(0))]));
+        l.queue(state(&[("a", "2")]), 3, source(vec![ok(4, "z")]));
+        let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"), opts())
+            .await
+            .unwrap();
+        let frames = frames_json(jsonify(s)).await;
+        assert_eq!(
+            frames,
+            vec![
+                json!({"frame": "snapshot", "snapshot": {}, "resync": false, "cursor": "1:2"}),
+                json!({"frame": "item", "item": "x", "cursor": "1:3"}),
+                json!({"frame": "snapshot", "snapshot": {"a": "2"}, "resync": true, "cursor": "1:3"}),
+                json!({"frame": "item", "item": "z", "cursor": "1:4"}),
+            ]
+        );
+
+        // A snapshot older than what was already sent is still out of order.
+        let l = StateListener::new(1, state(&[]), 2).with_policy(OverflowPolicy::Resnapshot);
+        l.queue(state(&[]), 2, source(vec![ok(5, "x"), Err(lagged(0))]));
+        l.queue(state(&[]), 4, source(vec![]));
+        let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"), opts())
+            .await
+            .unwrap();
+        let mut s = jsonify(s);
+        s.next().await.unwrap().unwrap();
+        s.next().await.unwrap().unwrap();
+        let err = s.next().await.unwrap().err().expect("must fail");
+        assert_eq!(
+            coded_error::facts_anyhow(&err).code,
+            "op_listen.out_of_order"
+        );
+        assert!(s.next().await.is_none());
+    });
+}
