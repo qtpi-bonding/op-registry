@@ -38,7 +38,13 @@ fn connector(
 ) -> impl FnMut(
     Option<ListenCursor>,
 ) -> BoxFuture<'static, anyhow::Result<BoxStream<'static, anyhow::Result<Value>>>> {
-    detached_connect(registry, ctx, "log_listen".to_owned(), args(), caller("alice"))
+    detached_connect(
+        registry,
+        ctx,
+        "log_listen".to_owned(),
+        args(),
+        caller("alice"),
+    )
 }
 
 fn sink_to(lines: &Arc<Mutex<Vec<String>>>) -> impl FnMut(&str) -> std::io::Result<()> {
@@ -193,7 +199,11 @@ async fn follow_over_detached_connect_reconnects_with_the_last_cursor_after_a_tr
         opens: Mutex::new(Vec::new()),
     });
     let mut registry: Registry<Ctx> = Registry::new();
-    listen_entry(&mut registry, flaky.clone(), Descriptor::new("log", "listen"));
+    listen_entry(
+        &mut registry,
+        flaky.clone(),
+        Descriptor::new("log", "listen"),
+    );
     let connect = connector(Arc::new(registry), Arc::new(Ctx));
 
     let lines = Arc::new(Mutex::new(Vec::new()));
@@ -245,6 +255,84 @@ async fn dropping_the_detached_stream_aborts_the_task_and_closes_the_source() {
         .expect("guard sends exactly once");
 }
 
+/// Listener whose `authorize` signals it started, holds a drop guard, and never finishes.
+struct HangingAuthorize {
+    started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    guard: Mutex<Option<DropSignal>>,
+}
+
+impl Listener<Ctx> for HangingAuthorize {
+    type Params = TopicParams;
+    type Snapshot = ();
+    type Item = String;
+
+    fn topic(&self, params: &Self::Params) -> String {
+        params.topic.clone()
+    }
+    fn epoch(&self) -> u64 {
+        0
+    }
+    fn authorize<'a>(
+        &'a self,
+        _ctx: &'a Ctx,
+        _caller: &'a Caller,
+        _topic: &'a str,
+    ) -> BoxFuture<'a, anyhow::Result<Grant>> {
+        async move {
+            let _guard = self.guard.lock().unwrap().take();
+            if let Some(tx) = self.started.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+            std::future::pending::<()>().await;
+            Ok(Grant::default())
+        }
+        .boxed()
+    }
+    fn open<'a>(
+        &'a self,
+        _ctx: &'a Ctx,
+        _params: Self::Params,
+        _cursor: Option<ListenCursor>,
+        _floor: Option<ListenCursor>,
+    ) -> BoxFuture<'a, anyhow::Result<Opened<'a, Self::Snapshot, Self::Item>>> {
+        async { Ok(Opened::replay(source(vec![]))) }.boxed()
+    }
+}
+
+#[tokio::test]
+async fn dropping_the_connect_future_before_the_first_outcome_aborts_the_task() {
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (drop_tx, drop_rx) = tokio::sync::oneshot::channel();
+    let listener = Arc::new(HangingAuthorize {
+        started: Mutex::new(Some(started_tx)),
+        guard: Mutex::new(Some(DropSignal(Some(drop_tx)))),
+    });
+    let mut registry: Registry<Ctx> = Registry::new();
+    listen_entry(&mut registry, listener, Descriptor::new("log", "listen"));
+    let mut connect = detached_connect(
+        Arc::new(registry),
+        Arc::new(Ctx),
+        "log_listen".to_owned(),
+        args(),
+        caller("alice"),
+    );
+
+    let mut fut = connect(None);
+    // Poll the connect future until authorize has started, then drop it unresolved.
+    tokio::select! {
+        _ = &mut fut => panic!("connect must not resolve while authorize hangs"),
+        r = tokio::time::timeout(Duration::from_secs(5), started_rx) => {
+            r.expect("authorize must start").expect("started sent once");
+        }
+    }
+    drop(fut);
+
+    tokio::time::timeout(Duration::from_secs(5), drop_rx)
+        .await
+        .expect("task must be aborted once the connect future is dropped")
+        .expect("guard sends exactly once");
+}
+
 #[tokio::test]
 async fn a_slow_reader_applies_backpressure_not_unbounded_memory() {
     const TOTAL: u64 = 10_000;
@@ -286,18 +374,26 @@ async fn a_slow_reader_applies_backpressure_not_unbounded_memory() {
         consumed += 1;
         assert_eq!(item["cursor"], format!("0:{consumed}"));
         let now = produced.load(Ordering::SeqCst);
-        assert!(now - consumed <= BOUND, "backlog {} > {BOUND}", now - consumed);
+        assert!(
+            now - consumed <= BOUND,
+            "backlog {} > {BOUND}",
+            now - consumed
+        );
         settle().await;
         let now = produced.load(Ordering::SeqCst);
-        assert!(now - consumed <= BOUND, "backlog {} > {BOUND}", now - consumed);
+        assert!(
+            now - consumed <= BOUND,
+            "backlog {} > {BOUND}",
+            now - consumed
+        );
     }
     assert!(produced.load(Ordering::SeqCst) < TOTAL as usize);
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_stop_frame_from_the_gate_ends_follow_without_reconnect() {
-    let mut l = LogListener::new(vec![(1, "a")])
-        .with_grant(grant(None, Some(Duration::from_secs(10))));
+    let mut l =
+        LogListener::new(vec![(1, "a")]).with_grant(grant(None, Some(Duration::from_secs(10))));
     l.tail_pending = true;
     l.allowed.store(false, Ordering::SeqCst);
     let (registry, ctx, l) = setup(l);
@@ -331,7 +427,10 @@ async fn a_panic_in_the_forwarding_task_surfaces_as_an_infrastructure_error_item
     .boxed();
     let (registry, ctx, _l) = setup(LogListener::new(vec![]).with_tail(tail));
     let mut connect = connector(registry, ctx);
-    let mut s = connect(None).await.ok().expect("connect succeeds before the panic");
+    let mut s = connect(None)
+        .await
+        .ok()
+        .expect("connect succeeds before the panic");
 
     let first = tokio::time::timeout(Duration::from_secs(5), s.next())
         .await

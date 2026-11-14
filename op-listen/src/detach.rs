@@ -21,9 +21,7 @@ pub fn detached_connect<C>(
     name: String,
     args: Value,
     caller: op_registry::Caller,
-) -> impl FnMut(
-    Option<ListenCursor>,
-) -> BoxFuture<'static, Result<BoxStream<'static, Result<Value>>>>
+) -> impl FnMut(Option<ListenCursor>) -> BoxFuture<'static, Result<BoxStream<'static, Result<Value>>>>
 where
     C: Send + Sync + 'static,
 {
@@ -61,30 +59,32 @@ where
 
                 use futures_util::StreamExt;
                 futures_util::pin_mut!(stream);
-                while let Some(item) = stream.next().await {
+                loop {
+                    let item = tokio::select! {
+                        _ = tx.closed() => return,
+                        item = stream.next() => item,
+                    };
+                    let Some(item) = item else { return };
                     if tx.send(item).await.is_err() {
                         return;
                     }
                 }
             });
 
+            // The stream owns the task from here on: if this future is dropped
+            // before the first outcome (timeout, select), dropping the stream
+            // aborts the task.
+            let detached = DetachedStream {
+                receiver: rx,
+                task,
+                panic_reported: false,
+                task_done: false,
+            };
             match first_rx.await {
-                Ok(Ok(())) => Ok(Box::pin(DetachedStream {
-                    receiver: rx,
-                    task,
-                    panic_reported: false,
-                    task_done: false,
-                }) as BoxStream<'static, Result<Value>>),
-                Ok(Err(error)) => {
-                    task.abort();
-                    Err(error)
-                }
-                Err(_) => {
-                    // The task can terminate before it gets to report the
-                    // connection result (most notably by panicking).
-                    drop(task);
-                    Err(task_panicked())
-                }
+                Ok(Ok(())) => Ok(Box::pin(detached) as BoxStream<'static, Result<Value>>),
+                Ok(Err(error)) => Err(error),
+                // The task ended before reporting the connection result.
+                Err(_) => Err(task_panicked()),
             }
         })
     }
@@ -115,9 +115,12 @@ impl Stream for DetachedStream {
                         this.task_done = true;
                         Poll::Ready(None)
                     }
-                    Poll::Ready(Err(_)) => {
+                    Poll::Ready(Err(join_error)) => {
                         this.task_done = true;
-                        if !this.panic_reported {
+                        if !join_error.is_panic() {
+                            // Cancelled (runtime shutdown): just end.
+                            Poll::Ready(None)
+                        } else if !this.panic_reported {
                             this.panic_reported = true;
                             Poll::Ready(Some(Err(task_panicked())))
                         } else {
