@@ -277,5 +277,7 @@ where
         floor: grant.not_before,
         done: false,
     };
-    Ok(Box::pin(futures_util::stream::unfold(state, next_run)))
+    Ok(Box::pin(
+        futures_util::stream::unfold(state, next_run).fuse(),
+    ))
 }

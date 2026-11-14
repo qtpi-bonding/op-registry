@@ -113,7 +113,7 @@ not reconnect.
 
 Logical errors are returned at once, with no reconnect and no marker line.
 Other errors and clean ends count as failed attempts. With `max_retries` set to
-`n`, the follower gives up after `n` consecutive failed attempts and returns the
+`n`, the follower retries up to `n` times (`n + 1` connection attempts) and then returns the
 last error. A clean end counts as `op_listen.ended`. A delivered frame resets
 the failure count.
 
