@@ -1,6 +1,7 @@
 //! op-listen: shared listener for op-registry.
 
 pub mod cursor;
+pub mod detach;
 pub mod entry;
 pub mod error;
 pub mod follow;
@@ -9,6 +10,7 @@ pub mod listener;
 pub mod run;
 
 pub use cursor::ListenCursor;
+pub use detach::detached_connect;
 pub use entry::listen_entry;
 pub use error::{lagged, ListenError};
 pub use follow::{follow, FollowEnd, FollowOptions};

@@ -17,6 +17,8 @@ pub enum ListenError {
     Ended,
     #[error("listen request has no caller")]
     NoCaller,
+    #[error("listen task panicked")]
+    TaskPanicked,
 }
 
 impl coded_error::CodedError for ListenError {
@@ -29,6 +31,7 @@ impl coded_error::CodedError for ListenError {
             Self::ResnapshotFailed => "op_listen.resnapshot_failed",
             Self::Ended => "op_listen.ended",
             Self::NoCaller => "op_listen.no_caller",
+            Self::TaskPanicked => "op_listen.task_panicked",
         }
     }
 
@@ -38,7 +41,7 @@ impl coded_error::CodedError for ListenError {
                 coded_error::ErrorClass::Logical
             }
             Self::Lagged { .. } | Self::Ended => coded_error::ErrorClass::Transient,
-            Self::OutOfOrder { .. } | Self::ResnapshotFailed => {
+            Self::OutOfOrder { .. } | Self::ResnapshotFailed | Self::TaskPanicked => {
                 coded_error::ErrorClass::Infrastructure
             }
         }
