@@ -10,12 +10,10 @@ use op_registry::{Access, Audience, CallOptions, CliHooks, Descriptor, OpParams,
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[cfg(debug_assertions)]
-use crate::check::check_component;
-#[cfg(not(debug_assertions))]
-use crate::check::MAX_ATTRS;
+use crate::open::take_snapshot;
 use crate::source::StatusSource;
-use crate::types::{Component, StatusFilter, StatusSnapshot};
+use crate::types::StatusFilter;
+use crate::types::StatusSnapshot;
 
 /// Options for [`status_registry`].
 #[derive(Clone, Debug)]
@@ -85,58 +83,8 @@ fn get_op<'a, C: StatusSource + Sync>(
             kind: params.kind,
             id: params.id,
         };
-        let mut rows = source.snapshot(&filter, limit).await?;
-        let truncated = rows.len() > limit;
-        rows.truncate(limit);
-
-        let allowed = source.allowed_attr_keys();
-        let mut components = Vec::with_capacity(rows.len());
-        for mut component in rows {
-            filter_attrs(&mut component, allowed)?;
-            components.push(component);
-        }
-
-        let info = source.service();
-        Ok(StatusSnapshot {
-            service: info.name,
-            version: info.version,
-            taken_at_unix_ms: source.now_unix_ms(),
-            epoch: source.epoch(),
-            components,
-            truncated,
-        })
+        take_snapshot(source, &filter, limit).await
     })
-}
-
-#[cfg(debug_assertions)]
-fn filter_attrs(component: &mut Component, allowed: &[&str]) -> Result<()> {
-    check_component(component, allowed).map_err(coded_error::into_anyhow)
-}
-
-#[cfg(not(debug_assertions))]
-fn filter_attrs(component: &mut Component, allowed: &[&str]) -> Result<()> {
-    use crate::check::{MAX_ATTR_KEY_BYTES, MAX_ATTR_VALUE_BYTES};
-    use crate::types::AttrValue;
-
-    component.attrs.retain(|key, value| {
-        if !allowed.contains(&key.as_str()) || key.len() > MAX_ATTR_KEY_BYTES {
-            return false;
-        }
-        match value {
-            AttrValue::Str(text) => text.len() <= MAX_ATTR_VALUE_BYTES,
-            _ => true,
-        }
-    });
-    while component.attrs.len() > MAX_ATTRS {
-        let last = component.attrs.keys().next_back().cloned();
-        match last {
-            Some(key) => {
-                component.attrs.remove(&key);
-            }
-            None => break,
-        }
-    }
-    Ok(())
 }
 
 /// Builds a registry holding the `status get` operation for source `C`.

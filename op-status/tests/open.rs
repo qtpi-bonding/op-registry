@@ -231,7 +231,7 @@ async fn open_status_change_items_are_checked_like_the_snapshot() {
 async fn open_status_works_through_a_dyn_status_source() {
     let src = Toy::new().with_rows(vec![comp("a")]);
     src.push(1, comp("c1"));
-    src.set_window(1, 0);
+    src.set_window(0, 0);
     let dynamic: &dyn StatusSource = &src;
     let opened = open(dynamic, 10, cur(7, 0)).await.ok().expect("open");
     assert!(!opened.resync);
