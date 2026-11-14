@@ -229,7 +229,7 @@ fn a_word_that_is_both_leaf_and_group_panics_naming_both() {
         };
         cli::command(&registry, "app", "toy");
     });
-    assert!(text.contains("\"agent_dispatch_target\""), "{text}");
+    assert!(text.contains("\"agent_dispatch-target\""), "{text}");
     assert!(text.contains("\"agent_dispatch_target_set\""), "{text}");
 
     // The other order.
@@ -245,7 +245,7 @@ fn a_word_that_is_both_leaf_and_group_panics_naming_both() {
         };
         cli::command(&registry, "app", "toy");
     });
-    assert!(text.contains("\"agent_dispatch_target\""), "{text}");
+    assert!(text.contains("\"agent_dispatch-target\""), "{text}");
     assert!(text.contains("\"agent_dispatch_target_set\""), "{text}");
 }
 
