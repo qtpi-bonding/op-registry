@@ -157,7 +157,9 @@ fn leaky_source() -> ToySource {
 #[test]
 fn status_get_refuses_unlisted_attr_in_debug_and_drops_it_in_release_debug() {
     let reg = status_registry::<ToySource>(StatusOptions::new());
-    let err = call(&reg, &leaky_source(), json!({})).err().expect("must fail");
+    let err = call(&reg, &leaky_source(), json!({}))
+        .err()
+        .expect("must fail");
     let facts = coded_error::facts_anyhow(&err);
     assert_eq!(facts.code, "op_status.attr_not_allowed");
     assert_eq!(facts.class, coded_error::ErrorClass::Logical);
@@ -238,14 +240,10 @@ fn status_registry_merges_into_an_app_registry_and_cli_and_mcp_parity_holds() {
     let matches = cmd
         .try_get_matches_from(["app", "status", "get", "--kind", "room", "--limit", "2"])
         .unwrap();
-    let from_cli = futures_executor::block_on(cli::dispatch(
-        &app,
-        &src,
-        &matches,
-        CallOptions::default(),
-    ))
-    .ok()
-    .expect("dispatch");
+    let from_cli =
+        futures_executor::block_on(cli::dispatch(&app, &src, &matches, CallOptions::default()))
+            .ok()
+            .expect("dispatch");
     let CliOutput::Value(from_cli) = from_cli else {
         panic!("expected a value");
     };
@@ -267,7 +265,10 @@ fn status_registry_merges_into_an_app_registry_and_cli_and_mcp_parity_holds() {
         .into_iter()
         .find(|d| d.name == "status_get")
         .unwrap();
-    assert_eq!((status.noun.as_str(), status.verb.as_str()), ("status", "get"));
+    assert_eq!(
+        (status.noun.as_str(), status.verb.as_str()),
+        ("status", "get")
+    );
     assert!(!status.streaming);
 }
 

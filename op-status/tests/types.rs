@@ -25,8 +25,14 @@ fn state_serialises_as_screaming_snake_strings() {
 #[test]
 fn attr_value_numbers_stay_numbers() {
     assert_eq!(serde_json::to_string(&AttrValue::Int(3)).unwrap(), "3");
-    assert_eq!(serde_json::to_string(&AttrValue::Float(1.5)).unwrap(), "1.5");
-    assert_eq!(serde_json::to_string(&AttrValue::Bool(true)).unwrap(), "true");
+    assert_eq!(
+        serde_json::to_string(&AttrValue::Float(1.5)).unwrap(),
+        "1.5"
+    );
+    assert_eq!(
+        serde_json::to_string(&AttrValue::Bool(true)).unwrap(),
+        "true"
+    );
     assert_eq!(
         serde_json::to_string(&AttrValue::Str("x".into())).unwrap(),
         "\"x\""
@@ -35,7 +41,10 @@ fn attr_value_numbers_stay_numbers() {
     assert_eq!(AttrValue::from(1.5f64), AttrValue::Float(1.5));
     assert_eq!(AttrValue::from(false), AttrValue::Bool(false));
     assert_eq!(AttrValue::from("s"), AttrValue::Str("s".into()));
-    assert_eq!(AttrValue::from(String::from("s")), AttrValue::Str("s".into()));
+    assert_eq!(
+        AttrValue::from(String::from("s")),
+        AttrValue::Str("s".into())
+    );
 
     for v in [
         AttrValue::Int(-7),
@@ -144,7 +153,9 @@ fn component_has_no_failing_for_secs_and_serialises_stable_field_order() {
         "\"components\"",
         "\"truncated\"",
     ] {
-        let pos = raw[last..].find(key).unwrap_or_else(|| panic!("{key} in {raw}"));
+        let pos = raw[last..]
+            .find(key)
+            .unwrap_or_else(|| panic!("{key} in {raw}"));
         last += pos + key.len();
     }
 }
