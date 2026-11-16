@@ -210,6 +210,7 @@ fn keys_meta(attrs: &[Attribute]) -> Vec<String> {
 pub fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = input.ident;
+    let struct_name = name.to_string();
     let fields = match input.data {
         Data::Struct(s) => match s.fields {
             syn::Fields::Named(n) => n.named,
@@ -230,7 +231,11 @@ pub fn derive(input: TokenStream) -> TokenStream {
         if let Err(error) = validate_attrs(&f.attrs) {
             return error.to_compile_error().into();
         }
-        let ident = f.ident.unwrap();
+        let Some(ident) = f.ident.clone() else {
+            return syn::Error::new_spanned(&f, "OpParams needs named fields")
+                .to_compile_error()
+                .into();
+        };
         let fname = ident.to_string();
         let doc = f
             .attrs
@@ -382,11 +387,11 @@ pub fn derive(input: TokenStream) -> TokenStream {
         } else {
             quote!(::op_registry::__private::serde_json::json!({"type":"integer"}))
         };
-        let def=f.default.as_ref().map(|e|quote!(o.insert("default".into(),::op_registry::__private::serde_json::to_value(&(#e)).unwrap());)).unwrap_or_default();
+        let def=f.default.as_ref().map(|e|quote!(o.insert("default".into(),::op_registry::__private::serde_json::to_value(&(#e)).unwrap_or_else(|e| panic!("op-registry: default of field `{}` in `{}` is not serialisable: {}", #key, #struct_name, e)));)).unwrap_or_default();
         if f.key_value {
             props.push(quote! { properties.insert(#key.to_string(), #frag); });
         } else {
-            props.push(quote! { properties.insert(#key.to_string(), { let mut x = #frag; let o = x.as_object_mut().unwrap(); o.insert("description".into(), ::op_registry::__private::serde_json::json!(#desc)); #def x }); });
+            props.push(quote! { properties.insert(#key.to_string(), { let mut x = #frag; let o = x.as_object_mut().expect("op-registry: field schema fragment is an object"); o.insert("description".into(), ::op_registry::__private::serde_json::json!(#desc)); #def x }); });
         }
         if !opt
             && !vec
@@ -434,7 +439,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         } else if vec {
             quote!(Vec::new())
         } else if let Some(e) = &f.default {
-            quote!(::op_registry::__private::serde_json::from_value(::op_registry::__private::serde_json::to_value(&(#e)).unwrap()).unwrap())
+            quote!(::op_registry::__private::serde_json::from_value(::op_registry::__private::serde_json::to_value(&(#e)).unwrap_or_else(|e| panic!("op-registry: default of field `{}` in `{}` is not serialisable: {}", #key, #struct_name, e))).unwrap_or_else(|e| panic!("op-registry: default of field `{}` in `{}` does not deserialize: {}", #key, #struct_name, e)))
         } else if !opt && tn == "bool" {
             // Plain bool field without default defaults to false
             quote!(false)
@@ -552,7 +557,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     if let Some(value) = matches.get_one::<String>(#key).cloned() {
                         <#inner as ::op_registry::__private::clap::ValueEnum>::from_str(&value, true).map_err(|_| #invalid_enum)?
                     } else {
-                        ::op_registry::__private::serde_json::from_value(::op_registry::__private::serde_json::to_value(&(#e)).unwrap()).unwrap()
+                        ::op_registry::__private::serde_json::from_value(::op_registry::__private::serde_json::to_value(&(#e)).unwrap_or_else(|e| panic!("op-registry: default of field `{}` in `{}` is not serialisable: {}", #key, #struct_name, e))).unwrap_or_else(|e| panic!("op-registry: default of field `{}` in `{}` does not deserialize: {}", #key, #struct_name, e))
                     }
                 })
             } else {
@@ -610,7 +615,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
     };
     let only_key_values = fs.iter().all(|field| field.key_value);
     let remove_empty_required = if only_key_values {
-        quote!(schema.as_object_mut().unwrap().remove("required");)
+        quote!(schema.as_object_mut().expect("op-registry: params schema is an object").remove("required");)
     } else {
         quote!()
     };

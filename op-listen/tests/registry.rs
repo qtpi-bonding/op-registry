@@ -21,6 +21,16 @@ fn toy() -> Registry<Ctx> {
 }
 
 #[test]
+fn listen_entry_output_schema_is_the_frame_schema() {
+    let registry = toy();
+    let d = registry.get("log_listen").expect("registered");
+    assert_eq!(
+        d.output_schema,
+        op_registry::__private::output_schema_of::<op_listen::ListenFrame<(), String>>()
+    );
+}
+
+#[test]
 fn listen_entry_is_a_cli_only_streaming_op_and_absent_from_the_tool_list() {
     let registry = toy();
     let d = registry.get("log_listen").expect("registered");

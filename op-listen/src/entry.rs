@@ -23,8 +23,7 @@ where
 {
     descriptor.streaming = true;
     descriptor.output_schema =
-        serde_json::to_value(schemars::schema_for!(ListenFrame<L::Snapshot, L::Item>))
-            .unwrap_or(serde_json::Value::Null);
+        op_registry::__private::output_schema_of::<ListenFrame<L::Snapshot, L::Item>>();
     let leaked: &'static Arc<L> = Box::leak(Box::new(listener));
     let listener: &'static L = leaked.as_ref();
     registry.push_stream_borrowed::<L::Params, serde_json::Value, _>(

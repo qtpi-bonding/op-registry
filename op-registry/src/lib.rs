@@ -29,7 +29,7 @@ pub mod __private {
 
     /// Returns the JSON schema generated for an operation output type.
     pub fn output_schema_of<O: schemars::JsonSchema>() -> serde_json::Value {
-        serde_json::to_value(schemars::schema_for!(O)).unwrap()
+        serde_json::to_value(schemars::schema_for!(O)).expect("schemars output is valid JSON")
     }
     #[macro_export]
     macro_rules! access {

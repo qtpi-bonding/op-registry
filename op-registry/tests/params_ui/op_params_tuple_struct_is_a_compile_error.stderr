@@ -1,0 +1,5 @@
+error: OpParams requires named fields
+ --> tests/params_ui/op_params_tuple_struct_is_a_compile_error.rs:4:8
+  |
+4 | struct Bad(String);
+  |        ^^^
