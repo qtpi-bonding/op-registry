@@ -3,7 +3,7 @@ resolver = "2"
 members = ["op-registry", "op-registry-derive", "op-listen", "op-status"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
@@ -17,3 +17,7 @@ clap = { version = "4", features = ["derive", "env", "string"] }
 futures-util = "0.3"
 schemars = "1"
 coded-error = { git = "https://github.com/qtpi-bonding/coded-error.git", rev = "ffeaf3949230a8883b56c75e7031346a4f28ed4d", features = ["serde", "cli", "http"] }
+thiserror = "2"
+tokio = "1"
+trybuild = "1"
+futures-executor = "0.3"

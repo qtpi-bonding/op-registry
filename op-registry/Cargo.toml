@@ -7,19 +7,19 @@ license.workspace = true
 description.workspace = true
 
 [dependencies]
-op-registry-derive = { path = "../op-registry-derive", version = "0.1.0" }
+op-registry-derive = { path = "../op-registry-derive", version = "0.2.0" }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
 futures-util = { workspace = true }
 coded-error = { workspace = true }
-thiserror = "2"
+thiserror = { workspace = true }
 schemars = { workspace = true }
 
 [dev-dependencies]
-trybuild = "1"
-futures-executor = "0.3"
-tokio = { version = "1", features = ["rt", "time", "macros"] }
+trybuild = { workspace = true }
+futures-executor = { workspace = true }
+tokio = { workspace = true, features = ["rt", "time", "macros"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"] }
