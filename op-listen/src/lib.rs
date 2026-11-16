@@ -1,5 +1,6 @@
 //! op-listen: shared listener for op-registry.
 
+pub mod backoff;
 pub mod cursor;
 pub mod detach;
 pub mod entry;
@@ -9,6 +10,7 @@ pub mod frame;
 pub mod listener;
 pub mod run;
 
+pub use backoff::Backoff;
 pub use cursor::ListenCursor;
 pub use detach::detached_connect;
 pub use entry::listen_entry;
