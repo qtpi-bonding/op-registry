@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 //! Toy listeners shared by the op-listen integration tests.
 
+pub mod follow;
+
 use futures_util::future::BoxFuture;
 use futures_util::stream::{self, BoxStream};
 use futures_util::{FutureExt, StreamExt};

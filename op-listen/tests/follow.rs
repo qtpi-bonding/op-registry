@@ -1,13 +1,10 @@
 #![allow(clippy::err_expect, clippy::ok_expect)]
-use futures_util::future::BoxFuture;
-use futures_util::stream::BoxStream;
-use futures_util::{FutureExt, StreamExt};
+mod common;
+
+use common::follow::*;
 use op_listen::{follow, FollowEnd, FollowOptions, ListenCursor};
 use serde_json::{json, Value};
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::time::Instant;
 
 #[derive(Debug, thiserror::Error, coded_error::CodedError)]
 #[coded(namespace = "test.app")]
@@ -32,67 +29,6 @@ fn code_of(err: &anyhow::Error) -> &'static str {
 
 fn lc(epoch: u64, seq: u64) -> ListenCursor {
     ListenCursor::new(epoch, seq)
-}
-
-fn item(text: &str, cursor: &str) -> Value {
-    json!({"frame": "item", "item": text, "cursor": cursor})
-}
-fn snap(resync: bool, cursor: &str) -> Value {
-    json!({"frame": "snapshot", "snapshot": {"k": "v"}, "resync": resync, "cursor": cursor})
-}
-fn stop(code: &str) -> Value {
-    json!({"frame": "stop", "code": code, "message": "gone"})
-}
-fn marker(cursor: Value, resync: bool) -> Value {
-    json!({"marker": "reconnected", "cursor": cursor, "resync": resync})
-}
-
-enum Step {
-    Frames(Vec<anyhow::Result<Value>>),
-    ConnectErr(anyhow::Error),
-}
-
-fn frames(vs: Vec<Value>) -> Step {
-    Step::Frames(vs.into_iter().map(Ok).collect())
-}
-
-type Connects = Arc<Mutex<Vec<(Option<ListenCursor>, Instant)>>>;
-type Conn = BoxFuture<'static, anyhow::Result<BoxStream<'static, anyhow::Result<Value>>>>;
-
-fn scripted(steps: Vec<Step>) -> (impl FnMut(Option<ListenCursor>) -> Conn, Connects) {
-    let steps = Arc::new(Mutex::new(VecDeque::from(steps)));
-    let connects: Connects = Arc::new(Mutex::new(Vec::new()));
-    let rec = connects.clone();
-    let connect = move |cursor: Option<ListenCursor>| -> Conn {
-        rec.lock().unwrap().push((cursor, Instant::now()));
-        let step = steps
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("connect called more often than scripted");
-        async move {
-            match step {
-                Step::Frames(items) => Ok(futures_util::stream::iter(items).boxed()),
-                Step::ConnectErr(e) => Err(e),
-            }
-        }
-        .boxed()
-    };
-    (connect, connects)
-}
-
-type Lines = Arc<Mutex<Vec<String>>>;
-
-fn make_sink() -> (impl FnMut(&str) -> std::io::Result<()>, Lines) {
-    let lines: Lines = Arc::new(Mutex::new(Vec::new()));
-    let rec = lines.clone();
-    (
-        move |line: &str| {
-            rec.lock().unwrap().push(line.to_owned());
-            Ok(())
-        },
-        lines,
-    )
 }
 
 fn parsed(lines: &Lines) -> Vec<Value> {
