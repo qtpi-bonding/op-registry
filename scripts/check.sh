@@ -23,10 +23,9 @@ if [ "$n" != "1" ]; then
 fi
 
 # T10 guard: tokio's `rt` feature must only come in through op-listen's `detach`.
-if "${cargo_cmd[@]}" tree -p op-listen --no-default-features -e normal,features -i tokio | grep -q 'tokio feature "rt"'; then
-  echo "guard failed: tokio feature \"rt\" enabled without op-listen's detach feature" >&2
-  exit 1
-fi
+. scripts/tokio-rt-guard.sh
+bash scripts/check-guard-test.sh || exit 1
+tokio_rt_guard "${cargo_cmd[@]}" || exit 1
 
 "${cargo_cmd[@]}" fmt --check
 "${cargo_cmd[@]}" clippy --workspace --all-targets --all-features -- -D warnings
