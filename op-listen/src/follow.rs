@@ -44,6 +44,8 @@ impl Default for FollowOptions {
 pub enum FollowEnd {
     /// The listener sent a stop frame with this code.
     Stopped { code: String },
+    /// The sink reported a broken pipe; the follow stopped without reconnecting.
+    SinkClosed,
 }
 
 /// One event delivered to the sink of [`follow_typed`].
@@ -142,23 +144,24 @@ where
                 Event::Frame(raw) => {
                     let frame =
                         serde_json::from_value::<ListenFrame<S, I>>(raw.clone()).map_err(|e| {
-                            coded_error::into_anyhow(ListenError::BadFrame {
+                            Handled::Failed(coded_error::into_anyhow(ListenError::BadFrame {
                                 reason: e.to_string(),
-                            })
+                            }))
                         })?;
                     FollowEvent::Frame(frame)
                 }
                 Event::Stopped { code } => FollowEvent::Stopped { code },
             };
-            sink(typed).map_err(anyhow::Error::from)
+            sink(typed).map_err(sink_error)
         },
         opts,
     )
     .await
 }
 
-/// Renders one event as a compact JSON line for [`follow`].
-fn render<K>(sink: &mut K, event: Event<'_>) -> anyhow::Result<()>
+/// Renders one event as a compact JSON line for [`follow`]. Only errors from
+/// the sink call are classified as [`Handled`] sink errors.
+fn render<K>(sink: &mut K, event: Event<'_>) -> Result<(), Handled>
 where
     K: FnMut(&str) -> std::io::Result<()>,
 {
@@ -167,16 +170,26 @@ where
             "marker": "reconnected",
             "cursor": cursor.map(|c| c.to_string()),
             "resync": resync,
-        }))?,
-        Event::Frame(raw) => compact(raw)?,
-        Event::Stopped { code } => compact(&json!({"marker": "stopped", "code": code}))?,
-    };
-    sink(&line)?;
-    Ok(())
+        })),
+        Event::Frame(raw) => compact(raw),
+        Event::Stopped { code } => compact(&json!({"marker": "stopped", "code": code})),
+    }
+    .map_err(Handled::Failed)?;
+    sink(&line).map_err(sink_error)
 }
 
-/// The shared reconnect loop. Calls `handle` for every event; an error from
-/// `handle` is returned immediately, without retry.
+/// Classifies an io error from the sink: a broken pipe is a closed sink.
+fn sink_error(error: std::io::Error) -> Handled {
+    if error.kind() == std::io::ErrorKind::BrokenPipe {
+        Handled::SinkClosed
+    } else {
+        Handled::Failed(anyhow::Error::from(error))
+    }
+}
+
+/// The shared reconnect loop. Calls `handle` for every event; a handler error
+/// is returned immediately, without retry, and a closed sink ends the follow
+/// with [`FollowEnd::SinkClosed`].
 async fn drive<F, H>(
     mut connect: F,
     mut handle: H,
@@ -186,7 +199,7 @@ where
     F: FnMut(
         Option<ListenCursor>,
     ) -> BoxFuture<'static, anyhow::Result<BoxStream<'static, anyhow::Result<Value>>>>,
-    H: FnMut(Event<'_>) -> anyhow::Result<()>,
+    H: FnMut(Event<'_>) -> Result<(), Handled>,
 {
     let mut state = State {
         cursor: opts.initial_cursor,
@@ -202,7 +215,13 @@ where
                 let reconnected = state.connections > 0;
                 state.connections += 1;
                 connected_at = Some(Instant::now());
-                run_connection(stream, connect_cursor, reconnected, &mut state, &mut handle).await?
+                match run_connection(stream, connect_cursor, reconnected, &mut state, &mut handle)
+                    .await
+                {
+                    Ok(attempt) => attempt,
+                    Err(Handled::SinkClosed) => return Ok(FollowEnd::SinkClosed),
+                    Err(Handled::Failed(error)) => return Err(error),
+                }
             }
             Err(error) => {
                 if is_logical(&error) {
@@ -243,11 +262,20 @@ where
     }
 }
 
+/// Error returned by a handler. A closed sink is kept apart from other
+/// handler errors so that `drive` can end the follow cleanly.
+enum Handled {
+    /// The sink reported a broken pipe.
+    SinkClosed,
+    /// Any other handler error; returned to the caller as-is.
+    Failed(anyhow::Error),
+}
+
 /// Calls the handler for one event. The single place where handler errors
 /// pass back into the loop.
-fn emit<H>(handle: &mut H, event: Event<'_>) -> anyhow::Result<()>
+fn emit<H>(handle: &mut H, event: Event<'_>) -> Result<(), Handled>
 where
-    H: FnMut(Event<'_>) -> anyhow::Result<()>,
+    H: FnMut(Event<'_>) -> Result<(), Handled>,
 {
     handle(event)
 }
@@ -259,9 +287,9 @@ async fn run_connection<H>(
     reconnected: bool,
     state: &mut State,
     handle: &mut H,
-) -> anyhow::Result<Attempt>
+) -> Result<Attempt, Handled>
 where
-    H: FnMut(Event<'_>) -> anyhow::Result<()>,
+    H: FnMut(Event<'_>) -> Result<(), Handled>,
 {
     let mut delivered = false;
     let mut marker_pending = reconnected;
