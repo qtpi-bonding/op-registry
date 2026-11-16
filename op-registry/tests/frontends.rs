@@ -593,7 +593,7 @@ fn cli_shows_full_message_mcp_redacts_non_logical() {
         let cli_logical = cli_error(&registry, &["err", "logical"]).await;
         assert!(cli::error_line(&cli_logical).ends_with("bad request detail"));
         let tool_logical = tool_error_of(&registry, "err_logical").await;
-        let f = mcp::tool_error(&tool_logical, "test");
+        let f = mcp::tool_error(&tool_logical, "test", "request failed");
         assert_eq!(f.message, "bad request detail");
         assert_eq!(f.class, ErrorClass::Logical);
         assert_eq!(f.code, "test.fail.logical");
@@ -627,7 +627,7 @@ fn cli_shows_full_message_mcp_redacts_non_logical() {
                 cli::error_line(&cli_err)
             );
             let tool = tool_error_of(&registry, op).await;
-            let f = mcp::tool_error(&tool, "test");
+            let f = mcp::tool_error(&tool, "test", "request failed");
             assert_eq!(f.message, "request failed", "{op}");
             assert_eq!(f.class, class, "{op}");
             assert!(!f.code.is_empty(), "{op}");
@@ -678,7 +678,7 @@ fn one_failed_call_produces_one_error_event() {
     let count = errors_during(|| {
         futures_executor::block_on(async {
             let err = tool_error_of(&registry, "err_infra").await;
-            let _ = mcp::tool_error(&err, "test");
+            let _ = mcp::tool_error(&err, "test", "request failed");
         });
     });
     assert_eq!(count, 1, "call_tool");
@@ -726,4 +726,12 @@ fn call_tool_refuses_streaming_and_out_of_audience_ops() {
         .expect("owner may call");
         assert_eq!(ok, json!({"ok": true}));
     });
+}
+
+#[test]
+fn tool_error_uses_the_given_fallback_for_an_uncoded_error() {
+    let err = mcp::ToolError(anyhow::anyhow!("boom"));
+    let failure = mcp::tool_error(&err, "test", "custom fallback");
+    assert_eq!(failure.message, "custom fallback");
+    assert!(!failure.message.contains("boom"));
 }

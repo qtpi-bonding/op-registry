@@ -92,9 +92,11 @@ pub struct ToolFailure {
 }
 
 /// Converts a tool error to its caller-safe representation.
-pub fn tool_error(err: &ToolError, source: &str) -> ToolFailure {
+///
+/// `fallback_message` is the message used when the error carries no coded message.
+pub fn tool_error(err: &ToolError, source: &str, fallback_message: &str) -> ToolFailure {
     let (_, info, message) =
-        coded_error::http::to_http_anyhow_redacted(&err.0, source, "request failed");
+        coded_error::http::to_http_anyhow_redacted(&err.0, source, fallback_message);
     ToolFailure {
         code: info.code,
         class: info.class,
