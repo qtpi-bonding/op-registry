@@ -45,7 +45,8 @@ fn node_op(node: &Node) -> &str {
 /// Inserts a leaf under the given group path, creating groups as needed.
 ///
 /// `path` holds the group words, outermost first; `leaf_word` is the verb or
-/// explicit name. Panics when a word would be both a leaf and a group.
+/// explicit name. The registry has already rejected colliding CLI words, so a
+/// collision here is an internal invariant violation.
 fn insert(
     children: &mut Vec<(String, Node)>,
     path: &[&str],
@@ -57,16 +58,10 @@ fn insert(
         None => {
             if let Some((_, existing)) = children.iter().find(|(word, _)| word == leaf_word) {
                 let other = node_op(existing);
-                match existing {
-                    Node::Group { .. } => panic!(
-                        "{:?} collides with {:?}: a word cannot be both a leaf and a group",
-                        other, op
-                    ),
-                    Node::Leaf { .. } => panic!(
-                        "{:?} and {:?} both define the command {:?}",
-                        other, op, leaf_word
-                    ),
-                }
+                unreachable!(
+                    "registry admitted colliding CLI words {:?} for {:?} and {:?}",
+                    leaf_word, other, op
+                );
             }
             children.push((
                 leaf_word.to_owned(),
@@ -94,8 +89,8 @@ fn insert(
                 Node::Group {
                     children: inner, ..
                 } => insert(inner, rest, leaf_word, op, command),
-                Node::Leaf { op: other, .. } => panic!(
-                    "{:?} collides with {:?}: a word cannot be both a leaf and a group",
+                Node::Leaf { op: other, .. } => unreachable!(
+                    "registry admitted a word that is both leaf {:?} and group for {:?}",
                     other, op
                 ),
             }
@@ -128,18 +123,16 @@ pub fn command<C: Sync>(registry: &Registry<C>, name: &str, about: &str) -> Comm
         .subcommand_required(true);
     let mut top: Vec<(String, Node)> = Vec::new();
 
-    for descriptor in registry.descriptors() {
-        let cli_name = descriptor.cli_name();
-        let hooks = registry
-            .cli_hooks(&descriptor.name)
-            .expect("descriptor must have CLI hooks");
-        let is_path = cli_name == format!("{} {}", descriptor.noun, descriptor.verb);
+    for entry in &registry.entries {
+        let descriptor = &entry.descriptor;
+        let hooks = &entry.hooks;
+        let is_path = descriptor.is_path();
         let words: Vec<&str> = descriptor.noun.split_whitespace().collect();
 
         let leaf_word = if is_path {
             descriptor.verb.clone()
         } else {
-            cli_name.clone()
+            descriptor.cli_name()
         };
         let mut leaf = Command::new(leaf_word.clone()).about(descriptor.description.clone());
         leaf = (hooks.add_args)(leaf);
@@ -187,19 +180,15 @@ pub async fn dispatch<'a, C: Sync>(
 ) -> Result<CliOutput<'a>> {
     let chain = command_chain(matches);
     let name = chain.join(" ");
-    let descriptor = registry
-        .descriptors()
-        .into_iter()
-        .find(|descriptor| descriptor.cli_name() == name)
-        .ok_or_else(|| {
-            coded_error::into_anyhow(CliError::UnknownCommand {
-                name: if name.is_empty() {
-                    "<missing>".to_owned()
-                } else {
-                    name.clone()
-                },
-            })
-        })?;
+    let descriptor = registry.find_cli(&name).ok_or_else(|| {
+        coded_error::into_anyhow(CliError::UnknownCommand {
+            name: if name.is_empty() {
+                "<missing>".to_owned()
+            } else {
+                name.clone()
+            },
+        })
+    })?;
     let hooks = registry
         .cli_hooks(&descriptor.name)
         .ok_or_else(|| anyhow::anyhow!("missing CLI hooks for {}", descriptor.name))?;

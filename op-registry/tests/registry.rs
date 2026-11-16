@@ -543,3 +543,121 @@ fn merge_refuses_a_duplicate_name() {
     let second = registry_for_calls();
     first.merge(second);
 }
+
+fn bare(descriptor: op_registry::Descriptor) -> op_registry::Registry<FirstCtx> {
+    let mut registry = op_registry::Registry::<FirstCtx>::new();
+    push_bare(&mut registry, descriptor);
+    registry
+}
+
+fn push_bare(registry: &mut op_registry::Registry<FirstCtx>, descriptor: op_registry::Descriptor) {
+    registry.push_unary::<Input, Output, _>(
+        descriptor,
+        |_ctx, params, _opts| {
+            Box::pin(async move {
+                Ok(Output {
+                    result: params.value,
+                })
+            })
+        },
+        op_registry::CliHooks::for_params::<Input>(),
+    );
+}
+
+fn panic_message(f: impl FnOnce()) -> String {
+    let payload =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).expect_err("must panic");
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_default()
+}
+
+#[test]
+#[should_panic(expected = "both define the command")]
+fn push_rejects_an_equal_cli_command_at_construction() {
+    let mut registry = bare(op_registry::Descriptor::new("widget", "list"));
+    push_bare(
+        &mut registry,
+        op_registry::Descriptor::new("x", "y").name("widget list"),
+    );
+}
+
+#[test]
+#[should_panic(expected = "a word cannot be both a leaf and a group")]
+fn push_rejects_leaf_and_group_at_construction() {
+    let mut registry = bare(op_registry::Descriptor::new("widget", "list"));
+    push_bare(
+        &mut registry,
+        op_registry::Descriptor::new("widget list", "show"),
+    );
+}
+
+#[test]
+fn merge_rejects_the_same_collisions() {
+    let equal = panic_message(|| {
+        let mut first = bare(op_registry::Descriptor::new("widget", "list"));
+        first.merge(bare(
+            op_registry::Descriptor::new("x", "y").name("widget list"),
+        ));
+    });
+    assert!(equal.contains("both define the command"), "{equal}");
+    let group = panic_message(|| {
+        let mut first = bare(op_registry::Descriptor::new("widget", "list"));
+        first.merge(bare(op_registry::Descriptor::new("widget list", "show")));
+    });
+    assert!(
+        group.contains("a word cannot be both a leaf and a group"),
+        "{group}"
+    );
+    let reverse = panic_message(|| {
+        let mut first = bare(op_registry::Descriptor::new("widget list", "show"));
+        first.merge(bare(op_registry::Descriptor::new("widget", "list")));
+    });
+    assert!(
+        reverse.contains("a word cannot be both a leaf and a group"),
+        "{reverse}"
+    );
+}
+
+#[test]
+fn lookups_after_merge_return_the_right_descriptor_in_declaration_order() {
+    let mut first = op_registry::Registry::<FirstCtx>::new();
+    let mut second = op_registry::Registry::<FirstCtx>::new();
+    for i in 0..1000 {
+        let target = if i < 500 { &mut first } else { &mut second };
+        push_bare(
+            target,
+            op_registry::Descriptor::new(format!("noun{i}"), "get"),
+        );
+    }
+    first.merge(second);
+    assert_eq!(first.descriptors().len(), 1000);
+    for (i, descriptor) in first.descriptors().into_iter().enumerate() {
+        assert_eq!(descriptor.name, format!("noun{i}_get"));
+    }
+    for i in [0, 499, 500, 999] {
+        let name = format!("noun{i}_get");
+        assert_eq!(first.get(&name).unwrap().noun, format!("noun{i}"));
+        assert!(first.cli_hooks(&name).is_some());
+    }
+    assert!(first.get("noun1000_get").is_none());
+    assert!(first.cli_hooks("noun1000_get").is_none());
+}
+
+#[test]
+fn find_cli_matches_cli_name() {
+    let mut registry = bare(op_registry::Descriptor::new("widget", "list"));
+    push_bare(
+        &mut registry,
+        op_registry::Descriptor::new("x", "y").name("ping"),
+    );
+    assert_eq!(
+        registry.find_cli("widget list").unwrap().name,
+        "widget_list"
+    );
+    assert_eq!(registry.find_cli("ping").unwrap().name, "ping");
+    assert!(registry.find_cli("widget_list").is_none());
+    assert!(registry.find_cli("x y").is_none());
+}

@@ -91,3 +91,10 @@ fn an_explicit_name_survives_a_round_trip() {
     let back: Descriptor = serde_json::from_str(&text).unwrap();
     assert_eq!(back.cli_name(), "custom");
 }
+
+#[test]
+fn is_path_true_for_a_derived_name_false_for_an_explicit_one() {
+    assert!(Descriptor::new("agent dispatch-target", "set").is_path());
+    assert!(Descriptor::new("item", "get").is_path());
+    assert!(!Descriptor::new("system", "ping").name("ping").is_path());
+}

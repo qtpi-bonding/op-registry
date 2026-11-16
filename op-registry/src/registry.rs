@@ -2,6 +2,7 @@ use crate::{CallOptions, Cursor, Descriptor, OpParams};
 use anyhow::Result;
 use futures_util::{future::BoxFuture, stream::BoxStream};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Command-line adapters for an operation's parameter type.
@@ -67,49 +68,8 @@ pub(crate) struct Entry<C> {
 /// A declaration-ordered collection of operations.
 pub struct Registry<C> {
     pub(crate) entries: Vec<Entry<C>>,
-}
-
-fn unary_dispatch<'a, C, P, O, F>(
-    f: Arc<F>,
-    ctx: &'a C,
-    args: Value,
-    opts: CallOptions,
-) -> BoxFuture<'a, Result<Value>>
-where
-    P: OpParams + 'static,
-    O: serde::Serialize + 'static,
-    F: for<'b> Fn(&'b C, P, CallOptions) -> BoxFuture<'b, Result<O>>,
-{
-    let parsed = match P::from_json(args) {
-        Ok(p) => p,
-        Err(e) => return Box::pin(async move { Err(e) }),
-    };
-    let fut = f(ctx, parsed, opts);
-    Box::pin(async move { serde_json::to_value(fut.await?).map_err(Into::into) })
-}
-
-fn stream_dispatch<'a, C, P, O, F, S>(
-    f: Arc<F>,
-    ctx: &'a C,
-    args: Value,
-    opts: CallOptions,
-    cursor: Option<Cursor>,
-) -> BoxFuture<'a, Result<BoxStream<'a, Result<Value>>>>
-where
-    P: OpParams + 'static,
-    O: serde::Serialize + 'static,
-    S: futures_util::Stream<Item = Result<O>> + Send + 'static,
-    F: for<'b> Fn(&'b C, P, Option<Cursor>, CallOptions) -> BoxFuture<'b, Result<S>>,
-{
-    let parsed = match P::from_json(args) {
-        Ok(p) => p,
-        Err(e) => return Box::pin(async move { Err(e) }),
-    };
-    let fut = f(ctx, parsed, cursor, opts);
-    Box::pin(async move {
-        let stream = fut.await?;
-        Ok(map_stream_values(Box::pin(stream)))
-    })
+    by_name: HashMap<String, usize>,
+    by_cli: HashMap<String, usize>,
 }
 
 fn map_stream_values<'a, O>(stream: BoxStream<'a, Result<O>>) -> BoxStream<'a, Result<Value>>
@@ -121,54 +81,89 @@ where
     }))
 }
 
-fn stream_dispatch_borrowed<'a, C, P, O, F>(
-    f: Arc<F>,
-    ctx: &'a C,
-    args: Value,
-    opts: CallOptions,
-    cursor: Option<Cursor>,
-) -> BoxFuture<'a, Result<BoxStream<'a, Result<Value>>>>
+/// The unary dispatch: parses the JSON arguments as `P`, calls `f`, and
+/// serialises the output.
+fn unary_dispatch<C, P, O, F>(f: F) -> UnaryCall<C>
 where
+    C: Sync,
     P: OpParams + 'static,
     O: serde::Serialize + 'static,
-    F: for<'b> Fn(
-        &'b C,
-        P,
-        Option<Cursor>,
-        CallOptions,
-    ) -> BoxFuture<'b, Result<BoxStream<'b, Result<O>>>>,
+    F: for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync + 'static,
 {
-    let parsed = match P::from_json(args) {
-        Ok(p) => p,
-        Err(e) => return Box::pin(async move { Err(e) }),
-    };
-    let fut = f(ctx, parsed, cursor, opts);
-    Box::pin(async move { Ok(map_stream_values(fut.await?)) })
+    let f = Arc::new(f);
+    Box::new(move |ctx, args, opts| {
+        let parsed = match P::from_json(args) {
+            Ok(p) => p,
+            Err(e) => return Box::pin(async move { Err(e) }),
+        };
+        let fut = f(ctx, parsed, opts);
+        Box::pin(async move { serde_json::to_value(fut.await?).map_err(Into::into) })
+    })
+}
+
+/// The single stream dispatch: parses the JSON arguments as `P`, calls `f`
+/// with the cursor, and serialises each stream item.
+fn stream_dispatch<C, P, O, F>(f: F) -> StreamCall<C>
+where
+    C: Sync,
+    P: OpParams + 'static,
+    O: serde::Serialize + 'static,
+    F: for<'a> Fn(
+            &'a C,
+            P,
+            Option<Cursor>,
+            CallOptions,
+        ) -> BoxFuture<'a, Result<BoxStream<'a, Result<O>>>>
+        + Send
+        + Sync
+        + 'static,
+{
+    let f = Arc::new(f);
+    Box::new(move |ctx, args, opts, cursor| {
+        let parsed = match P::from_json(args) {
+            Ok(p) => p,
+            Err(e) => return Box::pin(async move { Err(e) }),
+        };
+        let fut = f(ctx, parsed, cursor, opts);
+        Box::pin(async move { Ok(map_stream_values(fut.await?)) })
+    })
+}
+
+/// The words a descriptor occupies in the CLI tree: the noun words and verb for
+/// a derived name, or the explicit name as one word.
+fn cli_words(descriptor: &Descriptor) -> Vec<String> {
+    if descriptor.is_path() {
+        let mut words: Vec<String> = descriptor
+            .noun
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect();
+        words.push(descriptor.verb.clone());
+        words
+    } else {
+        vec![descriptor.name.clone()]
+    }
 }
 
 impl<C: Sync> Registry<C> {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
-        }
-    }
-    fn assert_unique(&self, name: &str) {
-        if self
-            .entries
-            .iter()
-            .any(|entry| entry.descriptor.name == name)
-        {
-            panic!("duplicate operation name {:?}", name);
+            by_name: HashMap::new(),
+            by_cli: HashMap::new(),
         }
     }
     pub fn descriptors(&self) -> Vec<&Descriptor> {
         self.entries.iter().map(|e| &e.descriptor).collect()
     }
     pub fn get(&self, name: &str) -> Option<&Descriptor> {
-        self.entries
-            .iter()
-            .find(|e| e.descriptor.name == name)
-            .map(|e| &e.descriptor)
+        self.by_name.get(name).map(|&i| &self.entries[i].descriptor)
+    }
+    /// Finds the descriptor whose CLI name (`noun verb` or explicit name) matches.
+    pub fn find_cli(&self, cli_name: &str) -> Option<&Descriptor> {
+        self.by_cli
+            .get(cli_name)
+            .map(|&i| &self.entries[i].descriptor)
     }
     pub fn names(&self) -> Vec<&str> {
         self.entries
@@ -177,56 +172,89 @@ impl<C: Sync> Registry<C> {
             .collect()
     }
     pub fn cli_hooks(&self, name: &str) -> Option<&CliHooks> {
-        self.entries
-            .iter()
-            .find(|entry| entry.descriptor.name == name)
-            .map(|entry| &entry.hooks)
+        self.by_name.get(name).map(|&i| &self.entries[i].hooks)
     }
     pub fn merge(&mut self, other: Registry<C>) {
         for entry in other.entries {
-            self.assert_unique(&entry.descriptor.name);
-            self.entries.push(entry);
+            self.insert_entry(entry);
         }
     }
     pub(crate) fn entry(&self, name: &str) -> Result<&Entry<C>> {
-        self.entries
-            .iter()
-            .find(|e| e.descriptor.name == name)
+        self.by_name
+            .get(name)
+            .map(|&i| &self.entries[i])
             .ok_or_else(|| {
                 coded_error::into_anyhow(crate::CallError::UnknownOperation {
                     name: name.to_owned(),
                 })
             })
     }
+
+    /// Checks an entry's name and CLI words against every registered entry,
+    /// then appends it. Panics on a duplicate name or a CLI collision.
+    fn insert_entry(&mut self, entry: Entry<C>) {
+        let name = entry.descriptor.name.clone();
+        if self.by_name.contains_key(&name) {
+            panic!("duplicate operation name {:?}", name);
+        }
+        self.assert_unique_cli(&entry.descriptor, &name);
+        let index = self.entries.len();
+        let cli = entry.descriptor.cli_name();
+        self.by_name.insert(name, index);
+        self.by_cli.insert(cli, index);
+        self.entries.push(entry);
+    }
+
+    /// Panics when the new descriptor's CLI name or CLI words equal, or are a
+    /// strict prefix of or extend, the words of an existing operation.
+    fn assert_unique_cli(&self, new: &Descriptor, new_name: &str) {
+        let new_words = cli_words(new);
+        let new_cli = new.cli_name();
+        for existing in &self.entries {
+            let existing_words = cli_words(&existing.descriptor);
+            if new_cli == existing.descriptor.cli_name() || new_words == existing_words {
+                panic!(
+                    "{:?} and {:?} both define the command {:?}",
+                    existing.descriptor.name, new_name, new_cli
+                );
+            }
+            let shared = new_words.len().min(existing_words.len());
+            if new_words[..shared] == existing_words[..shared] {
+                panic!(
+                    "{:?} collides with {:?}: a word cannot be both a leaf and a group",
+                    existing.descriptor.name, new_name
+                );
+            }
+        }
+    }
+
     /// Adds a unary operation to the registry.
     ///
     /// # Panics
     ///
     /// Panics if the descriptor name is already registered, with the
-    /// duplicate name quoted in the panic message.
+    /// duplicate name quoted in the panic message, or if its CLI words collide
+    /// with another operation's.
     pub fn push_unary<P, O, F>(&mut self, descriptor: Descriptor, f: F, hooks: CliHooks)
     where
         P: OpParams + 'static,
         O: serde::Serialize + 'static,
         F: for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync + 'static,
     {
-        self.assert_unique(&descriptor.name);
-        let f = Arc::new(f);
-        let call: UnaryCall<C> = Box::new(move |ctx, args, opts| {
-            unary_dispatch::<C, P, O, F>(Arc::clone(&f), ctx, args, opts)
-        });
-        self.entries.push(Entry {
+        self.insert_entry(Entry {
             descriptor,
-            call: EntryCall::Unary(call),
+            call: EntryCall::Unary(unary_dispatch::<C, P, O, F>(f)),
             hooks,
         });
     }
+
     /// Adds a streaming operation to the registry.
     ///
     /// # Panics
     ///
     /// Panics if the descriptor name is already registered, with the
-    /// duplicate name quoted in the panic message.
+    /// duplicate name quoted in the panic message, or if its CLI words collide
+    /// with another operation's.
     pub fn push_stream<P, O, F, S>(&mut self, descriptor: Descriptor, f: F, hooks: CliHooks)
     where
         P: OpParams + 'static,
@@ -237,16 +265,18 @@ impl<C: Sync> Registry<C> {
             + Sync
             + 'static,
     {
-        self.assert_unique(&descriptor.name);
         let f = Arc::new(f);
-        let call: StreamCall<C> = Box::new(move |ctx, args, opts, cursor| {
-            stream_dispatch::<C, P, O, F, S>(Arc::clone(&f), ctx, args, opts, cursor)
-        });
-        self.entries.push(Entry {
+        self.push_stream_borrowed::<P, O, _>(
             descriptor,
-            call: EntryCall::Stream(call),
+            move |ctx, params, cursor, opts| {
+                let fut = f(ctx, params, cursor, opts);
+                Box::pin(async move {
+                    let stream = fut.await?;
+                    Ok(Box::pin(stream) as BoxStream<'_, Result<O>>)
+                })
+            },
             hooks,
-        });
+        );
     }
 
     /// Adds a streaming operation whose stream may borrow the registry context.
@@ -254,7 +284,8 @@ impl<C: Sync> Registry<C> {
     /// # Panics
     ///
     /// Panics if the descriptor name is already registered, with the
-    /// duplicate name quoted in the panic message.
+    /// duplicate name quoted in the panic message, or if its CLI words collide
+    /// with another operation's.
     pub fn push_stream_borrowed<P, O, F>(&mut self, descriptor: Descriptor, f: F, hooks: CliHooks)
     where
         P: OpParams + 'static,
@@ -269,14 +300,9 @@ impl<C: Sync> Registry<C> {
             + Sync
             + 'static,
     {
-        self.assert_unique(&descriptor.name);
-        let f = Arc::new(f);
-        let call: StreamCall<C> = Box::new(move |ctx, args, opts, cursor| {
-            stream_dispatch_borrowed::<C, P, O, F>(Arc::clone(&f), ctx, args, opts, cursor)
-        });
-        self.entries.push(Entry {
+        self.insert_entry(Entry {
             descriptor,
-            call: EntryCall::Stream(call),
+            call: EntryCall::Stream(stream_dispatch::<C, P, O, F>(f)),
             hooks,
         });
     }

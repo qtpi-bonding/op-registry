@@ -228,12 +228,18 @@ impl Descriptor {
 
     /// Returns the name used by a command-line interface.
     pub fn cli_name(&self) -> String {
-        if self.name != derive_name(&self.noun, &self.verb) {
+        if !self.is_path() {
             self.name.clone()
         } else {
             let words: Vec<&str> = self.noun.split_whitespace().collect();
             format!("{} {}", words.join(" "), self.verb)
         }
+    }
+
+    /// Returns whether the CLI name is the noun path followed by the verb,
+    /// i.e. the name was derived from noun and verb rather than set explicitly.
+    pub fn is_path(&self) -> bool {
+        self.name == derive_name(&self.noun, &self.verb)
     }
 }
 
