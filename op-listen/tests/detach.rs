@@ -6,7 +6,7 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::{self, BoxStream};
 use futures_util::{FutureExt, StreamExt};
 use op_listen::{
-    detached_connect, follow, listen_entry, FollowEnd, FollowOptions, Grant, ListenCursor,
+    detached_connect, follow, listen_entry, Backoff, FollowEnd, FollowOptions, Grant, ListenCursor,
     Listener, Opened,
 };
 use op_registry::{Caller, Descriptor, Registry};
@@ -57,8 +57,7 @@ fn sink_to(lines: &Arc<Mutex<Vec<String>>>) -> impl FnMut(&str) -> std::io::Resu
 
 fn small_backoff() -> FollowOptions {
     let mut o = FollowOptions::default();
-    o.backoff_first = Duration::from_millis(1);
-    o.backoff_max = Duration::from_millis(2);
+    o.backoff = Backoff::new(Duration::from_millis(1), Duration::from_millis(2));
     o
 }
 

@@ -25,6 +25,8 @@ pub fn marker(cursor: Value, resync: bool) -> Value {
 pub enum Step {
     Frames(Vec<anyhow::Result<Value>>),
     ConnectErr(anyhow::Error),
+    /// Connects, yields nothing for the duration, then ends cleanly.
+    Idle(std::time::Duration),
 }
 
 pub fn frames(vs: Vec<Value>) -> Step {
@@ -49,6 +51,9 @@ pub fn scripted(steps: Vec<Step>) -> (impl FnMut(Option<ListenCursor>) -> Conn, 
             match step {
                 Step::Frames(items) => Ok(futures_util::stream::iter(items).boxed()),
                 Step::ConnectErr(e) => Err(e),
+                Step::Idle(d) => Ok(futures_util::stream::once(tokio::time::sleep(d))
+                    .filter_map(|()| async { None })
+                    .boxed()),
             }
         }
         .boxed()

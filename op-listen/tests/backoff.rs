@@ -67,3 +67,13 @@ fn grorg_client_shape() {
     b.reset();
     assert_eq!(b.next_delay(), ms(200));
 }
+
+#[test]
+fn is_reset_tracks_the_sequence_position() {
+    let mut b = Backoff::new(Duration::from_millis(20), Duration::from_millis(200));
+    assert!(b.is_reset());
+    b.next_delay();
+    assert!(!b.is_reset());
+    b.reset();
+    assert!(b.is_reset());
+}

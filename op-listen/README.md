@@ -90,13 +90,14 @@ JSON line through `sink`, and reconnects when the connection fails.
 `FollowOptions` defaults:
 
 - `initial_cursor`: `None`
-- `backoff_first`: 250 ms, doubled after each failure
-- `backoff_max`: 30 s
+- `backoff`: `Backoff::follower()`, a 250 ms delay doubling after each failure up to 30 s
 - `max_retries`: `None` (retry forever)
 
-The backoff resets after a connection delivers at least one frame. The follower
-tracks the cursor from every frame that has one, and reconnects with the last
-cursor.
+The backoff and the retry budget reset after a connection delivers at least one
+frame, or after a connection that delivered nothing lived past the backoff's
+healthy period (`Backoff::with_healthy_after`). A connection that fails before
+that period does not reset them. The follower tracks the cursor from every frame
+that has one, and reconnects with the last cursor.
 
 Before the first frame of each reconnection, the follower prints a marker line:
 

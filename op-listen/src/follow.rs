@@ -4,13 +4,14 @@
 //! line through a sink, and reconnects after transient failures with capped
 //! exponential backoff. Each reconnection is announced with a marker line.
 
+use crate::Backoff;
 use crate::ListenCursor;
 use crate::ListenError;
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
-use std::time::Duration;
+use tokio::time::Instant;
 
 /// Options for [`follow`].
 #[derive(Clone, Debug)]
@@ -18,10 +19,8 @@ use std::time::Duration;
 pub struct FollowOptions {
     /// Cursor used for the first connection when no frame has been seen yet.
     pub initial_cursor: Option<ListenCursor>,
-    /// Delay before the first reconnection attempt.
-    pub backoff_first: Duration,
-    /// Upper bound for the reconnection delay.
-    pub backoff_max: Duration,
+    /// Delay sequence between reconnection attempts.
+    pub backoff: Backoff,
     /// Number of consecutive failed attempts before giving up (`None` = forever).
     pub max_retries: Option<u32>,
 }
@@ -30,8 +29,7 @@ impl Default for FollowOptions {
     fn default() -> Self {
         Self {
             initial_cursor: None,
-            backoff_first: Duration::from_millis(250),
-            backoff_max: Duration::from_secs(30),
+            backoff: Backoff::follower(),
             max_retries: None,
         }
     }
@@ -60,7 +58,7 @@ enum Attempt {
 struct State {
     cursor: Option<ListenCursor>,
     connections: u64,
-    backoff: Duration,
+    backoff: Backoff,
     failures: u32,
 }
 
@@ -92,15 +90,17 @@ where
     let mut state = State {
         cursor: opts.initial_cursor,
         connections: 0,
-        backoff: opts.backoff_first,
+        backoff: opts.backoff.clone(),
         failures: 0,
     };
     loop {
         let connect_cursor = state.cursor.or(opts.initial_cursor);
+        let mut connected_at: Option<Instant> = None;
         let attempt = match connect(connect_cursor).await {
             Ok(stream) => {
                 let reconnected = state.connections > 0;
                 state.connections += 1;
+                connected_at = Some(Instant::now());
                 run_connection(stream, connect_cursor, reconnected, &mut state, &mut sink).await?
             }
             Err(error) => {
@@ -122,7 +122,13 @@ where
                 }
                 if delivered {
                     state.failures = 0;
-                    state.backoff = opts.backoff_first;
+                    state.backoff.reset();
+                } else if let Some(started) = connected_at {
+                    let was_reset = state.backoff.is_reset();
+                    state.backoff.connection_ended(started.elapsed());
+                    if !was_reset && state.backoff.is_reset() {
+                        state.failures = 0;
+                    }
                 }
                 state.failures += 1;
                 if let Some(max) = opts.max_retries {
@@ -130,8 +136,7 @@ where
                         return Err(error);
                     }
                 }
-                tokio::time::sleep(state.backoff).await;
-                state.backoff = (state.backoff * 2).min(opts.backoff_max);
+                tokio::time::sleep(state.backoff.next_delay()).await;
             }
         }
     }
