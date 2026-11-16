@@ -1,15 +1,11 @@
 //! Construction and execution of authorized listen streams.
 
+use crate::error::is_lagged;
 use crate::{ListenCursor, ListenError, ListenFrame, Listener, Opened, OverflowPolicy};
 use futures_util::{future::BoxFuture, stream::BoxStream, StreamExt};
 use op_registry::Caller;
 use std::{collections::VecDeque, time::Duration};
 use tokio::time::{self, Instant, MissedTickBehavior};
-
-/// Options for [`listen_stream`]. Reserved for future use.
-#[derive(Clone, Debug, Default)]
-#[non_exhaustive]
-pub struct ListenOptions {}
 
 type Frame<C, L> = ListenFrame<<L as Listener<C>>::Snapshot, <L as Listener<C>>::Item>;
 type Source<'a, C, L> = BoxStream<'a, anyhow::Result<(u64, <L as Listener<C>>::Item)>>;
@@ -171,7 +167,7 @@ where
                 return Some((Ok(ListenFrame::Item { item, cursor }), state));
             }
             Event::Source(Some(Err(error))) => {
-                let lagged = coded_error::facts_anyhow(&error).code == "op_listen.lagged";
+                let lagged = is_lagged(&error);
                 if !lagged || state.listener.overflow() == OverflowPolicy::End {
                     state.done = true;
                     return Some((Err(error), state));
@@ -225,7 +221,6 @@ pub async fn listen_stream<'a, C, L>(
     params: L::Params,
     cursor: Option<ListenCursor>,
     caller: Caller,
-    _opts: ListenOptions,
 ) -> anyhow::Result<BoxStream<'a, anyhow::Result<ListenFrame<L::Snapshot, L::Item>>>>
 where
     C: Sync + 'a,

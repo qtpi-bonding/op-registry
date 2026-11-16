@@ -20,5 +20,5 @@ pub use follow::{follow, follow_typed, FollowEnd, FollowEvent, FollowOptions};
 pub use frame::ListenFrame;
 pub use listener::{Grant, Listener, Opened, OverflowPolicy};
 pub use op_registry::Caller;
-pub use run::{listen_stream, ListenOptions};
+pub use run::listen_stream;
 pub use stdout::{follow_to_stdout, stdout_sink};

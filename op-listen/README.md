@@ -70,9 +70,9 @@ If `authorize` fails, the error is returned directly. No stream is created and
 
 ## Overflow
 
-A source reports overflow by yielding an error with the code `op_listen.lagged`
-(build it with `op_listen::lagged`). The helper does not buffer items or spawn
-tasks, so the source itself must report overflow.
+A source reports overflow by yielding the typed `ListenError::Lagged` error,
+built with the `lagged(skipped)` constructor (`op_listen::lagged`). The helper
+does not buffer items or spawn tasks, so the source itself must report overflow.
 
 What happens next depends on the listener's `overflow` policy:
 

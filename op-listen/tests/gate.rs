@@ -3,23 +3,19 @@ mod common;
 
 use common::*;
 use futures_util::StreamExt;
-use op_listen::{listen_entry, listen_stream, ListenOptions};
+use op_listen::{listen_entry, listen_stream};
 use op_registry::{CallOptions, Caller, Descriptor, Registry};
 use serde_json::json;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-fn opts() -> ListenOptions {
-    ListenOptions::default()
-}
-
 #[test]
 fn authorize_refusal_sends_no_frame_and_surfaces_the_apps_coded_error() {
     futures_executor::block_on(async {
         let mut l = LogListener::new(vec![(1, "a"), (2, "b")]);
         l.refuse = true;
-        let res = listen_stream(&l, &Ctx, params("t"), None, caller("mallory"), opts()).await;
+        let res = listen_stream(&l, &Ctx, params("t"), None, caller("mallory")).await;
         let err = res.err().expect("refusal must be an error, not a stream");
         assert_eq!(code_of(&err), "test.app.denied");
         assert!(
@@ -34,7 +30,7 @@ fn authorize_refusal_sends_no_frame_and_surfaces_the_apps_coded_error() {
 fn authorize_is_called_once_before_the_first_frame_with_caller_and_topic() {
     futures_executor::block_on(async {
         let l = LogListener::new(vec![(1, "a"), (2, "b")]);
-        let s = listen_stream(&l, &Ctx, params("room"), None, caller("alice"), opts())
+        let s = listen_stream(&l, &Ctx, params("room"), None, caller("alice"))
             .await
             .unwrap();
         let mut s = jsonify(s);
@@ -87,7 +83,7 @@ fn grant_not_before_floors_replay_and_clamps_an_older_cursor() {
         // (A) No cursor; a listener that replays everything is trimmed by the runtime.
         let mut l = LogListener::new(log.clone()).with_grant(grant(Some(floor), None));
         l.replay_all = true;
-        let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"), opts())
+        let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"))
             .await
             .unwrap();
         let frames = frames_json(jsonify(s)).await;
@@ -102,7 +98,7 @@ fn grant_not_before_floors_replay_and_clamps_an_older_cursor() {
 
         // (B) An older cursor is clamped up to the floor.
         let l = LogListener::new(log.clone()).with_grant(grant(Some(floor), None));
-        let s = listen_stream(&l, &Ctx, params("t"), Some(lc(0, 1)), caller("a"), opts())
+        let s = listen_stream(&l, &Ctx, params("t"), Some(lc(0, 1)), caller("a"))
             .await
             .unwrap();
         let frames = frames_json(jsonify(s)).await;
@@ -112,7 +108,7 @@ fn grant_not_before_floors_replay_and_clamps_an_older_cursor() {
 
         // (C) A newer cursor wins over the floor; the floor is still reported.
         let l = LogListener::new(log).with_grant(grant(Some(floor), None));
-        let s = listen_stream(&l, &Ctx, params("t"), Some(lc(0, 4)), caller("a"), opts())
+        let s = listen_stream(&l, &Ctx, params("t"), Some(lc(0, 4)), caller("a"))
             .await
             .unwrap();
         let frames = frames_json(jsonify(s)).await;
@@ -128,7 +124,7 @@ fn grant_not_before_floors_replay_and_clamps_an_older_cursor() {
 async fn grant_default_never_rechecks() {
     let mut l = LogListener::new(vec![(1, "a"), (2, "b")]);
     l.tail_pending = true;
-    let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"), opts())
+    let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"))
         .await
         .unwrap();
     let mut s = jsonify(s);
@@ -145,7 +141,7 @@ async fn recheck_false_sends_stop_then_ends() {
         LogListener::new(vec![(1, "a")]).with_grant(grant(None, Some(Duration::from_secs(10))));
     l.tail_pending = true;
     l.allowed.store(false, Ordering::SeqCst);
-    let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"), opts())
+    let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"))
         .await
         .unwrap();
     let frames = tokio::time::timeout(Duration::from_secs(60), frames_json(jsonify(s)))
@@ -179,7 +175,7 @@ async fn recheck_does_not_hold_back_frames_while_still_allowed_is_pending() {
         .with_grant(grant(None, Some(Duration::from_secs(10))))
         .with_tail(late);
     l.allowed_delay = Some(Duration::from_secs(1000));
-    let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"), opts())
+    let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"))
         .await
         .unwrap();
     let mut s = jsonify(s);
@@ -206,7 +202,7 @@ async fn recheck_does_not_hold_back_frames_while_still_allowed_is_pending() {
 async fn recheck_runs_at_most_every_recheck_every() {
     let mut l = LogListener::new(vec![]).with_grant(grant(None, Some(Duration::from_secs(10))));
     l.tail_pending = true;
-    let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"), opts())
+    let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"))
         .await
         .unwrap();
     let mut s = jsonify(s);

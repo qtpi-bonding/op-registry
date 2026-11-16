@@ -7,8 +7,7 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use futures_util::{FutureExt, StreamExt};
 use op_listen::{
-    follow, listen_stream, Caller, FollowOptions, ListenCursor, ListenOptions, Listener, Opened,
-    OverflowPolicy,
+    follow, listen_stream, Caller, FollowOptions, ListenCursor, Listener, Opened, OverflowPolicy,
 };
 use op_registry::cli::{self};
 use op_registry::parity::{assert_parity, cli_surface};
@@ -37,17 +36,10 @@ fn lc(epoch: u64, seq: u64) -> ListenCursor {
 type Frames = Vec<anyhow::Result<Value>>;
 
 async fn frames(src: &Toy, listener: &StatusListener, cursor: Option<ListenCursor>) -> Frames {
-    let stream = listen_stream(
-        listener,
-        src,
-        gp(),
-        cursor,
-        caller(),
-        ListenOptions::default(),
-    )
-    .await
-    .ok()
-    .expect("listen_stream");
+    let stream = listen_stream(listener, src, gp(), cursor, caller())
+        .await
+        .ok()
+        .expect("listen_stream");
     stream
         .map(|f| f.and_then(|f| Ok(serde_json::to_value(f)?)))
         .collect()
@@ -147,17 +139,10 @@ async fn watch_overflow_emits_a_fresh_snapshot_and_continues() {
         <StatusListener as Listener<Toy>>::overflow(&listener),
         OverflowPolicy::Resnapshot
     );
-    let mut stream = listen_stream(
-        &listener,
-        &src,
-        gp(),
-        None,
-        caller(),
-        ListenOptions::default(),
-    )
-    .await
-    .ok()
-    .expect("listen_stream");
+    let mut stream = listen_stream(&listener, &src, gp(), None, caller())
+        .await
+        .ok()
+        .expect("listen_stream");
     let first = serde_json::to_value(stream.next().await.unwrap().ok().expect("snapshot")).unwrap();
     assert_eq!(first["cursor"], "7:1000");
 
@@ -486,15 +471,8 @@ async fn follow_over_status_watch_prints_marker_and_resnapshots_after_an_epoch_c
                 }
                 _ => return Err(denied()),
             }
-            let frames = listen_stream(
-                listener,
-                src,
-                gp(),
-                cursor,
-                Caller("follower".to_owned()),
-                ListenOptions::default(),
-            )
-            .await?;
+            let frames =
+                listen_stream(listener, src, gp(), cursor, Caller("follower".to_owned())).await?;
             Ok(frames
                 .map(|f| f.and_then(|f| Ok(serde_json::to_value(f)?)))
                 .boxed())

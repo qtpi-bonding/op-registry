@@ -1,6 +1,6 @@
 //! Registers a listener as a streaming registry operation.
 
-use crate::{ListenCursor, ListenFrame, ListenOptions, Listener};
+use crate::{ListenCursor, ListenFrame, Listener};
 use futures_util::{FutureExt, StreamExt};
 use op_registry::{CallOptions, CliHooks, Cursor, Descriptor, Registry};
 use std::sync::Arc;
@@ -38,15 +38,8 @@ where
                     Some(cursor) => Some(ListenCursor::try_from(&cursor)?),
                     None => None,
                 };
-                let frames = crate::run::listen_stream(
-                    listener,
-                    ctx,
-                    params,
-                    cursor,
-                    caller,
-                    ListenOptions::default(),
-                )
-                .await?;
+                let frames =
+                    crate::run::listen_stream(listener, ctx, params, cursor, caller).await?;
                 Ok(frames
                     .map(|frame| frame.and_then(|f| serde_json::to_value(f).map_err(Into::into)))
                     .boxed())

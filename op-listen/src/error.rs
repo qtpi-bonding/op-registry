@@ -55,3 +55,14 @@ impl coded_error::CodedError for ListenError {
 pub fn lagged(skipped: u64) -> anyhow::Error {
     coded_error::into_anyhow(ListenError::Lagged { skipped })
 }
+
+/// Reports whether `error` is a typed [`ListenError::Lagged`].
+///
+/// Matches on the error type, not on the code string, so an error from another
+/// source that merely carries the same code is not treated as lag.
+pub(crate) fn is_lagged(error: &anyhow::Error) -> bool {
+    matches!(
+        coded_error::downcast_ref::<ListenError>(error),
+        Some(ListenError::Lagged { .. })
+    )
+}

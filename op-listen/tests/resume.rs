@@ -3,19 +3,15 @@ mod common;
 
 use common::*;
 use futures_util::StreamExt;
-use op_listen::{listen_stream, ListenCursor, ListenOptions};
+use op_listen::{listen_stream, ListenCursor};
 use serde_json::json;
-
-fn opts() -> ListenOptions {
-    ListenOptions::default()
-}
 
 #[test]
 fn replay_listener_resumes_exactly_after_the_cursor_without_a_snapshot() {
     futures_executor::block_on(async {
         let log = vec![(1, "a"), (2, "b"), (3, "c"), (4, "d"), (5, "e")];
         let l = LogListener::new(log.clone());
-        let s = listen_stream(&l, &Ctx, params("t"), Some(lc(0, 3)), caller("a"), opts())
+        let s = listen_stream(&l, &Ctx, params("t"), Some(lc(0, 3)), caller("a"))
             .await
             .unwrap();
         let frames = frames_json(jsonify(s)).await;
@@ -29,7 +25,7 @@ fn replay_listener_resumes_exactly_after_the_cursor_without_a_snapshot() {
         assert_eq!(l.open_calls(), vec![(Some(lc(0, 3)), None)]);
 
         let l = LogListener::new(log);
-        let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"), opts())
+        let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"))
             .await
             .unwrap();
         let frames = frames_json(jsonify(s)).await;
@@ -44,7 +40,7 @@ fn snapshot_listener_passes_the_resync_flag_through() {
     futures_executor::block_on(async {
         for flag in [true, false] {
             let l = StateListener::new(7, state(&[("k", "v")]), 3).with_resync(flag);
-            let s = listen_stream(&l, &Ctx, params("t"), Some(lc(7, 2)), caller("a"), opts())
+            let s = listen_stream(&l, &Ctx, params("t"), Some(lc(7, 2)), caller("a"))
                 .await
                 .unwrap();
             let frames = frames_json(jsonify(s)).await;
@@ -71,7 +67,7 @@ fn frames_carry_an_increasing_cursor() {
             3,
             source(vec![ok(4, "a"), ok(5, "b"), ok(9, "c")]),
         );
-        let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"), opts())
+        let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"))
             .await
             .unwrap();
         let frames = frames_json(jsonify(s)).await;
@@ -90,7 +86,7 @@ fn a_non_increasing_source_seq_ends_the_stream_with_out_of_order() {
     futures_executor::block_on(async {
         // A repeated seq within the replay.
         let l = LogListener::new(vec![(1, "a"), (2, "b"), (2, "c"), (3, "d")]);
-        let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"), opts())
+        let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"))
             .await
             .unwrap();
         let mut s = jsonify(s);
@@ -103,7 +99,7 @@ fn a_non_increasing_source_seq_ends_the_stream_with_out_of_order() {
         // An item that does not advance past the snapshot's seq.
         let l = StateListener::new(0, state(&[]), 5);
         l.queue(state(&[]), 5, source(vec![ok(5, "dup"), ok(6, "later")]));
-        let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"), opts())
+        let s = listen_stream(&l, &Ctx, params("t"), None, caller("a"))
             .await
             .unwrap();
         let mut s = jsonify(s);
