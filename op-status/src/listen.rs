@@ -22,7 +22,7 @@ use futures_util::StreamExt;
 use op_listen::{Grant, ListenCursor, Listener, Opened, OverflowPolicy};
 use op_registry::Caller;
 
-use crate::open::{open_status, StatusCursorRef, StatusError};
+use crate::open::{open_status, StatusError};
 use crate::ops::{clamp_limit, GetParams};
 use crate::source::StatusSource;
 use crate::types::{Component, StatusFilter, StatusSnapshot};
@@ -91,12 +91,8 @@ where
                 kind: params.kind,
                 id: params.id,
             };
-            let status_cursor = cursor.map(|c| StatusCursorRef {
-                epoch: c.epoch,
-                seq: c.seq,
-            });
             self.epoch.store(ctx.epoch(), Ordering::SeqCst);
-            let opened = open_status(ctx, &filter, limit, status_cursor).await?;
+            let opened = open_status(ctx, &filter, limit, cursor).await?;
             let changes = opened.changes.map(|item| item.map_err(map_lagged)).boxed();
             Ok(Opened::snapshot(
                 opened.snapshot,

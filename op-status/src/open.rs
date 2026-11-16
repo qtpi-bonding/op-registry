@@ -31,15 +31,6 @@ use crate::types::{Component, ServiceInfo, StatusFilter, StatusSnapshot};
 /// Number of change items buffered before a consumer is reported as lagged.
 pub const WATCH_BUFFER: usize = 256;
 
-/// A cursor position: the source epoch and the last seq the consumer saw.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StatusCursorRef {
-    /// Source epoch the cursor belongs to.
-    pub epoch: u64,
-    /// Last seq the consumer saw.
-    pub seq: u64,
-}
-
 /// An opened status: a snapshot, the resync flag and the change stream.
 pub struct OpenedStatus<'a> {
     /// Snapshot taken after the seq was read.
@@ -166,7 +157,7 @@ pub async fn open_status<'a, S: StatusSource + ?Sized>(
     source: &'a S,
     filter: &StatusFilter,
     limit: usize,
-    cursor: Option<StatusCursorRef>,
+    cursor: Option<op_listen::ListenCursor>,
 ) -> Result<OpenedStatus<'a>> {
     let window = source.seq_window();
     let seq = window.newest;

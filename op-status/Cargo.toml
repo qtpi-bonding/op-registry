@@ -9,7 +9,7 @@ description = "Shared status types, StatusSource and a status get operation for 
 [features]
 default = []
 registry = ["dep:op-registry", "dep:clap", "dep:schemars"]
-listen = ["registry", "dep:op-listen"]
+listen = ["registry"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -19,12 +19,11 @@ futures-util = { workspace = true }
 coded-error = { workspace = true }
 thiserror = { workspace = true }
 op-registry = { path = "../op-registry", version = "0.2.0", optional = true }
-op-listen = { path = "../op-listen", version = "0.2.0", optional = true }
+op-listen = { path = "../op-listen", version = "0.2.0", default-features = false }
 clap = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
-op-listen = { path = "../op-listen", version = "0.2.0" }
 tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
 futures-executor = { workspace = true }
 op-registry = { path = "../op-registry", version = "0.2.0" }

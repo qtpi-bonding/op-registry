@@ -4,20 +4,19 @@ mod common;
 use coded_error::ErrorClass;
 use common::*;
 use futures_util::StreamExt;
-use op_status::{
-    open_status, Component, OpenedStatus, StatusCursorRef, StatusFilter, StatusSource, WATCH_BUFFER,
-};
+use op_listen::ListenCursor;
+use op_status::{open_status, Component, OpenedStatus, StatusFilter, StatusSource, WATCH_BUFFER};
 
 async fn open<'a, S: StatusSource + ?Sized>(
     src: &'a S,
     limit: usize,
-    cursor: Option<StatusCursorRef>,
+    cursor: Option<ListenCursor>,
 ) -> anyhow::Result<OpenedStatus<'a>> {
     open_status(src, &StatusFilter::default(), limit, cursor).await
 }
 
-fn cur(epoch: u64, seq: u64) -> Option<StatusCursorRef> {
-    Some(StatusCursorRef { epoch, seq })
+fn cur(epoch: u64, seq: u64) -> Option<ListenCursor> {
+    Some(ListenCursor::new(epoch, seq))
 }
 
 async fn drain(opened: OpenedStatus<'_>) -> Vec<anyhow::Result<(u64, Component)>> {

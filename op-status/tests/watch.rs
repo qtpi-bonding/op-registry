@@ -14,9 +14,7 @@ use op_registry::cli::{self};
 use op_registry::parity::{assert_parity, cli_surface};
 use op_registry::{mcp, Audience};
 use op_status::ops::{status_registry, GetParams, StatusOptions};
-use op_status::{
-    open_status, Component, StatusCursorRef, StatusFilter, StatusListener, WATCH_BUFFER,
-};
+use op_status::{open_status, Component, StatusFilter, StatusListener, WATCH_BUFFER};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 
@@ -321,9 +319,9 @@ async fn status_listener_open_matches_open_status() {
 
     let cases = [
         (None, None),
-        (Some(lc(7, 3)), Some(StatusCursorRef { epoch: 7, seq: 3 })),
-        (Some(lc(8, 3)), Some(StatusCursorRef { epoch: 8, seq: 3 })),
-        (Some(lc(7, 0)), Some(StatusCursorRef { epoch: 7, seq: 0 })),
+        (Some(lc(7, 3)), Some(lc(7, 3))),
+        (Some(lc(8, 3)), Some(lc(8, 3))),
+        (Some(lc(7, 0)), Some(lc(7, 0))),
     ];
     src.set_window(1, 3);
     for (listen_cursor, status_cursor) in cases {
