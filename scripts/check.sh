@@ -34,4 +34,8 @@ fi
 "${cargo_cmd[@]}" check -p op-listen --no-default-features
 "${cargo_cmd[@]}" test -p op-listen --no-default-features
 "${cargo_cmd[@]}" test -p op-listen --features testkit
+"${cargo_cmd[@]}" check -p op-status
+"${cargo_cmd[@]}" check -p op-status --features registry
+"${cargo_cmd[@]}" check -p op-status --features listen
+"${cargo_cmd[@]}" test -p op-status --all-features
 echo "check: ok"

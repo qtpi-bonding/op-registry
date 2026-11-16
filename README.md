@@ -2,7 +2,7 @@
 
 Declare operations once; derive CLI, tool-list and call adapters from the descriptors. MIT OR Apache-2.0.
 
-The `op-listen` crate (`op-listen/`) adds a shared streaming listener on top of op-registry, with cursors, frames, a per-app gate and a reconnecting follower.
+The `op-listen` crate (`op-listen/`) adds a shared streaming listener on top of op-registry, with cursors, frames, a per-app gate and a reconnecting follower; see [op-listen/README.md](op-listen/README.md).
 
 The `op-status` crate (`op-status/`) adds shared status types, a `StatusSource` trait and a `status get` operation; see [op-status/README.md](op-status/README.md).
 
@@ -53,6 +53,20 @@ let value = op_registry::mcp::call_tool(
 ).await?;
 ```
 
+## Entry kinds
+
+A `registry!` entry names its function with one of four keys:
+
+- `op:` is `async fn(&Ctx, P) -> Result<O>`; the caller's `CallOptions` are not passed.
+- `op_with:` is `async fn(&Ctx, P, CallOptions) -> Result<O>`; the function sees
+  the caller.
+- `stream_op:` is `async fn(&Ctx, P, Option<Cursor>) -> Result<S>`; no `CallOptions`.
+- `stream_op_with:` is `async fn(&Ctx, P, Option<Cursor>, CallOptions) -> Result<S>`.
+
+`Cursor` is an opaque string. Its field is private: build one with
+`Cursor::new("1:7")` and read it with `Cursor::as_str()` (it also implements
+`Display`). It serialises as the plain string.
+
 The `output_schema:` override comes after `op:` in a `registry!` entry. The
 parameter derive includes `Serialize` because CLI arguments pass through JSON.
 
@@ -83,9 +97,11 @@ operation prints one JSON value per line. Failures are formatted as
 coded-error class table supplied to `cli::exit_code_for` (for example, a
 `coded_error::cli::ExitTable`). The library does not print or exit; the host does.
 
-For MCP, `mcp::tool_error` produces a transport-safe failure with its code,
-class, and fingerprint; messages of non-logical failures are redacted to
-`request failed`. Streaming operations are not exposed as MCP tools.
+For MCP, `mcp::tool_error(err, source, fallback_message)` produces a
+transport-safe failure with its code, class, and fingerprint. Logical failures
+keep their message; the message of any other failure is replaced by the
+`fallback_message` you pass (for example `"request failed"`). Streaming
+operations are not exposed as MCP tools.
 
 ## Pagination convention
 
@@ -111,4 +127,6 @@ rule, and treats streaming operations as CLI-only.
 
 Another crate can contribute entries with `Registry::merge`, or directly with
 `push_unary` and `push_stream` (including `CliHooks`). These operations panic
-when an operation name is duplicated.
+at the call, not later, when an operation name is duplicated or when the CLI
+words of two operations collide (a CLI path used both as a leaf and a group).
+`Registry::find_cli` looks an operation up by its CLI name.

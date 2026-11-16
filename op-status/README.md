@@ -9,9 +9,17 @@ use to report component health. It is read-only. A service exposes a
 
 ## Features
 
-- `default = []`: types, `StatusSource`, and `check` only.
+- `default = []`: types, `StatusSource`, `check` and `open_status`.
 - `registry`: enables `ops` (`status_registry`, `StatusOptions`, `GetParams`).
   Pulls in `op-registry`, `clap` and `schemars`.
+- `listen`: enables `status watch` (implies `registry`).
+
+op-status now always depends on `op-listen` (without its default features), and
+so on `op-registry`, tokio and the rest of op-listen's tree, even with default
+features. `open_status` takes the cursor as `Option<op_listen::ListenCursor>`;
+the old `StatusCursorRef` is gone. Parse a client string with
+`text.parse::<ListenCursor>()` and render one with
+`ListenCursor::new(epoch, seq).to_string()`.
 
 ## Contract summary
 
@@ -137,7 +145,7 @@ builds pass.
 
 ## `status watch` (feature `listen`)
 
-With the `listen` feature (off by default; adds the `op-listen` dependency)
+With the `listen` feature (off by default)
 `status_registry` also registers `status watch` when `StatusOptions::watch` is
 on (the default) and the source returns `true` from `provides_watch()`. It is a
 CLI-only streaming entry (never an MCP tool), `reads` access, with the
@@ -174,7 +182,7 @@ registration; build the registry once.
 Implement `watch`, `seq_window` and `provides_watch` on your `StatusSource`.
 `watch(Some(n))` must yield exactly the retained changes with seq above `n`
 then live ones, in strictly increasing seq. grorg's server can implement its
-`WatchStatus` rpc by calling `op_status::open_status` directly (no `op-listen`
+`WatchStatus` rpc by calling `op_status::open_status` directly (no `status watch` entry
 needed), so the resync rules exist once. `open_status` reads
 `seq_window().newest`, takes the snapshot, then subscribes with
 `watch(Some(newest))`: a change emitted in between appears exactly once, in the

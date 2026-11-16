@@ -9,7 +9,9 @@ streaming form that clients can resume from a cursor. The crate provides:
 - frames (snapshot, item, stop) that carry the cursor;
 - a per-app gate that authorizes a caller, applies a not-before floor, and
   rechecks access while a stream is open;
-- a reconnecting follower that prints frames and retries after transient failures.
+- a reconnecting follower that retries after transient failures and either
+  prints frames as JSON lines (`follow`) or hands decoded frames to a callback
+  (`follow_typed`).
 
 Licensed under MIT OR Apache-2.0.
 
@@ -23,7 +25,15 @@ separated by one colon. Spaces, signs and extra fields are rejected.
 - `seq` orders items within an epoch.
 
 Cursors order by epoch first, then by seq. A cursor that does not parse is
-reported with the code `op_listen.bad_cursor`.
+reported with the code `op_listen.bad_cursor` (Logical).
+
+`ListenCursor` is a typed value: `ListenCursor::new(epoch, seq)`, `Display`,
+and `FromStr` (the error is an `anyhow::Error` carrying that code). It
+serialises as the JSON string `"epoch:seq"`. `ListenFrame` carries it in typed
+form (`cursor: ListenCursor`), but the wire format and the JSON schema are
+unchanged. `ListenFrame::cursor()` returns the cursor of a snapshot or item
+frame, and `None` for a stop frame. `listen_stream(listener, ctx, params,
+cursor, caller)` no longer takes a `ListenOptions` argument; the type is gone.
 
 ## Frames
 
@@ -84,39 +94,86 @@ What happens next depends on the listener's `overflow` policy:
 
 ## Follower
 
-`follow(connect, sink, options)` connects, prints each frame as one compact
-JSON line through `sink`, and reconnects when the connection fails.
+`follow(connect, sink, options)` connects, writes each frame as one compact
+JSON line through `sink`, and reconnects when the connection fails. The lines
+are rendered from the frame's original JSON value, so the output is
+byte-identical to what the source sent (plus the marker lines below).
+`follow_typed(connect, sink, options)` is the same loop, but `sink` receives
+typed `FollowEvent<S, I>` values instead of lines.
 
-`FollowOptions` defaults:
+`FollowOptions` is `#[non_exhaustive]`: start from `FollowOptions::default()`
+and assign fields. Defaults:
 
-- `initial_cursor`: `None`
-- `backoff`: `Backoff::follower()`, a 250 ms delay doubling after each failure up to 30 s
+- `initial_cursor`: `None` (`Option<ListenCursor>`)
+- `backoff`: `Backoff::follower()`
 - `max_retries`: `None` (retry forever)
 
-The backoff and the retry budget reset after a connection delivers at least one
-frame, or after a connection that delivered nothing lived past the backoff's
-healthy period (`Backoff::with_healthy_after`). A connection that fails before
-that period does not reset them. The follower tracks the cursor from every frame
-that has one, and reconnects with the last cursor.
+### Backoff
 
-Before the first frame of each reconnection, the follower prints a marker line:
+`Backoff` is a public, jitter-free, capped exponential delay shared by the
+follower and by consumers. It replaces the old `backoff_first` and
+`backoff_max` options.
+
+| constructor | sequence |
+|---|---|
+| `Backoff::new(first, cap)` | `first`, doubling, capped at `cap`; `first` is clamped to `cap` |
+| `Backoff::follower()` | 250ms, 500ms, 1s, 2s, 4s, 8s, 16s, 30s, 30s, ... |
+| `Backoff::link()` | 1s, 2s, 4s, 8s, 16s, 30s, 30s, ... |
+
+`next_delay()` returns the current delay and advances; `reset()` restarts the
+sequence and `is_reset()` reports whether it is at its start.
+`with_healthy_after(d)` sets the healthy period (default: the cap), and
+`connection_ended(lived)` resets the sequence when `lived >= healthy_after`.
+
+The follower resets the backoff and the retry budget after a connection that
+delivered at least one frame, or that delivered nothing but lived for the
+healthy period. A connection that fails sooner does not reset them. The
+follower tracks the cursor from every frame that has one, and reconnects with
+the last cursor.
+
+### Events and markers
+
+Each connection after a failure announces itself first. In the JSON follower
+this is a marker line before the first frame of the reconnection:
 
 ```json
 {"marker":"reconnected","cursor":"0:2","resync":false}
 ```
 
-`cursor` is the cursor passed to `connect`, or `null`. `resync` is true only when
-the first frame is a snapshot with `resync: true`.
+`cursor` is the cursor passed to `connect`, or `null`. `resync` is true only
+when the first frame is a snapshot with `resync: true`.
 
-When a stop frame arrives, the follower prints it, then prints
-`{"marker":"stopped","code":"..."}` and returns `FollowEnd::Stopped`. It does
+When a stop frame arrives, the follower writes it, then
+`{"marker":"stopped","code":"..."}`, and returns `FollowEnd::Stopped`. It does
 not reconnect.
+
+`follow_typed` delivers the same sequence as `FollowEvent` values, in the same
+order: `Reconnected { cursor, resync }`, then `Frame(ListenFrame<S, I>)` for
+each frame, and `Stopped { code }` after the stop frame. A frame that does not
+decode as `ListenFrame<S, I>` ends the follow with the Logical error
+`op_listen.bad_frame` (`ListenError::BadFrame`) before the sink sees it; it is
+never retried.
+
+### Errors and ending
 
 Logical errors are returned at once, with no reconnect and no marker line.
 Other errors and clean ends count as failed attempts. With `max_retries` set to
-`n`, the follower retries up to `n` times (`n + 1` connection attempts) and then returns the
-last error. A clean end counts as `op_listen.ended`. A delivered frame resets
-the failure count.
+`n`, the follower retries up to `n` times (`n + 1` connection attempts) and then
+returns the last error. A clean end counts as `op_listen.ended`. A delivered
+frame resets the failure count.
+
+`FollowEnd` is `#[non_exhaustive]`, so match it with a `_` arm. Its variants
+are `Stopped { code }` and `SinkClosed`. The sink returns `std::io::Result<()>`;
+a `BrokenPipe` error from the sink (for example `| head`) ends the follow with
+`Ok(FollowEnd::SinkClosed)` and no reconnect. Any other sink error is
+returned. A broken pipe raised by the stream itself is an ordinary failure, not
+`SinkClosed`.
+
+### Printing to stdout
+
+`stdout_sink()` returns a sink that writes each line to stdout and flushes it.
+`follow_to_stdout(connect, options)` is `follow` with that sink, so a CLI
+watch command needs no sink of its own.
 
 ## Who gates what
 
@@ -125,6 +182,17 @@ An app whose operations run in a client process returns `Grant::default()` from
 
 An app that serves its listeners in process does its gating in `authorize` and
 `still_allowed`.
+
+## Features
+
+- `detach` (default): `detached_connect`, which runs a streaming operation on
+  its own tokio task so it outlives the caller's connection future. Needs
+  tokio's `rt` feature, which only this feature enables.
+- `testkit` (implies `detach`): `op_listen::testkit` with `Followed` (a follow
+  running on a background task, recording its JSON lines, with `wait_until`
+  and `finish`) and `short_follow_options()`. Meant as a dev-dependency feature.
+
+Without default features the crate has no `detach` and no tokio `rt`.
 
 ## Notes
 
