@@ -313,10 +313,26 @@ impl<C: Sync> Default for Registry<C> {
     }
 }
 
-/// Declares a registry; each entry lists `params`, `output`, then its `op` or
-/// `stream_op`, followed optionally by `output_schema` and the remaining
-/// descriptor fields. Parameter types must implement `serde::Serialize`.
-/// A duplicate operation name panics.
+/// Declares a registry; each entry lists `params`, `output`, then its `op`,
+/// `op_with`, `stream_op` or `stream_op_with`, followed optionally by
+/// `output_schema` and the remaining descriptor fields. Parameter types must
+/// implement `serde::Serialize`. A duplicate operation name panics.
+///
+/// The entry kinds are:
+///
+/// - `op: path`, where `async fn path(ctx: &Ctx, params: P) -> Result<O>`.
+///   The caller's [`CallOptions`] are not passed to the function.
+/// - `op_with: path`, where
+///   `async fn path(ctx: &Ctx, params: P, opts: CallOptions) -> Result<O>`.
+///   The function receives the [`CallOptions`], including the caller.
+/// - `stream_op: path`, where
+///   `async fn path(ctx: &Ctx, params: P, cursor: Option<Cursor>) -> Result<S>`
+///   and `S` is a `Stream<Item = Result<O>>`. The descriptor is marked streaming.
+///   The caller's [`CallOptions`] are not passed to the function.
+/// - `stream_op_with: path`, where
+///   `async fn path(ctx: &Ctx, params: P, cursor: Option<Cursor>, opts: CallOptions) -> Result<S>`
+///   and `S` is a `Stream<Item = Result<O>>`. The descriptor is marked streaming.
+///   The function receives the [`CallOptions`], including the caller.
 #[macro_export]
 macro_rules! registry {
     (Ctx = $ctx:ty; entries: [ $( {
@@ -337,7 +353,7 @@ macro_rules! registry {
                     .description($desc)
                     .access($crate::access!($access))
                     .audience($crate::Audience::$aud)
-                    .streaming(matches!(stringify!($kind), "stream_op"))
+                    .streaming(matches!(stringify!($kind), "stream_op" | "stream_op_with"))
                     .input_schema(<$params as $crate::OpParams>::schema())
                     .output_schema($crate::__private::output_schema_of::<$output>())
                     $(.output_schema($out_schema))?
@@ -360,9 +376,19 @@ macro_rules! registry {
             Box::pin(async move { let _ = opts; $op(ctx, params).await })
         }, $crate::CliHooks::for_params::<$params>());
     };
+    (@push $registry:ident, op_with, $params:ty, $output:ty, $op:path, $ctx:ty, $descriptor:ident) => {
+        $registry.push_unary::<$params, $output, _>($descriptor, |ctx, params, opts| {
+            Box::pin(async move { $op(ctx, params, opts).await })
+        }, $crate::CliHooks::for_params::<$params>());
+    };
     (@push $registry:ident, stream_op, $params:ty, $output:ty, $op:path, $ctx:ty, $descriptor:ident) => {
         $registry.push_stream::<$params, $output, _, _>($descriptor, |ctx, params, cursor, opts| {
             Box::pin(async move { let _ = opts; $op(ctx, params, cursor).await })
+        }, $crate::CliHooks::for_params::<$params>());
+    };
+    (@push $registry:ident, stream_op_with, $params:ty, $output:ty, $op:path, $ctx:ty, $descriptor:ident) => {
+        $registry.push_stream::<$params, $output, _, _>($descriptor, |ctx, params, cursor, opts| {
+            Box::pin(async move { $op(ctx, params, cursor, opts).await })
         }, $crate::CliHooks::for_params::<$params>());
     };
 }
