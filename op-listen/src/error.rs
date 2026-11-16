@@ -19,6 +19,8 @@ pub enum ListenError {
     NoCaller,
     #[error("listen task panicked")]
     TaskPanicked,
+    #[error("invalid listen frame: {reason}")]
+    BadFrame { reason: String },
 }
 
 impl coded_error::CodedError for ListenError {
@@ -32,14 +34,16 @@ impl coded_error::CodedError for ListenError {
             Self::Ended => "op_listen.ended",
             Self::NoCaller => "op_listen.no_caller",
             Self::TaskPanicked => "op_listen.task_panicked",
+            Self::BadFrame { .. } => "op_listen.bad_frame",
         }
     }
 
     fn class(&self) -> coded_error::ErrorClass {
         match self {
-            Self::BadCursor { .. } | Self::Revoked { .. } | Self::NoCaller => {
-                coded_error::ErrorClass::Logical
-            }
+            Self::BadCursor { .. }
+            | Self::Revoked { .. }
+            | Self::NoCaller
+            | Self::BadFrame { .. } => coded_error::ErrorClass::Logical,
             Self::Lagged { .. } | Self::Ended => coded_error::ErrorClass::Transient,
             Self::OutOfOrder { .. } | Self::ResnapshotFailed | Self::TaskPanicked => {
                 coded_error::ErrorClass::Infrastructure

@@ -1,19 +1,22 @@
 //! Reconnecting follower for listen streams.
 //!
-//! [`follow`] drives a connect closure, prints every frame as one compact JSON
-//! line through a sink, and reconnects after transient failures with capped
-//! exponential backoff. Each reconnection is announced with a marker line.
+//! [`follow`] and [`follow_typed`] share one reconnect loop, [`drive`]. It
+//! connects, reconnects after transient failures with capped exponential
+//! backoff, and hands every event to a handler. [`follow`] renders events as
+//! compact JSON lines; [`follow_typed`] decodes frames into [`ListenFrame`]s.
+//! Each reconnection is announced with a marker.
 
 use crate::Backoff;
 use crate::ListenCursor;
 use crate::ListenError;
+use crate::ListenFrame;
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use tokio::time::Instant;
 
-/// Options for [`follow`].
+/// Options for [`follow`] and [`follow_typed`].
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct FollowOptions {
@@ -41,6 +44,33 @@ impl Default for FollowOptions {
 pub enum FollowEnd {
     /// The listener sent a stop frame with this code.
     Stopped { code: String },
+}
+
+/// One event delivered to the sink of [`follow_typed`].
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum FollowEvent<S, I> {
+    /// A decoded frame from the listener.
+    Frame(ListenFrame<S, I>),
+    /// A new connection started; `resync` is true when its first frame is a resync snapshot.
+    Reconnected {
+        cursor: Option<ListenCursor>,
+        resync: bool,
+    },
+    /// A stop frame was delivered and the follow is ending.
+    Stopped { code: String },
+}
+
+/// An event as seen by the handler inside [`drive`].
+enum Event<'a> {
+    Reconnected {
+        cursor: Option<ListenCursor>,
+        resync: bool,
+    },
+    Frame(&'a Value),
+    Stopped {
+        code: String,
+    },
 }
 
 /// Outcome of one connection attempt's stream, as seen by the follower.
@@ -76,16 +106,87 @@ fn compact(value: &Value) -> anyhow::Result<String> {
 
 /// Reconnects with `connect` and prints frames through `sink` until a stop
 /// frame arrives, a logical error occurs, or the retry budget is exhausted.
-pub async fn follow<F, K>(
-    mut connect: F,
+pub async fn follow<F, K>(connect: F, mut sink: K, opts: FollowOptions) -> anyhow::Result<FollowEnd>
+where
+    F: FnMut(
+        Option<ListenCursor>,
+    ) -> BoxFuture<'static, anyhow::Result<BoxStream<'static, anyhow::Result<Value>>>>,
+    K: FnMut(&str) -> std::io::Result<()>,
+{
+    drive(connect, |event| render(&mut sink, event), opts).await
+}
+
+/// Like [`follow`], but delivers typed [`FollowEvent`]s to `sink`. A frame
+/// that does not decode as a [`ListenFrame`] ends the follow with a
+/// `op_listen.bad_frame` error, before the sink sees it.
+pub async fn follow_typed<S, I, F, K>(
+    connect: F,
     mut sink: K,
+    opts: FollowOptions,
+) -> anyhow::Result<FollowEnd>
+where
+    S: serde::de::DeserializeOwned,
+    I: serde::de::DeserializeOwned,
+    F: FnMut(
+        Option<ListenCursor>,
+    ) -> BoxFuture<'static, anyhow::Result<BoxStream<'static, anyhow::Result<Value>>>>,
+    K: FnMut(FollowEvent<S, I>) -> std::io::Result<()>,
+{
+    drive(
+        connect,
+        |event| {
+            let typed = match event {
+                Event::Reconnected { cursor, resync } => {
+                    FollowEvent::Reconnected { cursor, resync }
+                }
+                Event::Frame(raw) => {
+                    let frame =
+                        serde_json::from_value::<ListenFrame<S, I>>(raw.clone()).map_err(|e| {
+                            coded_error::into_anyhow(ListenError::BadFrame {
+                                reason: e.to_string(),
+                            })
+                        })?;
+                    FollowEvent::Frame(frame)
+                }
+                Event::Stopped { code } => FollowEvent::Stopped { code },
+            };
+            sink(typed).map_err(anyhow::Error::from)
+        },
+        opts,
+    )
+    .await
+}
+
+/// Renders one event as a compact JSON line for [`follow`].
+fn render<K>(sink: &mut K, event: Event<'_>) -> anyhow::Result<()>
+where
+    K: FnMut(&str) -> std::io::Result<()>,
+{
+    let line = match event {
+        Event::Reconnected { cursor, resync } => compact(&json!({
+            "marker": "reconnected",
+            "cursor": cursor.map(|c| c.to_string()),
+            "resync": resync,
+        }))?,
+        Event::Frame(raw) => compact(raw)?,
+        Event::Stopped { code } => compact(&json!({"marker": "stopped", "code": code}))?,
+    };
+    sink(&line)?;
+    Ok(())
+}
+
+/// The shared reconnect loop. Calls `handle` for every event; an error from
+/// `handle` is returned immediately, without retry.
+async fn drive<F, H>(
+    mut connect: F,
+    mut handle: H,
     opts: FollowOptions,
 ) -> anyhow::Result<FollowEnd>
 where
     F: FnMut(
         Option<ListenCursor>,
     ) -> BoxFuture<'static, anyhow::Result<BoxStream<'static, anyhow::Result<Value>>>>,
-    K: FnMut(&str) -> std::io::Result<()>,
+    H: FnMut(Event<'_>) -> anyhow::Result<()>,
 {
     let mut state = State {
         cursor: opts.initial_cursor,
@@ -101,7 +202,7 @@ where
                 let reconnected = state.connections > 0;
                 state.connections += 1;
                 connected_at = Some(Instant::now());
-                run_connection(stream, connect_cursor, reconnected, &mut state, &mut sink).await?
+                run_connection(stream, connect_cursor, reconnected, &mut state, &mut handle).await?
             }
             Err(error) => {
                 if is_logical(&error) {
@@ -142,16 +243,25 @@ where
     }
 }
 
-/// Drains one connection's stream, printing its frames.
-async fn run_connection<K>(
+/// Calls the handler for one event. The single place where handler errors
+/// pass back into the loop.
+fn emit<H>(handle: &mut H, event: Event<'_>) -> anyhow::Result<()>
+where
+    H: FnMut(Event<'_>) -> anyhow::Result<()>,
+{
+    handle(event)
+}
+
+/// Drains one connection's stream, passing its events to `handle`.
+async fn run_connection<H>(
     mut stream: BoxStream<'static, anyhow::Result<Value>>,
     connect_cursor: Option<ListenCursor>,
     reconnected: bool,
     state: &mut State,
-    sink: &mut K,
+    handle: &mut H,
 ) -> anyhow::Result<Attempt>
 where
-    K: FnMut(&str) -> std::io::Result<()>,
+    H: FnMut(Event<'_>) -> anyhow::Result<()>,
 {
     let mut delivered = false;
     let mut marker_pending = reconnected;
@@ -163,18 +273,19 @@ where
         if marker_pending {
             let resync = frame.get("frame").and_then(Value::as_str) == Some("snapshot")
                 && frame.get("resync").and_then(Value::as_bool) == Some(true);
-            let marker = json!({
-                "marker": "reconnected",
-                "cursor": connect_cursor.map(|c| c.to_string()),
-                "resync": resync,
-            });
-            sink(&compact(&marker)?)?;
+            emit(
+                handle,
+                Event::Reconnected {
+                    cursor: connect_cursor,
+                    resync,
+                },
+            )?;
             marker_pending = false;
         }
         if let Some(cursor) = cursor_of(&frame) {
             state.cursor = Some(cursor);
         }
-        sink(&compact(&frame)?)?;
+        emit(handle, Event::Frame(&frame))?;
         delivered = true;
         if frame.get("frame").and_then(Value::as_str) == Some("stop") {
             let code = frame
@@ -182,7 +293,7 @@ where
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
-            sink(&compact(&json!({"marker": "stopped", "code": code}))?)?;
+            emit(handle, Event::Stopped { code: code.clone() })?;
             return Ok(Attempt::Stopped { code });
         }
     }
