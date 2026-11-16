@@ -244,9 +244,7 @@ where
                     state.failures = 0;
                     state.backoff.reset();
                 } else if let Some(started) = connected_at {
-                    let was_reset = state.backoff.is_reset();
-                    state.backoff.connection_ended(started.elapsed());
-                    if !was_reset && state.backoff.is_reset() {
+                    if state.backoff.connection_ended(started.elapsed()) {
                         state.failures = 0;
                     }
                 }

@@ -53,7 +53,7 @@ op-registry:
 ### Added
 
 - op-listen: `Backoff` (`new`, `link`, `follower`, `with_healthy_after`,
-  `next_delay`, `reset`, `is_reset`, `connection_ended`), no jitter. The
+  `next_delay`, `reset`, `connection_ended`), no jitter. The
   follower resets it after a healthy connection.
 - op-listen: `follow_typed` and `FollowEvent`, over the same reconnect loop as
   `follow`. JSON `follow` output is byte-identical to 0.1.

@@ -307,3 +307,21 @@ async fn healthy_idle_connection_also_clears_the_retry_budget() {
         "op_listen.ended"
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn healthy_idle_connection_clears_the_budget_when_first_equals_cap() {
+    let (connect, _) = scripted(vec![
+        Step::Idle(ms(300)),
+        Step::Idle(ms(300)),
+        Step::ConnectErr(denied()),
+    ]);
+    let (sink, _) = make_sink();
+    let mut o = opts();
+    o.backoff = Backoff::new(ms(20), ms(20)).with_healthy_after(ms(200));
+    o.max_retries = Some(1);
+    let res = follow(connect, sink, o).await;
+    assert_eq!(
+        code_of(&res.err().expect("logical ends it")),
+        "test.app.denied"
+    );
+}

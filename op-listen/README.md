@@ -121,9 +121,9 @@ follower and by consumers. It replaces the old `backoff_first` and
 | `Backoff::link()` | 1s, 2s, 4s, 8s, 16s, 30s, 30s, ... |
 
 `next_delay()` returns the current delay and advances; `reset()` restarts the
-sequence and `is_reset()` reports whether it is at its start.
-`with_healthy_after(d)` sets the healthy period (default: the cap), and
-`connection_ended(lived)` resets the sequence when `lived >= healthy_after`.
+sequence. `with_healthy_after(d)` sets the healthy period (default: the cap),
+and `connection_ended(lived)` resets the sequence when `lived >= healthy_after`
+and returns whether it did.
 
 The follower resets the backoff and the retry budget after a connection that
 delivered at least one frame, or that delivered nothing but lived for the

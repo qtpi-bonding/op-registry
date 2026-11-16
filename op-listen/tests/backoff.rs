@@ -50,9 +50,9 @@ fn connection_ended_resets_only_after_the_healthy_period() {
     let mut b = Backoff::new(secs(1), secs(30)).with_healthy_after(secs(10));
     b.next_delay();
     b.next_delay();
-    b.connection_ended(secs(9));
+    assert!(!b.connection_ended(secs(9)));
     assert_eq!(b.next_delay(), secs(4));
-    b.connection_ended(secs(10));
+    assert!(b.connection_ended(secs(10)));
     assert_eq!(b.next_delay(), secs(1));
 }
 
@@ -69,11 +69,10 @@ fn grorg_client_shape() {
 }
 
 #[test]
-fn is_reset_tracks_the_sequence_position() {
-    let mut b = Backoff::new(Duration::from_millis(20), Duration::from_millis(200));
-    assert!(b.is_reset());
+fn connection_ended_reports_healthy_even_when_first_equals_cap() {
+    let mut b = Backoff::new(ms(20), ms(20)).with_healthy_after(ms(200));
     b.next_delay();
-    assert!(!b.is_reset());
-    b.reset();
-    assert!(b.is_reset());
+    assert!(!b.connection_ended(ms(199)));
+    assert!(b.connection_ended(ms(200)));
+    assert_eq!(b.next_delay(), ms(20));
 }

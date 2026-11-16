@@ -61,15 +61,16 @@ impl Backoff {
         self.next = self.first;
     }
 
-    /// Returns true when the sequence is at its start, so the next delay is `first`.
-    pub fn is_reset(&self) -> bool {
-        self.next == self.first
-    }
-
-    /// Records that a connection lived for `lived`; resets if it was healthy.
-    pub fn connection_ended(&mut self, lived: Duration) {
+    /// Records that a connection lived for `lived`.
+    ///
+    /// If `lived >= healthy_after`, the sequence is reset and `true` is returned;
+    /// otherwise the sequence is left unchanged and `false` is returned.
+    pub fn connection_ended(&mut self, lived: Duration) -> bool {
         if lived >= self.healthy_after {
             self.reset();
+            true
+        } else {
+            false
         }
     }
 }
