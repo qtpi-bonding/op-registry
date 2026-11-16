@@ -20,6 +20,7 @@ tokio = { workspace = true, features = ["time", "macros", "sync"] }
 [features]
 default = ["detach"]
 detach = ["tokio/rt"]
+testkit = ["detach"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "rt", "macros", "time"] }

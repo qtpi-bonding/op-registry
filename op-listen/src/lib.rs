@@ -11,6 +11,8 @@ pub mod frame;
 pub mod listener;
 pub mod run;
 pub mod stdout;
+#[cfg(feature = "testkit")]
+pub mod testkit;
 
 pub use backoff::Backoff;
 pub use cursor::ListenCursor;

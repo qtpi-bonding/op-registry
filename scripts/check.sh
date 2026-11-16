@@ -33,4 +33,5 @@ fi
 "${cargo_cmd[@]}" test --workspace --all-features
 "${cargo_cmd[@]}" check -p op-listen --no-default-features
 "${cargo_cmd[@]}" test -p op-listen --no-default-features
+"${cargo_cmd[@]}" test -p op-listen --features testkit
 echo "check: ok"
