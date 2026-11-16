@@ -63,7 +63,7 @@ fn bad_cursor(text: &str) -> anyhow::Error {
 
 impl From<ListenCursor> for Cursor {
     fn from(cursor: ListenCursor) -> Self {
-        Cursor(cursor.to_string())
+        Cursor::new(cursor.to_string())
     }
 }
 
@@ -102,6 +102,6 @@ impl TryFrom<&Cursor> for ListenCursor {
     type Error = anyhow::Error;
 
     fn try_from(cursor: &Cursor) -> Result<Self, Self::Error> {
-        cursor.0.parse()
+        cursor.as_str().parse()
     }
 }

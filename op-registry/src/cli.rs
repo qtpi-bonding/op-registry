@@ -202,7 +202,7 @@ pub async fn dispatch<'a, C: Sync>(
         let cursor = leaf_matches
             .get_one::<String>("cursor")
             .cloned()
-            .map(Cursor);
+            .map(Cursor::new);
         Ok(CliOutput::Stream(
             registry
                 .call_stream(&descriptor.name, args, ctx, opts, cursor)

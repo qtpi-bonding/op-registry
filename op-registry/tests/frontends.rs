@@ -106,7 +106,9 @@ async fn watch(
     p: WatchParams,
     cursor: Option<Cursor>,
 ) -> anyhow::Result<impl futures_util::Stream<Item = anyhow::Result<Event>>> {
-    let c = cursor.map(|c| c.0).unwrap_or_else(|| "none".to_owned());
+    let c = cursor
+        .map(|c| c.as_str().to_owned())
+        .unwrap_or_else(|| "none".to_owned());
     Ok(stream::iter(vec![
         Ok(Event {
             text: format!("{}/{}/0", p.prefix, c),

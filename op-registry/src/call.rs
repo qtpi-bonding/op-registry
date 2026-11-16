@@ -21,8 +21,31 @@ impl CallOptions {
     }
 }
 
+/// A resumption point for a streaming operation.
+///
+/// Serializes as the plain underlying string.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Cursor(pub String);
+#[serde(transparent)]
+pub struct Cursor(String);
+
+impl Cursor {
+    /// Creates a cursor from its textual form.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self(text.into())
+    }
+
+    /// Returns the cursor's textual form.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Cursor {
+    /// Writes the cursor's textual form.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
 
 /// Errors raised by the registry dispatch layer.
 #[derive(Debug, thiserror::Error, coded_error::CodedError)]

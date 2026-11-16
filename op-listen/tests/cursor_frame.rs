@@ -32,7 +32,7 @@ fn listen_cursor_round_trips_and_rejects_garbage() {
 
     // Conversions with the registry's opaque cursor.
     let wire: Cursor = c.into();
-    assert_eq!(wire, Cursor("3:17".to_owned()));
+    assert_eq!(wire, Cursor::new("3:17"));
     assert_eq!(ListenCursor::try_from(&wire).unwrap(), c);
 
     for bad in [
@@ -53,9 +53,7 @@ fn listen_cursor_round_trips_and_rejects_garbage() {
     ] {
         let err = bad.parse::<ListenCursor>().err().expect(bad);
         assert_eq!(code_of(&err), "op_listen.bad_cursor", "parse {bad:?}");
-        let err = ListenCursor::try_from(&Cursor(bad.to_owned()))
-            .err()
-            .expect(bad);
+        let err = ListenCursor::try_from(&Cursor::new(bad)).err().expect(bad);
         assert_eq!(code_of(&err), "op_listen.bad_cursor", "try_from {bad:?}");
     }
 }

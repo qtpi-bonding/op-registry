@@ -661,3 +661,18 @@ fn find_cli_matches_cli_name() {
     assert!(registry.find_cli("widget_list").is_none());
     assert!(registry.find_cli("x y").is_none());
 }
+
+#[test]
+fn cursor_serde_is_the_plain_string() {
+    let cursor = Cursor::new("3:17");
+    assert_eq!(serde_json::to_string(&cursor).unwrap(), r#""3:17""#);
+    let back: Cursor = serde_json::from_str(r#""3:17""#).unwrap();
+    assert_eq!(back, cursor);
+}
+
+#[test]
+fn cursor_display_and_as_str_agree() {
+    let cursor = Cursor::new(String::from("0:9"));
+    assert_eq!(cursor.as_str(), "0:9");
+    assert_eq!(cursor.to_string(), cursor.as_str());
+}

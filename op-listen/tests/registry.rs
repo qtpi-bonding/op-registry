@@ -52,7 +52,7 @@ fn listen_entry_is_a_cli_only_streaming_op_and_absent_from_the_tool_list() {
                 json!({"topic": "t"}),
                 &Ctx,
                 CallOptions::default().with_caller(Caller("tester".to_owned())),
-                Some(Cursor("garbage".to_owned())),
+                Some(Cursor::new("garbage")),
             )
             .await
             .err()
@@ -66,7 +66,7 @@ fn listen_entry_is_a_cli_only_streaming_op_and_absent_from_the_tool_list() {
                 json!({"topic": "t"}),
                 &Ctx,
                 CallOptions::default().with_caller(Caller("tester".to_owned())),
-                Some(Cursor("0:2".to_owned())),
+                Some(Cursor::new("0:2")),
             )
             .await
             .unwrap();
