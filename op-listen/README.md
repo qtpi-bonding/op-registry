@@ -189,8 +189,10 @@ An app that serves its listeners in process does its gating in `authorize` and
   its own tokio task so it outlives the caller's connection future. Needs
   tokio's `rt` feature, which only this feature enables.
 - `testkit` (implies `detach`): `op_listen::testkit` with `Followed` (a follow
-  running on a background task, recording its JSON lines, with `wait_until`
-  and `finish`) and `short_follow_options()`. Meant as a dev-dependency feature.
+  running on a background task, recording its JSON lines, with `wait_until`,
+  `join`, `abort`, `assert_still_following`, and `reconnect_markers`; `spawn`
+  takes the follow options to use, and dropping aborts the task) and
+  `short_follow_options()`. Meant as a dev-dependency feature.
 
 Without default features the crate has no `detach` and no tokio `rt`.
 

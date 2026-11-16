@@ -24,6 +24,10 @@ pub fn short_follow_options() -> FollowOptions {
 }
 
 /// A follow running on a background task, with the JSON lines it has rendered.
+///
+/// Dropping a `Followed` aborts the background task. Call [`Followed::abort`]
+/// explicitly for the same effect, or [`Followed::join`] to wait for a follow
+/// that ends on a stop frame.
 pub struct Followed {
     /// Every rendered line parsed as JSON, in arrival order.
     lines: Arc<Mutex<Vec<Value>>>,
@@ -32,11 +36,11 @@ pub struct Followed {
 }
 
 impl Followed {
-    /// Starts following with `connect` on a spawned task.
+    /// Starts following with `connect` and `options` on a spawned task.
     ///
     /// Each line rendered by the follow is parsed as JSON and recorded.
     /// A line that is not valid JSON ends the follow with an `InvalidData` error.
-    pub fn spawn<F>(connect: F) -> Self
+    pub fn spawn<F>(connect: F, options: FollowOptions) -> Self
     where
         F: FnMut(
                 Option<ListenCursor>,
@@ -53,7 +57,7 @@ impl Followed {
             sink_lines.lock().expect("lines mutex poisoned").push(value);
             Ok(())
         };
-        let task = tokio::spawn(follow(connect, sink, short_follow_options()));
+        let task = tokio::spawn(follow(connect, sink, options));
         Self { lines, task }
     }
 
@@ -67,12 +71,54 @@ impl Followed {
         self.task.is_finished()
     }
 
+    /// Aborts the background follow task.
+    ///
+    /// Also happens implicitly when the `Followed` is dropped.
+    pub fn abort(self) {
+        self.task.abort();
+    }
+
+    /// Waits for the follow task to finish and returns its result.
+    ///
+    /// # Errors
+    ///
+    /// Returns the follow's own error, or an error if the task panicked or was cancelled.
+    pub async fn join(self) -> anyhow::Result<FollowEnd> {
+        let mut this = self;
+        // Aborting the finished task on drop is a no-op.
+        (&mut this.task)
+            .await
+            .map_err(|e| anyhow!("follow task failed to join: {e}"))?
+    }
+
+    /// Asserts that the background follow task is still running.
+    ///
+    /// # Panics
+    ///
+    /// Panics with a message containing `step`, the follow's result, and the
+    /// frames recorded so far if the task has finished.
+    pub async fn assert_still_following(&mut self, step: &str) {
+        if self.is_finished() {
+            let result = (&mut self.task).await;
+            ended_panic(step, result, &self.lines());
+        }
+    }
+
+    /// Counts the recorded lines that carry a `"marker": "reconnected"` marker.
+    pub fn reconnect_markers(&self) -> usize {
+        self.lines()
+            .iter()
+            .filter(|l| l["marker"] == "reconnected")
+            .count()
+    }
+
     /// Polls every 10ms until `done` returns true for the recorded lines.
     ///
     /// # Panics
     ///
-    /// Panics with a message naming `step` if `timeout` elapses first, or if
-    /// the follow task finishes before `done` becomes true.
+    /// Panics with a message containing `step` and the frames so far if
+    /// `timeout` elapses first, or if the follow task finishes before `done`
+    /// becomes true (the message also includes the follow's result).
     pub async fn wait_until(
         &mut self,
         step: &str,
@@ -90,23 +136,33 @@ impl Followed {
                 if done(&self.lines()) {
                     return;
                 }
-                panic!("follow task ended while waiting for {step}");
+                let result = (&mut self.task).await;
+                ended_panic(&format!("waiting for {step}"), result, &self.lines());
             }
             if tokio::time::Instant::now() >= deadline {
-                panic!("timed out waiting for {step}");
+                panic!(
+                    "timed out after {timeout:?} waiting for {step}. Frames so far: {:?}",
+                    self.lines()
+                );
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
+}
 
-    /// Waits for the follow task to finish and returns its result.
-    ///
-    /// # Errors
-    ///
-    /// Returns the follow's own error, or an error if the task panicked or was cancelled.
-    pub async fn finish(self) -> anyhow::Result<FollowEnd> {
-        self.task
-            .await
-            .map_err(|e| anyhow!("follow task failed to join: {e}"))?
+/// Aborts the follow task when the `Followed` is dropped.
+impl Drop for Followed {
+    fn drop(&mut self) {
+        self.task.abort();
     }
+}
+
+/// Panics with the shared "follow ended" message: the step, the task's result,
+/// and the frames recorded so far.
+fn ended_panic(
+    step: &str,
+    result: Result<anyhow::Result<FollowEnd>, tokio::task::JoinError>,
+    lines: &[Value],
+) -> ! {
+    panic!("follow task ended while {step}: {result:?}. Frames so far: {lines:?}");
 }
