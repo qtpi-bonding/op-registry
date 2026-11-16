@@ -1,11 +1,11 @@
-use op_listen::ListenFrame;
+use op_listen::{ListenCursor, ListenFrame};
 use serde_json::json;
 
 #[test]
 fn listen_frame_schema_and_wire_are_pinned() {
     let item = ListenFrame::<String, String>::Item {
         item: "a".into(),
-        cursor: "1:2".into(),
+        cursor: ListenCursor::new(1, 2),
     };
     assert_eq!(
         serde_json::to_string(&item).unwrap(),
@@ -14,7 +14,7 @@ fn listen_frame_schema_and_wire_are_pinned() {
     let snapshot = ListenFrame::<String, String>::Snapshot {
         snapshot: "s".into(),
         resync: true,
-        cursor: "1:2".into(),
+        cursor: ListenCursor::new(1, 2),
     };
     assert_eq!(
         serde_json::to_string(&snapshot).unwrap(),

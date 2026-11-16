@@ -65,7 +65,7 @@ fn frame_json_shape_is_pinned() {
     let snapshot: ListenFrame<Value, Value> = ListenFrame::Snapshot {
         snapshot: json!({"a": 1}),
         resync: false,
-        cursor: "0:3".to_owned(),
+        cursor: ListenCursor::new(0, 3),
     };
     assert_eq!(
         serde_json::to_value(&snapshot).unwrap(),
@@ -74,7 +74,7 @@ fn frame_json_shape_is_pinned() {
 
     let item: ListenFrame<Value, Value> = ListenFrame::Item {
         item: json!("x"),
-        cursor: "0:4".to_owned(),
+        cursor: ListenCursor::new(0, 4),
     };
     assert_eq!(
         serde_json::to_value(&item).unwrap(),
@@ -95,4 +95,44 @@ fn frame_json_shape_is_pinned() {
             serde_json::from_value(serde_json::to_value(&frame).unwrap()).unwrap();
         assert_eq!(back, frame);
     }
+}
+
+#[test]
+fn listen_cursor_serde_is_the_display_string() {
+    let c = ListenCursor::new(1, 2);
+    assert_eq!(serde_json::to_string(&c).unwrap(), r#""1:2""#);
+    assert_eq!(serde_json::from_str::<ListenCursor>(r#""1:2""#).unwrap(), c);
+}
+
+#[test]
+fn listen_cursor_deserialize_rejects_bad_text() {
+    for bad in ["1:2:3", "+1:2", "-1:2", "", ":", "18446744073709551616:0"] {
+        let text = serde_json::to_string(bad).unwrap();
+        assert!(
+            serde_json::from_str::<ListenCursor>(&text).is_err(),
+            "{bad:?}"
+        );
+    }
+    assert!(serde_json::from_str::<ListenCursor>("5").is_err());
+}
+
+#[test]
+fn frame_cursor_accessor() {
+    let c = ListenCursor::new(1, 2);
+    let snap: ListenFrame<Value, Value> = ListenFrame::Snapshot {
+        snapshot: json!(1),
+        resync: false,
+        cursor: c,
+    };
+    let item: ListenFrame<Value, Value> = ListenFrame::Item {
+        item: json!(1),
+        cursor: c,
+    };
+    let stop: ListenFrame<Value, Value> = ListenFrame::Stop {
+        code: "c".into(),
+        message: "m".into(),
+    };
+    assert_eq!(snap.cursor(), Some(c));
+    assert_eq!(item.cursor(), Some(c));
+    assert_eq!(stop.cursor(), None);
 }

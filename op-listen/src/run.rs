@@ -57,8 +57,8 @@ where
     C: Sync + 'a,
     L: Listener<C>,
 {
-    fn cursor(&self, seq: u64) -> String {
-        ListenCursor::new(self.listener.epoch(), seq).to_string()
+    fn cursor(&self, seq: u64) -> ListenCursor {
+        ListenCursor::new(self.listener.epoch(), seq)
     }
 
     /// Records `seq` as the newest sequence, or reports it as out of order.
@@ -250,7 +250,7 @@ where
             seq,
             stream,
         } => {
-            let cursor = ListenCursor::new(listener.epoch(), seq).to_string();
+            let cursor = ListenCursor::new(listener.epoch(), seq);
             queue.push_back(Ok(ListenFrame::Snapshot {
                 snapshot,
                 resync,

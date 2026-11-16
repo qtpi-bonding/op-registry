@@ -2,6 +2,7 @@
 
 use crate::ListenError;
 use op_registry::Cursor;
+use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
 
@@ -63,6 +64,37 @@ fn bad_cursor(text: &str) -> anyhow::Error {
 impl From<ListenCursor> for Cursor {
     fn from(cursor: ListenCursor) -> Self {
         Cursor(cursor.to_string())
+    }
+}
+
+impl serde::Serialize for ListenCursor {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ListenCursor {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl schemars::JsonSchema for ListenCursor {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("ListenCursor")
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed(concat!(module_path!(), "::ListenCursor"))
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type": "string"})
     }
 }
 
