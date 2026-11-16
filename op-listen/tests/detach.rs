@@ -1,3 +1,4 @@
+#![cfg(feature = "detach")]
 #![allow(clippy::err_expect, clippy::ok_expect)]
 mod common;
 
@@ -444,4 +445,29 @@ async fn a_panic_in_the_forwarding_task_surfaces_as_an_infrastructure_error_item
         .await
         .expect("must not hang");
     assert!(end.is_none(), "stream ends after the panic item");
+}
+
+#[test]
+fn runtime_shutdown_cancelling_the_task_just_ends_the_stream() {
+    let tail = pending_with_guard(DropSignal(None));
+    let (registry, ctx, _l) = setup(LogListener::new(vec![]).with_tail(tail));
+    let mut connect = connector(registry, ctx);
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut s = rt
+        .block_on(connect(None))
+        .ok()
+        .expect("connect on the doomed runtime");
+    // Shutting the runtime down cancels the forwarding task (not a panic).
+    drop(rt);
+
+    let end = futures_executor::block_on(s.next());
+    assert!(
+        end.is_none(),
+        "cancellation ends the stream without an item"
+    );
+    assert!(futures_executor::block_on(s.next()).is_none());
 }

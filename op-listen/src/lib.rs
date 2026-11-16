@@ -2,6 +2,7 @@
 
 pub mod backoff;
 pub mod cursor;
+#[cfg(feature = "detach")]
 pub mod detach;
 pub mod entry;
 pub mod error;
@@ -13,6 +14,7 @@ pub mod stdout;
 
 pub use backoff::Backoff;
 pub use cursor::ListenCursor;
+#[cfg(feature = "detach")]
 pub use detach::detached_connect;
 pub use entry::listen_entry;
 pub use error::{lagged, ListenError};

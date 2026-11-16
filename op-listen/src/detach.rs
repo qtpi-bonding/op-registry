@@ -3,15 +3,15 @@
 use crate::{ListenCursor, ListenError};
 use anyhow::Result;
 use futures_util::future::BoxFuture;
-use futures_util::stream::BoxStream;
-use futures_util::{Future, Stream};
+use futures_util::stream::{self, BoxStream};
+use futures_util::StreamExt;
 use op_registry::{CallOptions, Registry};
 use serde_json::Value;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
+
+const DETACH_BUFFER: usize = 64;
 
 /// Connects to a streaming operation while detaching its lifetime from the
 /// caller's connection future.
@@ -34,7 +34,7 @@ where
 
         Box::pin(async move {
             let (first_tx, first_rx) = oneshot::channel();
-            let (tx, rx) = mpsc::channel(64);
+            let (tx, rx) = mpsc::channel(DETACH_BUFFER);
             let task = tokio::spawn(async move {
                 let stream = match registry
                     .call_stream(
@@ -57,7 +57,6 @@ where
                     return;
                 }
 
-                use futures_util::StreamExt;
                 futures_util::pin_mut!(stream);
                 loop {
                     let item = tokio::select! {
@@ -71,15 +70,15 @@ where
                 }
             });
 
-            // The stream owns the task from here on: if this future is dropped
-            // before the first outcome (timeout, select), dropping the stream
-            // aborts the task.
-            let detached = DetachedStream {
+            // The abort guard must exist before we await first_rx: if this
+            // future is dropped before the first outcome (timeout, select),
+            // dropping the stream (which owns the guard) aborts the task.
+            let state = DetachState {
                 receiver: rx,
-                task,
-                panic_reported: false,
-                task_done: false,
+                task: Some(AbortOnDrop(task)),
             };
+            // `fuse` keeps polling after the end safe (unfold would panic).
+            let detached = stream::unfold(state, next_item).fuse();
             match first_rx.await {
                 Ok(Ok(())) => Ok(Box::pin(detached) as BoxStream<'static, Result<Value>>),
                 Ok(Err(error)) => Err(error),
@@ -90,52 +89,31 @@ where
     }
 }
 
-struct DetachedStream {
+struct DetachState {
     receiver: mpsc::Receiver<Result<Value>>,
-    task: JoinHandle<()>,
-    panic_reported: bool,
-    task_done: bool,
+    task: Option<AbortOnDrop>,
 }
 
-impl Stream for DetachedStream {
-    type Item = Result<Value>;
+/// Aborts the forwarding task when dropped.
+struct AbortOnDrop(JoinHandle<()>);
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        match this.receiver.poll_recv(cx) {
-            Poll::Ready(Some(item)) => Poll::Ready(Some(item)),
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(None) => {
-                if this.task_done {
-                    return Poll::Ready(None);
-                }
-                match Pin::new(&mut this.task).poll(cx) {
-                    Poll::Pending => Poll::Pending,
-                    Poll::Ready(Ok(())) => {
-                        this.task_done = true;
-                        Poll::Ready(None)
-                    }
-                    Poll::Ready(Err(join_error)) => {
-                        this.task_done = true;
-                        if !join_error.is_panic() {
-                            // Cancelled (runtime shutdown): just end.
-                            Poll::Ready(None)
-                        } else if !this.panic_reported {
-                            this.panic_reported = true;
-                            Poll::Ready(Some(Err(task_panicked())))
-                        } else {
-                            Poll::Ready(None)
-                        }
-                    }
-                }
-            }
-        }
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
-impl Drop for DetachedStream {
-    fn drop(&mut self) {
-        self.task.abort();
+async fn next_item(mut state: DetachState) -> Option<(Result<Value>, DetachState)> {
+    if let Some(item) = state.receiver.recv().await {
+        return Some((item, state));
+    }
+    // Channel closed: take the handle and await it once. Once taken, the
+    // state is no longer returned, so the stream ends on later polls.
+    let mut guard = state.task.take()?;
+    match (&mut guard.0).await {
+        Ok(()) => None,
+        Err(join_error) if !join_error.is_panic() => None,
+        Err(_) => Some((Err(task_panicked()), state)),
     }
 }
 

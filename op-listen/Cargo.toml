@@ -15,7 +15,11 @@ futures-util = { workspace = true }
 schemars = { workspace = true }
 coded-error = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["time", "macros", "rt", "sync"] }
+tokio = { workspace = true, features = ["time", "macros", "sync"] }
+
+[features]
+default = ["detach"]
+detach = ["tokio/rt"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "rt", "macros", "time"] }
