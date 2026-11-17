@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- op-listen: add `supervise` with structured open, retry, stop, and session
+  expiration events.
+
 ## 0.2.0
 
 All four crates (op-registry, op-registry-derive, op-listen, op-status) move to

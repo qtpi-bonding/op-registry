@@ -169,6 +169,16 @@ a `BrokenPipe` error from the sink (for example `| head`) ends the follow with
 returned. A broken pipe raised by the stream itself is an ordinary failure, not
 `SinkClosed`.
 
+### Supervision
+
+`supervise` follows `StreamStep<T>` values and sends structured `Supervised<T>`
+events to its sink. It reports `Opened { resync }` before the first item of
+every connection, `Retrying { code }` before a retry, and `Stopped { code }`
+when a configured stop code is returned while opening. The `stop_codes`
+argument selects which coded connection errors end successfully. `Ended` and
+`SessionExpired` are transient and use `op_listen.ended` and
+`op_listen.session_expired`.
+
 ### Printing to stdout
 
 `stdout_sink()` returns a sink that writes each line to stdout and flushes it.

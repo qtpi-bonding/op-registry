@@ -15,6 +15,8 @@ pub enum ListenError {
     ResnapshotFailed,
     #[error("listen stream ended")]
     Ended,
+    #[error("listen session expired")]
+    SessionExpired,
     #[error("listen request has no caller")]
     NoCaller,
     #[error("listen task panicked")]
@@ -32,6 +34,7 @@ impl coded_error::CodedError for ListenError {
             Self::OutOfOrder { .. } => "op_listen.out_of_order",
             Self::ResnapshotFailed => "op_listen.resnapshot_failed",
             Self::Ended => "op_listen.ended",
+            Self::SessionExpired => "op_listen.session_expired",
             Self::NoCaller => "op_listen.no_caller",
             Self::TaskPanicked => "op_listen.task_panicked",
             Self::BadFrame { .. } => "op_listen.bad_frame",
@@ -44,7 +47,9 @@ impl coded_error::CodedError for ListenError {
             | Self::Revoked { .. }
             | Self::NoCaller
             | Self::BadFrame { .. } => coded_error::ErrorClass::Logical,
-            Self::Lagged { .. } | Self::Ended => coded_error::ErrorClass::Transient,
+            Self::Lagged { .. } | Self::Ended | Self::SessionExpired => {
+                coded_error::ErrorClass::Transient
+            }
             Self::OutOfOrder { .. } | Self::ResnapshotFailed | Self::TaskPanicked => {
                 coded_error::ErrorClass::Infrastructure
             }
