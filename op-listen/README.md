@@ -172,8 +172,9 @@ returned. A broken pipe raised by the stream itself is an ordinary failure, not
 ### Supervision
 
 `supervise` follows `StreamStep<T>` values and sends structured `Supervised<T>`
-events to its sink. It reports `Opened { resync }` before the first item of
-every connection, `Retrying { code }` before a retry, and `Stopped { code }`
+events to its sink. It reports the fieldless `Opened` event as soon as
+`connect` succeeds, before any item, `Retrying { code }` before a retry, and
+`Stopped { code }`
 when a configured stop code is returned while opening. The `stop_codes`
 argument selects which coded connection errors end successfully. `Ended` and
 `SessionExpired` are transient and use `op_listen.ended` and

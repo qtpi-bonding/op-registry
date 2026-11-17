@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- op-listen: add `supervise` with structured open, retry, stop, and session
-  expiration events.
+- op-listen: add `supervise` with structured `Opened` (fieldless and sent as
+  soon as `connect` succeeds), retry, stop, and session expiration events.
 
 ## 0.2.0
 

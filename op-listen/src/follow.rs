@@ -59,8 +59,9 @@ pub enum StreamStep<T> {
 
 /// An event delivered by [`supervise`].
 pub enum Supervised<T: Resumable> {
-    /// A connection opened; `resync` describes its first item.
-    Opened { resync: bool },
+    /// A connection opened, reported after `connect` succeeds and before any item.
+    /// Read `item.resync()` on the first item itself.
+    Opened,
     /// An item from the connection.
     Item(T),
     /// A failed attempt will be retried.
@@ -125,9 +126,7 @@ pub enum FollowEvent<S, I> {
 
 /// An event as seen by the handler inside [`drive`].
 enum Event<T: Resumable> {
-    Opened {
-        resync: bool,
-    },
+    Opened,
     Reconnected {
         cursor: Option<T::Cursor>,
         resync: bool,
@@ -244,7 +243,7 @@ where
                 Event::Reconnected { cursor, resync } => {
                     FollowEvent::Reconnected { cursor, resync }
                 }
-                Event::Opened { .. } | Event::Retrying { .. } => return Ok(()),
+                Event::Opened | Event::Retrying { .. } => return Ok(()),
                 Event::Frame(raw) => {
                     let frame = serde_json::from_value::<ListenFrame<S, I>>(raw).map_err(|e| {
                         Handled::Failed(coded_error::into_anyhow(ListenError::BadFrame {
@@ -284,7 +283,7 @@ where
         |event| {
             let item = match event {
                 Event::Frame(value) => FollowItem::Item(value),
-                Event::Opened { .. } | Event::Retrying { .. } => return Ok(()),
+                Event::Opened | Event::Retrying { .. } => return Ok(()),
                 Event::Reconnected { cursor, resync } => FollowItem::Reconnected { cursor, resync },
                 Event::Stopped { code } => FollowItem::Stopped { code },
             };
@@ -348,7 +347,7 @@ where
         wrapped,
         |event| {
             let event = match event {
-                Event::Opened { resync } => Supervised::Opened { resync },
+                Event::Opened => Supervised::Opened,
                 Event::Frame(item) => Supervised::Item(item),
                 Event::Retrying { code } => Supervised::Retrying { code },
                 Event::Stopped { code } => Supervised::Stopped { code },
@@ -372,7 +371,7 @@ where
     K: FnMut(&str) -> std::io::Result<()>,
 {
     let line = match event {
-        Event::Opened { .. } | Event::Retrying { .. } => return Ok(()),
+        Event::Opened | Event::Retrying { .. } => return Ok(()),
         Event::Reconnected { cursor, resync } => compact(&json!({
             "marker": "reconnected",
             "cursor": cursor.map(|c| c.to_string()),
@@ -424,15 +423,15 @@ where
                 let reconnected = state.connections > 0;
                 state.connections += 1;
                 connected_at = Some(Instant::now());
-                match run_connection(
-                    stream,
-                    connect_cursor,
-                    reconnected,
-                    &config,
-                    &mut state,
-                    &mut handle,
-                )
-                .await
+                if config.opened {
+                    match emit(&mut handle, Event::Opened) {
+                        Ok(()) => {}
+                        Err(Handled::SinkClosed) => return Ok(FollowEnd::SinkClosed),
+                        Err(Handled::Failed(error)) => return Err(error),
+                    }
+                }
+                match run_connection(stream, connect_cursor, reconnected, &mut state, &mut handle)
+                    .await
                 {
                     Ok(attempt) => attempt,
                     Err(Handled::SinkClosed) => return Ok(FollowEnd::SinkClosed),
@@ -515,7 +514,6 @@ async fn run_connection<T, H>(
     mut stream: BoxStream<'static, anyhow::Result<T>>,
     connect_cursor: Option<T::Cursor>,
     reconnected: bool,
-    config: &DriveConfig<'_>,
     state: &mut State<T::Cursor>,
     handle: &mut H,
 ) -> Result<Attempt, Handled>
@@ -525,7 +523,6 @@ where
 {
     let mut delivered = false;
     let mut marker_pending = reconnected;
-    let mut opened_pending = config.opened;
     while let Some(next) = stream.next().await {
         let item = match next {
             Ok(item) => item,
@@ -534,15 +531,6 @@ where
         let cursor = item.cursor();
         let stop_code = item.stop_code().map(str::to_owned);
         let resync = marker_pending && item.resync();
-        if opened_pending {
-            emit(
-                handle,
-                Event::Opened {
-                    resync: item.resync(),
-                },
-            )?;
-            opened_pending = false;
-        }
         if marker_pending {
             emit(
                 handle,
