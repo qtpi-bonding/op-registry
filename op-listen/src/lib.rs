@@ -20,7 +20,10 @@ pub use cursor::ListenCursor;
 pub use detach::detached_connect;
 pub use entry::listen_entry;
 pub use error::{lagged, ListenError};
-pub use follow::{follow, follow_typed, FollowEnd, FollowEvent, FollowOptions};
+pub use follow::{
+    follow, follow_items, follow_typed, FollowEnd, FollowEvent, FollowItem, FollowOptions,
+    Resumable,
+};
 pub use frame::ListenFrame;
 pub use listener::{Grant, Listener, Opened, OverflowPolicy};
 pub use op_registry::Caller;

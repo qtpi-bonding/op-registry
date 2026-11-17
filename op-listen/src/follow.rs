@@ -1,10 +1,9 @@
-//! Reconnecting follower for listen streams.
+//! Generic reconnecting followers for listen streams.
 //!
-//! [`follow`] and [`follow_typed`] share one reconnect loop, [`drive`]. It
-//! connects, reconnects after transient failures with capped exponential
-//! backoff, and hands every event to a handler. [`follow`] renders events as
-//! compact JSON lines; [`follow_typed`] decodes frames into [`ListenFrame`]s.
-//! Each reconnection is announced with a marker.
+//! [`follow`] and [`follow_typed`] use the JSON implementation of [`Resumable`],
+//! while [`follow_items`] can follow any item type that supplies a cursor and
+//! stop information. All followers share the same reconnect loop, including
+//! capped backoff, retry limits, and sink handling.
 
 use crate::Backoff;
 use crate::ListenCursor;
@@ -16,25 +15,64 @@ use futures_util::StreamExt;
 use serde_json::{json, Value};
 use tokio::time::Instant;
 
-/// Options for [`follow`] and [`follow_typed`].
+/// Supplies the resume and lifecycle information needed by a follower.
+pub trait Resumable {
+    /// The position a follow resumes from.
+    type Cursor: Clone + Send + 'static;
+
+    /// The position to resume after this item, if it carries one.
+    fn cursor(&self) -> Option<Self::Cursor>;
+
+    /// The code when this item is a stop (the stream ended for good).
+    fn stop_code(&self) -> Option<&str> {
+        None
+    }
+
+    /// Whether this item is a resync snapshot; reported on a reconnection marker.
+    fn resync(&self) -> bool {
+        false
+    }
+}
+
+/// An item or lifecycle event delivered by [`follow_items`].
+pub enum FollowItem<T: Resumable> {
+    /// An item from the stream.
+    Item(T),
+    /// A new connection started; `resync` is true when its first item is a resync snapshot.
+    Reconnected {
+        cursor: Option<T::Cursor>,
+        resync: bool,
+    },
+    /// A stop item was delivered and the follow is ending.
+    Stopped { code: String },
+}
+
+/// Options for the follower functions.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-pub struct FollowOptions {
+pub struct FollowOptions<C = ListenCursor> {
     /// Cursor used for the first connection when no frame has been seen yet.
-    pub initial_cursor: Option<ListenCursor>,
+    pub initial_cursor: Option<C>,
     /// Delay sequence between reconnection attempts.
     pub backoff: Backoff,
     /// Number of consecutive failed attempts before giving up (`None` = forever).
     pub max_retries: Option<u32>,
 }
 
-impl Default for FollowOptions {
-    fn default() -> Self {
+impl<C> FollowOptions<C> {
+    /// Options with no initial cursor, the follower backoff and no retry limit.
+    pub fn new() -> Self {
         Self {
             initial_cursor: None,
             backoff: Backoff::follower(),
             max_retries: None,
         }
+    }
+}
+
+impl Default for FollowOptions<ListenCursor> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -64,12 +102,12 @@ pub enum FollowEvent<S, I> {
 }
 
 /// An event as seen by the handler inside [`drive`].
-enum Event<'a> {
+enum Event<T: Resumable> {
     Reconnected {
-        cursor: Option<ListenCursor>,
+        cursor: Option<T::Cursor>,
         resync: bool,
     },
-    Frame(&'a Value),
+    Frame(T),
     Stopped {
         code: String,
     },
@@ -77,7 +115,7 @@ enum Event<'a> {
 
 /// Outcome of one connection attempt's stream, as seen by the follower.
 enum Attempt {
-    /// The stream delivered a stop frame.
+    /// The stream delivered a stop item.
     Stopped { code: String },
     /// The stream failed or ended; the error explains why.
     Failed {
@@ -87,8 +125,8 @@ enum Attempt {
 }
 
 /// Mutable state carried across connections.
-struct State {
-    cursor: Option<ListenCursor>,
+struct State<C> {
+    cursor: Option<C>,
     connections: u64,
     backoff: Backoff,
     failures: u32,
@@ -100,6 +138,29 @@ fn is_logical(error: &anyhow::Error) -> bool {
 
 fn cursor_of(frame: &Value) -> Option<ListenCursor> {
     frame.get("cursor")?.as_str()?.parse().ok()
+}
+
+/// Raw JSON listen frames: the cursor is the frame's `cursor`, a stop is a
+/// `stop` frame and a resync is a `snapshot` frame with `resync: true`.
+impl Resumable for Value {
+    type Cursor = ListenCursor;
+
+    fn cursor(&self) -> Option<Self::Cursor> {
+        cursor_of(self)
+    }
+
+    fn stop_code(&self) -> Option<&str> {
+        if self.get("frame").and_then(Value::as_str) == Some("stop") {
+            Some(self.get("code").and_then(Value::as_str).unwrap_or_default())
+        } else {
+            None
+        }
+    }
+
+    fn resync(&self) -> bool {
+        self.get("frame").and_then(Value::as_str) == Some("snapshot")
+            && self.get("resync").and_then(Value::as_bool) == Some(true)
+    }
 }
 
 fn compact(value: &Value) -> anyhow::Result<String> {
@@ -142,12 +203,11 @@ where
                     FollowEvent::Reconnected { cursor, resync }
                 }
                 Event::Frame(raw) => {
-                    let frame =
-                        serde_json::from_value::<ListenFrame<S, I>>(raw.clone()).map_err(|e| {
-                            Handled::Failed(coded_error::into_anyhow(ListenError::BadFrame {
-                                reason: e.to_string(),
-                            }))
-                        })?;
+                    let frame = serde_json::from_value::<ListenFrame<S, I>>(raw).map_err(|e| {
+                        Handled::Failed(coded_error::into_anyhow(ListenError::BadFrame {
+                            reason: e.to_string(),
+                        }))
+                    })?;
                     FollowEvent::Frame(frame)
                 }
                 Event::Stopped { code } => FollowEvent::Stopped { code },
@@ -159,9 +219,37 @@ where
     .await
 }
 
+/// Follows arbitrary resumable items and sends lifecycle events to `sink`.
+pub async fn follow_items<T, F, K>(
+    connect: F,
+    mut sink: K,
+    opts: FollowOptions<T::Cursor>,
+) -> anyhow::Result<FollowEnd>
+where
+    T: Resumable + Send + 'static,
+    F: FnMut(
+        Option<T::Cursor>,
+    ) -> BoxFuture<'static, anyhow::Result<BoxStream<'static, anyhow::Result<T>>>>,
+    K: FnMut(FollowItem<T>) -> std::io::Result<()>,
+{
+    drive(
+        connect,
+        |event| {
+            let item = match event {
+                Event::Frame(value) => FollowItem::Item(value),
+                Event::Reconnected { cursor, resync } => FollowItem::Reconnected { cursor, resync },
+                Event::Stopped { code } => FollowItem::Stopped { code },
+            };
+            sink(item).map_err(sink_error)
+        },
+        opts,
+    )
+    .await
+}
+
 /// Renders one event as a compact JSON line for [`follow`]. Only errors from
 /// the sink call are classified as [`Handled`] sink errors.
-fn render<K>(sink: &mut K, event: Event<'_>) -> Result<(), Handled>
+fn render<K>(sink: &mut K, event: Event<Value>) -> Result<(), Handled>
 where
     K: FnMut(&str) -> std::io::Result<()>,
 {
@@ -171,7 +259,7 @@ where
             "cursor": cursor.map(|c| c.to_string()),
             "resync": resync,
         })),
-        Event::Frame(raw) => compact(raw),
+        Event::Frame(raw) => compact(&raw),
         Event::Stopped { code } => compact(&json!({"marker": "stopped", "code": code})),
     }
     .map_err(Handled::Failed)?;
@@ -190,27 +278,28 @@ fn sink_error(error: std::io::Error) -> Handled {
 /// The shared reconnect loop. Calls `handle` for every event; a handler error
 /// is returned immediately, without retry, and a closed sink ends the follow
 /// with [`FollowEnd::SinkClosed`].
-async fn drive<F, H>(
+async fn drive<T, F, H>(
     mut connect: F,
     mut handle: H,
-    opts: FollowOptions,
+    opts: FollowOptions<T::Cursor>,
 ) -> anyhow::Result<FollowEnd>
 where
+    T: Resumable + Send + 'static,
     F: FnMut(
-        Option<ListenCursor>,
-    ) -> BoxFuture<'static, anyhow::Result<BoxStream<'static, anyhow::Result<Value>>>>,
-    H: FnMut(Event<'_>) -> Result<(), Handled>,
+        Option<T::Cursor>,
+    ) -> BoxFuture<'static, anyhow::Result<BoxStream<'static, anyhow::Result<T>>>>,
+    H: FnMut(Event<T>) -> Result<(), Handled>,
 {
     let mut state = State {
-        cursor: opts.initial_cursor,
+        cursor: opts.initial_cursor.clone(),
         connections: 0,
         backoff: opts.backoff.clone(),
         failures: 0,
     };
     loop {
-        let connect_cursor = state.cursor.or(opts.initial_cursor);
+        let connect_cursor = state.cursor.clone().or_else(|| opts.initial_cursor.clone());
         let mut connected_at: Option<Instant> = None;
-        let attempt = match connect(connect_cursor).await {
+        let attempt = match connect(connect_cursor.clone()).await {
             Ok(stream) => {
                 let reconnected = state.connections > 0;
                 state.connections += 1;
@@ -271,54 +360,52 @@ enum Handled {
 
 /// Calls the handler for one event. The single place where handler errors
 /// pass back into the loop.
-fn emit<H>(handle: &mut H, event: Event<'_>) -> Result<(), Handled>
+fn emit<T, H>(handle: &mut H, event: Event<T>) -> Result<(), Handled>
 where
-    H: FnMut(Event<'_>) -> Result<(), Handled>,
+    T: Resumable,
+    H: FnMut(Event<T>) -> Result<(), Handled>,
 {
     handle(event)
 }
 
 /// Drains one connection's stream, passing its events to `handle`.
-async fn run_connection<H>(
-    mut stream: BoxStream<'static, anyhow::Result<Value>>,
-    connect_cursor: Option<ListenCursor>,
+async fn run_connection<T, H>(
+    mut stream: BoxStream<'static, anyhow::Result<T>>,
+    connect_cursor: Option<T::Cursor>,
     reconnected: bool,
-    state: &mut State,
+    state: &mut State<T::Cursor>,
     handle: &mut H,
 ) -> Result<Attempt, Handled>
 where
-    H: FnMut(Event<'_>) -> Result<(), Handled>,
+    T: Resumable + Send + 'static,
+    H: FnMut(Event<T>) -> Result<(), Handled>,
 {
     let mut delivered = false;
     let mut marker_pending = reconnected;
     while let Some(next) = stream.next().await {
-        let frame = match next {
-            Ok(frame) => frame,
+        let item = match next {
+            Ok(item) => item,
             Err(error) => return Ok(Attempt::Failed { error, delivered }),
         };
+        let cursor = item.cursor();
+        let stop_code = item.stop_code().map(str::to_owned);
+        let resync = marker_pending && item.resync();
         if marker_pending {
-            let resync = frame.get("frame").and_then(Value::as_str) == Some("snapshot")
-                && frame.get("resync").and_then(Value::as_bool) == Some(true);
             emit(
                 handle,
                 Event::Reconnected {
-                    cursor: connect_cursor,
+                    cursor: connect_cursor.clone(),
                     resync,
                 },
             )?;
             marker_pending = false;
         }
-        if let Some(cursor) = cursor_of(&frame) {
+        if let Some(cursor) = cursor {
             state.cursor = Some(cursor);
         }
-        emit(handle, Event::Frame(&frame))?;
+        emit(handle, Event::Frame(item))?;
         delivered = true;
-        if frame.get("frame").and_then(Value::as_str) == Some("stop") {
-            let code = frame
-                .get("code")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
+        if let Some(code) = stop_code {
             emit(handle, Event::Stopped { code: code.clone() })?;
             return Ok(Attempt::Stopped { code });
         }
