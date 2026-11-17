@@ -80,7 +80,7 @@ fn log_sink() -> (impl FnMut(Supervised<Tick>) -> std::io::Result<()>, Log) {
     (
         move |event: Supervised<Tick>| {
             let line = match event {
-                Supervised::Opened { resync } => format!("opened:{resync}"),
+                Supervised::Opened => "opened".to_owned(),
                 Supervised::Item(t) => format!("item:{}", t.text),
                 Supervised::Retrying { code } => format!("retrying:{code}"),
                 Supervised::Stopped { code } => format!("stopped:{code}"),
@@ -116,11 +116,11 @@ async fn session_expired_reopens_from_the_cursor() {
     assert_eq!(
         *log.lock().unwrap(),
         vec![
-            "opened:false".to_owned(),
+            "opened".to_owned(),
             "item:a".to_owned(),
             "item:b".to_owned(),
             "retrying:op_listen.session_expired".to_owned(),
-            "opened:false".to_owned(),
+            "opened".to_owned(),
             "item:c".to_owned(),
             "retrying:op_listen.ended".to_owned(),
             format!("stopped:{stop}"),
@@ -175,7 +175,7 @@ async fn a_transient_open_error_retries_with_its_code() {
         *log.lock().unwrap(),
         vec![
             format!("retrying:{transient_code}"),
-            "opened:false".to_owned(),
+            "opened".to_owned(),
             "item:a".to_owned(),
             "retrying:op_listen.ended".to_owned(),
             format!("stopped:{stop}"),
@@ -184,7 +184,28 @@ async fn a_transient_open_error_retries_with_its_code() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn opened_reports_resync() {
+async fn a_quiet_connection_reports_opened() {
+    let (connect, _cursors) = scripted(vec![
+        Step::Steps(vec![StreamStep::Ended]),
+        Step::ConnectErr(denied()),
+    ]);
+    let (sink, log) = log_sink();
+    let stop = code_of(&denied());
+    supervise::<Tick, _, _>(connect, FollowOptions::new(), &[stop], sink)
+        .await
+        .expect("ends with the stop");
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![
+            "opened".to_owned(),
+            "retrying:op_listen.ended".to_owned(),
+            format!("stopped:{stop}"),
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn opened_comes_before_the_first_item_of_each_connection() {
     let (connect, _cursors) = scripted(vec![
         Step::Steps(vec![tick("a", "c1"), StreamStep::Ended]),
         Step::Steps(vec![snapshot("s", "c9"), tick("b", "c10")]),
@@ -196,10 +217,8 @@ async fn opened_reports_resync() {
         .await
         .expect("ends with the stop");
     let log = log.lock().unwrap();
-    let opened: Vec<&String> = log.iter().filter(|l| l.starts_with("opened")).collect();
-    assert_eq!(opened, ["opened:false", "opened:true"]);
-    // Opened comes before the first item of its connection.
-    assert_eq!(log[0], "opened:false");
-    let second = log.iter().position(|l| l == "opened:true").unwrap();
+    assert_eq!(log[0], "opened");
+    assert_eq!(log[1], "item:a");
+    let second = log.iter().rposition(|l| l == "opened").unwrap();
     assert_eq!(log[second + 1], "item:s");
 }
