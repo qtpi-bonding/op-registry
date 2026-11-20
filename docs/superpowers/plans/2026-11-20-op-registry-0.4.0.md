@@ -30,7 +30,7 @@
 ## Global Constraints
 
 - **Builds:** every cargo command goes through `/Users/aicoder/Documents/systematic-action/scripts/cargo-slot cargo ...`. In the Run lines below, `cargo-slot` means that full path. Per task, run only the scoped test targets named in the task plus `cargo-slot cargo check -p <each crate touched> --all-features --tests` (every test target of a touched crate must still compile). The full gates run once, in Task 34: `cargo test --workspace --all-features`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo fmt --check`.
-- **Tests first** in every task: write the failing test, run it red, implement, run it green.
+- **Tests first** in every task: write the failing test, run it red, implement, run it green. Run every red step under a wall-clock limit (`timeout 300 <command>`); a red run that hits the limit counts as red. Tests marked "regression, green at write time" pin today's behaviour and are expected to pass before the implementation.
 - **Release:** all four crates go to 0.4.0 (workspace `version` and every path-dependency `version`). CHANGELOG lists every breaking signature (spec section 7, items 1-16, with the errata applied). README and the v2 spec are updated where behaviour changed.
 - **No auth, identity or signing** in op-registry. `Caller` stays an opaque label. The secrets work is redaction and prompts only.
 - **Dependencies:** `rpassword` 7 is optional, behind feature `prompt`, which is in `default`. New dependencies must be permissive-licensed (MIT, Apache-2.0, BSD, ISC, Zlib, Unicode); confirm the license of the exact version from its crate metadata before adding it. `jsonschema` is a dev-dependency only. `testing` gains tokio `time` only: never tokio `rt` outside op-listen's `detach` (scripts/tokio-rt-guard.sh).
@@ -82,7 +82,7 @@ Spec: KIT-2; STR-4's `CallOptions::max_retries`.
 
 **Files:**
 - Modify: `op-registry/Cargo.toml` (`testing = ["manual", "dep:tokio", "tokio/time"]`; dev tokio adds `test-util`), `op-registry/src/call.rs`, `op-registry/src/testing/mod.rs`, `op-registry/src/testing/codes.rs`, `op-registry/src/testing/offline.rs`, `op-registry/src/testing/refs.rs`
-- Test: `op-registry/tests/testing_kit.rs`
+- Test: `op-registry/tests/testing_kit.rs`, `op-listen/tests/registry.rs` (audit)
 
 **Interfaces:**
 - Produces:
@@ -90,19 +90,22 @@ Spec: KIT-2; STR-4's `CallOptions::max_retries`.
   impl CallOptions { pub max_retries: Option<u32>; pub fn with_max_retries(self, n: u32) -> Self; }  // pub field, default None
   pub(crate) const KIT_STREAM_TIMEOUT: std::time::Duration;   // 10 s, testing/mod.rs
   pub(crate) fn kit_options() -> CallOptions;                   // max_retries = Some(0); Task 3 adds the caller
-  pub(crate) enum Called { Errors(Vec<anyhow::Error>), TimedOut }
+  pub(crate) enum Called { Errors(Vec<anyhow::Error>), TimedOut, NoRuntime }
   pub(crate) async fn call_errors<C: Resolve>(registry: &Registry<C>, ctx: &C, d: &Descriptor, args: Value) -> Called;
   ```
-- `call_errors` on a stream stops at the first item (`Ok` or `Err`) or the end, and wraps the whole call (open included) in `tokio::time::timeout(KIT_STREAM_TIMEOUT, ..)`. Every runner turns `TimedOut` into the problem `"<op>: the stream gave no item and did not end within 10 s; give a Fixture or a context that answers"`. The kit's docs say its stream checks need a tokio runtime with time enabled.
+- `call_errors` on a stream stops at the first item (`Ok` or `Err`) or the end, and wraps the whole call (open included) in `tokio::time::timeout(KIT_STREAM_TIMEOUT, ..)`. Every runner turns `TimedOut` into the problem `"<op>: the stream gave no item and did not end within 10 s; give a Fixture or a context that answers"`.
+- Before a stream call, `call_errors` checks `tokio::runtime::Handle::try_current()`; with no runtime it returns `Called::NoRuntime`, which every runner reports as the problem `"<op>: stream checks need a tokio runtime with time (use #[tokio::test])"` instead of tokio's "no reactor running" panic. The kit docs and the CHANGELOG (Task 34) say so.
+- Existing tests: rewrite `error_codes_check_stream_items` (tests/testing_kit.rs) so the offending error is the stream's **first** item, and make it `#[tokio::test]`. Audit every other kit test that runs a stream op under `futures_executor::block_on` (including `op-listen/tests/registry.rs`) and move it to `#[tokio::test]`. This is not weakening a kit check: the stop-at-first-item rule is the spec.
 
 - [ ] **Step 1: Write the failing tests** in `tests/testing_kit.rs`:
   - `kit_stream_that_never_yields_is_reported_after_timeout`: `#[tokio::test(start_paused = true)]`; a stream op returning `futures_util::stream::pending()`; `assert_error_codes` panics (catch with `std::panic::AssertUnwindSafe(..).catch_unwind()`) with a message containing `"did not end within 10 s"`.
-  - `kit_endless_stream_is_cut_after_first_item`: a stream op returning `stream::repeat(Ok(1))`; `assert_error_codes` returns.
+  - `kit_endless_stream_is_cut_after_first_item`: a stream op returning `stream::iter(0..).map(|i| { assert!(i < 1000, "kit drained the stream"); Ok(i) })`; `assert_error_codes` returns (today it panics instead of hanging).
+  - `kit_stream_without_runtime_reports_problem`: `assert_error_codes` on a stream op under `futures_executor::block_on` panics with `"need a tokio runtime with time"`.
   - `kit_calls_carry_max_retries_zero`: an op records `opts.max_retries`; after `assert_local_ops_offline` it is `Some(0)`.
   - `with_max_retries_sets_field`: `CallOptions::default().with_max_retries(3).max_retries == Some(3)`.
-- [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test testing_kit kit_`
+- [ ] **Step 2: Run red.** `timeout 300 cargo-slot cargo test -p op-registry --all-features --test testing_kit kit_` (the `pending()` test hangs on today's code; hitting the limit is red).
 - [ ] **Step 3: Implement** as in Interfaces. (The test "a failing follower ends after one attempt" needs `follow_stream`; it is in Task 31.)
-- [ ] **Step 4: Run green**, the same command, then `cargo-slot cargo check -p op-registry --all-features --tests` and `cargo-slot cargo tree -p op-listen --no-default-features -e normal,features -i tokio | grep 'tokio feature "rt"'` (expected: no output).
+- [ ] **Step 4: Run green**, `cargo-slot cargo test -p op-registry --all-features --test testing_kit` (whole target, so `error_codes_check_stream_items` runs) and `cargo-slot cargo test -p op-listen --features testkit --test registry`, then `cargo-slot cargo check -p op-registry --all-features --tests` and `cargo-slot cargo tree -p op-listen --no-default-features -e normal,features -i tokio | grep 'tokio feature "rt"'` (expected: no output).
 - [ ] **Step 5: Commit.** `op-registry 0.4: kit stream calls stop at the first item, 10 s timeout, max_retries hint`
 
 ---
@@ -160,9 +163,9 @@ Spec: KIT-1.
 
 - [ ] **Step 1: Write the failing tests.**
   - `kit_runs_cli_only_op_in_error_codes`: a `[cli]` op returning an undeclared code makes `assert_error_codes` panic naming it (today it passes vacuously).
-  - `kit_runs_cli_only_op_offline` and `kit_runs_cli_only_op_for_unknown_ref`: same op shape through `assert_local_ops_offline` and `assert_unknown_ref_not_found`; a recording op proves its body ran with `CallPath::Cli`.
+  - `kit_runs_cli_only_op_offline` and `kit_runs_cli_only_op_for_unknown_ref`: same op shape through `assert_local_ops_offline` and `assert_unknown_ref_not_found`; a recording `CallHook` proves the call ran with `info.path == CallPath::Cli`.
   - `kit_skips_typed_only_op_and_names_it`: a `[typed]` op's body never runs.
-  - `wrong_path_is_an_offence`: unit test on `offence` through a fixture forcing a wrong-path call.
+  - `wrong_path_is_an_offence`: a `#[cfg(test)]` unit test in `testing/codes.rs` calling `offence` on `CallError::WrongPath` and `CallError::WrongShape` errors.
   - `op-listen/tests/registry.rs`: `kit_listen_op_reaches_body`: a `listen_entry` op under `assert_error_codes` with a fixture; its listener's `authorize` is called (no `op_listen.no_caller`).
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test testing_kit` and `cargo-slot cargo test -p op-listen --features testkit --test registry`
 - [ ] **Step 3: Implement.** Fix library tests that now run ops they skipped by adding `Fixture`s.
@@ -214,8 +217,9 @@ Spec: PAR-11 (with erratum 1: `SubjectMeta.absent_ok`).
   #[non_exhaustive] pub enum FieldKind { Scalar, Switch, TriState, Repeated, Map, Json, Input, Ref, SecretFile, Path, Patch }
   ```
 - The derive emits `FieldMeta::new(..).with_flag(..)..` (never a struct literal); a subject field gets `with_subject(SubjectMeta::new(kind).id_only(..))` (`absent_ok` is wired in Task 13). `PathBuf`/`Option<PathBuf>` report `Path`; `Patch<T>` reports `Patch`. Globals emit `with_env` for their env var.
+- Kind precedence (today `der/params/schema.rs:197` checks the ref arm first, so `Vec<Ref>` reports `Ref`): `Vec<T>` is `Repeated` and `Patch<T>` is `Patch` for every `T`, `Ref` included, and those arms come before the ref arm. `FieldKind::Ref` means only `Ref` or `Option<Ref>`. Ref-ness of a `Vec<Ref>`/`Patch<Ref>` is carried by the derive's ref info and `FieldMeta.subject`, never by `kind`. Fix every reader of `kind == Ref` (the kit's subject detection moves to `FieldMeta.subject` in Task 18).
 
-- [ ] **Step 1: Write the failing tests:** `field_meta_new_derives_flag_and_key` (`FieldMeta::new("owner_key", FieldKind::Scalar)` has flag `owner-key`, key `ownerKey`); `pathbuf_field_reports_path_kind`; `patch_field_reports_patch_kind`; `subject_field_meta_names_kind` (`fields()` of a `#[op(subject = "agent", id_only)]` struct has `subject == Some(SubjectMeta { kind: "agent", id_only: true, absent_ok: false })`); `global_field_meta_has_env`.
+- [ ] **Step 1: Write the failing tests:** `field_meta_new_derives_flag_and_key` (`FieldMeta::new("owner_key", FieldKind::Scalar)` has flag `owner-key`, key `ownerKey`); `pathbuf_field_reports_path_kind`; `patch_field_reports_patch_kind`; `vec_ref_field_reports_repeated_kind`; `subject_field_meta_names_kind` (`fields()` of a `#[op(subject = "agent", id_only)]` struct has `subject == Some(SubjectMeta { kind: "agent", id_only: true, absent_ok: false })`); `global_field_meta_has_env`.
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test descriptor --test refs`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green**; `cargo-slot cargo check -p op-registry -p op-listen -p op-status --all-features --tests`; `cargo-slot cargo check -p op-registry --no-default-features --features manual`.
@@ -238,11 +242,11 @@ Spec: OUT-1. **Risk task:** a wrong hoist leaves dangling `$ref`s in every consu
   pub(crate) fn wrap_items(value: Value) -> Value;          // Array(a) → {"items": a}; anything else unchanged
   pub(crate) fn wrap_array_schema(schema: Value) -> Value;  // only when root "type" == "array" (a string, not a list)
   ```
-- `wrap_array_schema` output, key order fixed: `$schema` (moved, if present), `title` (moved), `"type": "object"`, `"properties": {"items": <the array schema minus $schema/title/$defs/definitions>}`, `"required": ["items"]`, `"additionalProperties": false`, `$defs` (moved), `definitions` (moved). Nothing inside the moved maps is rewritten: `#/$defs/T` and `#/definitions/T` pointers stay valid because both maps stay at the root.
+- `wrap_array_schema` output, key order fixed: `$schema` (moved, if present), `title` (moved), `"type": "object"`, `"properties": {"items": <the array schema minus $schema/title/$defs/definitions>}`, `"required": ["items"]`, `"additionalProperties": false`, `$defs` (moved), `definitions` (moved). `#/$defs/T` and `#/definitions/T` pointers stay valid because both maps stay at the root. Root self-references are rewritten: every `"$ref": "#"` becomes `"#/properties/items"` and every `"#/items..."` becomes `"#/properties/items/items..."`, anywhere in the schema (moved maps included), so a recursive newtype `struct Tree(Vec<Tree>)` still points at the array.
 - Value wrap happens where a unary output is erased to `Value` (every build, with or without `schema`). Schema wrap happens in `describe` for every kind except `Stream`. Not wrapped: stream items, `call_typed` (Rust value), `--text`.
 
 - [ ] **Step 1: Write the failing tests.**
-  - `tests/output_schema.rs`: `vec_output_schema_wrapped_with_root_defs` (`Vec<Named>`: root object, `required == ["items"]`, `$defs` at the root, every `$ref` resolves by JSON pointer from the root, with a helper `fn all_refs_resolve(schema: &Value) -> bool`); `recursive_item_refs_resolve`; `nested_vec_refs_resolve` (`Vec<Vec<Named>>`); `definitions_keyed_schema_hoisted` (hand-made `OutputSchema` impl with `definitions`); `optional_vec_root_not_wrapped`; `stream_of_vec_items_not_wrapped`.
+  - `tests/output_schema.rs`: `vec_output_schema_wrapped_with_root_defs` (`Vec<Named>`: root object, `required == ["items"]`, `$defs` at the root, every `$ref` resolves by JSON pointer from the root, with a helper `fn all_refs_resolve(schema: &Value) -> bool`); `recursive_item_refs_resolve`; `nested_vec_refs_resolve` (`Vec<Vec<Named>>`); `definitions_keyed_schema_hoisted` (hand-made `OutputSchema` impl with `definitions`); `root_self_ref_rewritten` (`struct Tree(Vec<Tree>)`: the `$ref` target has `"type": "array"`); `optional_vec_root_not_wrapped`; `stream_of_vec_items_not_wrapped`.
   - `tests/lists.rs`: `cli_follow_all_prints_items_object`; `page_half_prints_items_and_next_cursor`; `call_returns_items_object`; `call_typed_returns_vec`; `value_output_array_is_wrapped`.
   - `tests/mcp.rs`: `call_tool_returns_items_object`.
   - `tests/testing_kit.rs`: `list_get_warning_fires_when_items_differ` and `..._quiet_when_items_match` against the wrapped schema.
@@ -284,7 +288,7 @@ Spec: OUT-6, OUT-3. Moved early (erratum 8).
 Spec: DEC-1, DEC-6.
 
 **Files:**
-- Modify: `op-registry/src/descriptor.rs`, `op-registry/src/registry.rs`, `op-registry/src/call.rs`, `op-registry/src/invoke.rs`, `op-registry/src/mcp/{mod.rs,rmcp.rs}`, `op-registry/src/manual.rs` (JSON `audiences`), `op-registry-derive/src/ops/{parse.rs,expand.rs}`
+- Modify: `op-registry/src/descriptor.rs`, `op-registry/src/registry.rs` (`OpSpec`, `respec` copies `more_audiences`), `op-registry/src/call.rs`, `op-registry/src/invoke.rs`, `op-registry/src/mcp/{mod.rs,rmcp.rs}`, `op-registry/src/manual.rs` (JSON `audiences`), `op-registry-derive/src/ops/{parse.rs,expand.rs}`
 - Create: `op-registry/tests/ops_ui/ops_audience_empty_is_a_compile_error.rs`, `ops_audience_twice_is_a_compile_error.rs` (+ `.stderr`)
 - Test: `op-registry/tests/mcp.rs`, `op-registry/tests/rmcp.rs`, `op-registry/tests/manual.rs`
 
@@ -292,7 +296,7 @@ Spec: DEC-1, DEC-6.
 - Produces: `OpSpec.more_audiences: Vec<Audience>`; `Descriptor.audiences: Vec<Audience>` (primary first, no duplicates); `CallOptions` private `serving: Option<Audience>` set by `call_tool`; `CallInfo.audience = opts.serving.unwrap_or(primary)`. `tool_list(reg, a)` lists when `audiences.contains(&a)`; `call_tool` refuses `outside_audience` only when not contained. `RegistryServer::with_ctx_factory` and `with_instructions` exactly as spec DEC-6; the factory runs once per `tools/call`; `get_info` returns the instructions.
 - Derive: `audience: agent` or `audience: [agent, owner]`; errors "audience needs at least one of agent, owner, dev", "audience `owner` is given twice".
 
-- [ ] **Step 1: Write the failing tests:** `multi_audience_op_in_both_tool_lists_and_callable`; `call_info_audience_is_server_on_mcp_primary_elsewhere` (recording `CallHook`, MCP/CLI/typed); `agent_only_op_outside_owner_server`; `manual_json_has_audiences`; rmcp: `ctx_factory_runs_per_call` (two concurrent calls, counter is 2, each sees its own ctx); `instructions_in_get_info`; `new_server_unchanged`; two UI tests.
+- [ ] **Step 1: Write the failing tests:** `multi_audience_op_in_both_tool_lists_and_callable`; `call_info_audience_is_server_on_mcp_primary_elsewhere` (recording `CallHook`, MCP/CLI/typed); `agent_only_op_outside_owner_server`; `list_halves_share_audiences` (both halves of a `[agent, owner]` list pair are in the owner `tool_list`); `manual_json_has_audiences`; rmcp: `ctx_factory_runs_per_call` (two concurrent calls, counter is 2, each sees its own ctx); `instructions_in_get_info`; `new_server_unchanged`; two UI tests.
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test mcp --test rmcp --test manual --test ops_ui`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green**, same command; crate `check --tests`.
@@ -305,22 +309,22 @@ Spec: DEC-1, DEC-6.
 Spec: OUT-2.
 
 **Files:**
-- Modify: `op-registry/src/shape.rs`, `op-registry/src/registry.rs` (`describe`), `op-registry/src/mcp/{mod.rs,rmcp.rs}`, `op-registry/src/manual.rs` (`ManualOutput` schema hand-written as object)
+- Modify: `op-registry/src/shape.rs`, `op-registry/src/registry.rs` (`describe`), `op-registry/src/mcp/{mod.rs,rmcp.rs}`, `op-registry/src/manual.rs` (a hand `impl schemars::JsonSchema for ManualOutput` returning an object schema, replacing its `cfg_attr` derive; `OutputSchema` is the blanket impl over `JsonSchema`), `op-registry/src/testing/help.rs` (the list/get comparison runs on the schemas before `mark_object_root`, and `inline` drops `definitions` as well as `$defs`)
 - Test: `op-registry/tests/mcp.rs`, `op-registry/tests/rmcp.rs`, `op-registry/tests/manual.rs`
 
 **Interfaces:**
 - Consumes: `shape.rs` (Task 6).
 - Produces (`pub(crate)`):
   ```rust
-  pub(crate) enum RootClass { Object, Any, NonObject }
-  pub(crate) fn root_class(schema: &Value) -> RootClass;     // Any: no type, no combinator, no $ref, no properties
+  pub(crate) enum RootClass { Object, Any, NonObject(&'static str) }   // NonObject("scalar" | "nullable" | "mixed")
+  pub(crate) fn root_class(schema: &Value) -> RootClass;     // Any: no type, no combinator, no $ref, no properties; a root $ref is classed by its target
   pub(crate) fn mark_object_root(schema: &mut Value);        // root oneOf/anyOf whose every branch is an object gets "type": "object"
   ```
   A branch is an object when it has `"type": "object"`, or `properties`, or is a `$ref` (followed into the root `$defs`/`definitions`, cycle-safe) to one, or an `allOf` with an object member. A missing schema (feature `schema` off) is `Any`.
 - `ToolSpec.output_schema` is `Some` only for `Object`. The rmcp adapter returns `CallToolResult::structured(value)` for a JSON object value, else a success with one text block holding the compact JSON and no structured content.
 
-- [ ] **Step 1: Write the failing tests:** `tagged_enum_output_has_object_root_and_structured_content`; `ref_newtype_variants_classed_object`; `u32_output_has_no_output_schema_and_text_content`; `value_output_no_schema_structured_when_object`; `manual_op_schema_root_is_object`.
-- [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test mcp --test rmcp --test manual`
+- [ ] **Step 1: Write the failing tests:** `tagged_enum_output_has_object_root_and_structured_content`; `ref_newtype_variants_classed_object`; `u32_output_has_no_output_schema_and_text_content`; `value_output_no_schema_structured_when_object`; `manual_op_schema_root_is_object`; `root_class_names_scalar_nullable_mixed`; `tagged_enum_list_get_no_spurious_warning` (testing_kit: a list whose item is the `get` op's tagged enum gives no "items differ" warning).
+- [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test mcp --test rmcp --test manual --test testing_kit`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green**, same command; crate `check --tests`.
 - [ ] **Step 5: Commit.** `op-registry 0.4: object roots for either-or outputs; MCP structured content only for objects`
@@ -350,8 +354,9 @@ Spec: REL-1, REL-6. The base for Tasks 11-12.
   - `one_of_over_optional_ref_and_switch` (`id: Option<Ref>`, `all: bool`): each alone accepted, both and neither refused; `{"all": false, "id": "x"}` accepted.
   - `requires_if_with_vec_target`; `requires_if_list_targets`; `one_of_optional_over_switch_and_two_options`.
   - `schema_agrees_with_validate`: for each relation fixture a table of inputs (including `false`, `[]`, `null` members); `jsonschema::is_valid(schema, input) == (from_json + validate).is_ok()`.
+  - `vec_ref_member_schema_agrees` (a `one_of` over `ids: Vec<Ref>` and `all: bool`: `{"ids": []}` is absent in both the schema and `validate`); `present_schema` takes the kind from Task 5's precedence, so a `Vec<Ref>` member gets the `minItems` fragment.
   - `schema_with_single_non_one_of_constraint_is_valid`; `flattened_any_of_survives_absorb`.
-  - Two UI tests.
+  - UI: `op_params_relation_on_plain_field_is_a_compile_error` ("field `x`: relations need a field that can be absent (Option, Vec, BTreeMap, bool, Patch); `x` is a plain `T`"), `op_params_one_of_needs_two_members_is_a_compile_error` ("one_of group `g` needs two members").
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test params_relations --test params_ui`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green**, same command plus `--test testing_kit`; crate `check --tests`.
@@ -365,7 +370,19 @@ Spec: REL-2, REL-3, REL-4, REL-5, ERR-3.
 
 **Files:**
 - Modify: `op-registry/src/params/{mod.rs,rt.rs}`, `op-registry-derive/src/params/{attrs.rs,clap_gen.rs,json_gen.rs,schema.rs,mod.rs}`, `op-registry/src/manual.rs` (library-code table de-duplicated by code)
-- Create: one `params_ui` fixture per derive error in REL-2, REL-3, REL-4, REL-5 (names `op_params_<what>_is_a_compile_error.rs`)
+- Create (`params_ui/`, each with `.stderr`), file name → message:
+  - `op_params_required_on_plain_is_a_compile_error.rs` → "field `x`: already required"
+  - `op_params_required_on_switch_map_or_patch_is_a_compile_error.rs` → "field `x`: required applies to a plain value, Vec or Option"
+  - `op_params_required_with_default_is_a_compile_error.rs` → "field `x`: required cannot take default, required_unless or a one_of/at_least_one group"
+  - `op_params_relation_unknown_target_is_a_compile_error.rs` → "field `x`: unknown target `y`"
+  - `op_params_relation_target_without_presence_is_a_compile_error.rs` → "field `x`: target `y` cannot be absent, so it cannot be a relation target"
+  - `op_params_relation_names_itself_is_a_compile_error.rs` → "field `x`: a relation cannot name the field itself"
+  - `op_params_required_unless_on_plain_is_a_compile_error.rs` → "field `x`: required_unless needs an Option, Vec or map field"
+  - `op_params_conflicts_and_required_unless_same_target_is_a_compile_error.rs` → "field `x`: conflicts_with and required_unless both name `y`"
+  - `op_params_at_least_one_needs_two_members_is_a_compile_error.rs` → "at_least_one group `g` needs two members"
+  - `op_params_group_two_kinds_is_a_compile_error.rs` → "group `g` is used with two kinds (one_of and at_least_one)"
+  - `op_params_dotted_target_not_flatten_is_a_compile_error.rs` → "field `x`: `y` in `y.z` is not a #[op(flatten)] field"
+  - `op_params_dotted_target_empty_segment_is_a_compile_error.rs` → "field `x`: `y..z` has an empty segment"
 - Test: `op-registry/tests/params_relations.rs`, `op-registry/tests/manual.rs`
 
 **Interfaces:**
@@ -378,7 +395,7 @@ Spec: REL-2, REL-3, REL-4, REL-5, ERR-3.
   ```
 - Derive attrs: `#[op(required)]` on `Vec<T>`/`Option<T>` (clap `.required(true)`, tri-state via a required `ArgGroup`; schema `required` plus `minItems: 1` for Vec; JSON absent/`[]`/`null` is `.missing`); `conflicts_with = ".."|[..]`; `required_unless = ".."|[..]`; `at_least_one = "group"`; dotted targets `"common.dry_run"` whose first segment is a flatten field, validated by `Presence::present(&self.common.dry_run)` and clap's leaf arg id; a flattened leaf's fragment built at run time from `<Group as OpParams>::fields()`.
 
-- [ ] **Step 1: Write the failing tests** (every surface; CLI exit 2): `required_vec_shapes`; `required_option_bool_missing_on_mcp_is_missing` (today becomes `false`); `message_submit_shape` (`--to` required unless `--signed-file`, conflicts with it); `confirm_fingerprint_required_unless_dry_run`; `at_least_one_graph_search` (`--name`/`--file`/`--node-kind`); `dotted_required_unless_across_flatten` (structmux `EditCommon { owner_key_file, dry_run }` in `AddDevice`, on `confirm_fingerprint` and on the group's own `owner_key_file`); `schema_agrees_with_validate` extended with these fixtures; `manual.rs` `library_code_table_lists_each_code_once`; one UI test per derive error.
+- [ ] **Step 1: Write the failing tests** (every surface; CLI exit 2): `required_vec_shapes`; `required_option_bool_missing_on_mcp_is_missing` (today becomes `false`); `message_submit_shape` (`--to` required unless `--signed-file`, conflicts with it); `confirm_fingerprint_required_unless_dry_run`; `at_least_one_graph_search` (`--name`/`--file`/`--node-kind`); `dotted_required_unless_across_flatten` (structmux `EditCommon { owner_key_file, dry_run }` in `AddDevice`, on `confirm_fingerprint` and on the group's own `owner_key_file`); `schema_agrees_with_validate` extended with these fixtures; `manual.rs` `library_code_table_lists_each_code_once`; the twelve UI tests above.
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test params_relations --test params_ui --test manual`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green**, same command; crate `check --tests`.
@@ -392,7 +409,7 @@ Spec: REL-7.
 
 **Files:**
 - Modify: `op-registry-derive/src/params/{mod.rs,attrs.rs}` (parse struct-level `#[op(..)]`), `op-registry/src/params/mod.rs` (`usage` documented, not hidden), `op-registry/src/cli/run.rs`
-- Create: `op-registry/tests/params_ui/op_params_unknown_struct_key_is_a_compile_error.rs`, `op_params_validate_without_path_is_a_compile_error.rs` (+ `.stderr`)
+- Create: `op-registry/tests/params_ui/op_params_unknown_struct_key_is_a_compile_error.rs` (the existing unknown-key message), `op_params_validate_without_path_is_a_compile_error.rs` ("`validate` takes a function path: #[op(validate = check)]") (+ `.stderr`)
 - Test: `op-registry/tests/params_relations.rs`, `op-registry/tests/runner.rs`
 
 **Interfaces:**
@@ -445,7 +462,7 @@ Spec: PAR-2, PAR-3.
 **Interfaces:**
 - Produces: `#[op(kind = "..", scope = [..])]` and `#[op(kind = "..", id_only)]` on non-subject `Ref`, `Option<Ref>`, `Vec<Ref>`; `#[op(kind = "place", id_only, clearable)] home_place: Patch<Ref>` (`Set` has a slot; `Keep`/`Clear` none; `--clear-home-place`; JSON `null` is `Clear`). Derive errors: "the scope of non-subject ref `x` names the ref `y`; refs resolve non-subjects first, so only the subject's scope may name a ref"; "the subject is not clearable". The old "id_only and scope belong to the subject" error is deleted with its fixture, if one exists.
 
-- [ ] **Step 1: Write the failing tests:** `non_subject_ref_scope_reaches_resolver`; `non_subject_id_only_skips_resolver`; `id_without_blueprint_has_no_blueprint_scope_key` (archegraph); `patch_ref_set_resolves_keep_clear_do_not`; `patch_ref_clear_flag_and_json_null`; two UI tests.
+- [ ] **Step 1: Write the failing tests:** `non_subject_ref_scope_reaches_resolver`; `non_subject_id_only_skips_resolver`; `id_without_blueprint_has_no_blueprint_scope_key` (archegraph); `patch_ref_set_resolves_keep_clear_do_not`; `patch_ref_clear_flag_and_json_null`; `check_id_runs_for_non_subject_id_only` (also on a `Patch<Ref>` `Set` with `id_only`); `patch_ref_member_schema_agrees` (add a `Patch<Ref>` relation fixture to Task 10's `schema_agrees_with_validate` table: `null` is present, absent is absent); two UI tests.
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test refs --test params_ui`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green**, same command; crate `check --tests`.
@@ -459,13 +476,13 @@ Spec: PAR-6, PAR-8.
 
 **Files:**
 - Modify: `op-registry-derive/src/params/{attrs.rs,clap_gen.rs,json_gen.rs,schema.rs}`, `op-registry-derive/src/globals.rs`, `op-registry/src/params/rt.rs` (`enum_value(name, ignore_case)`; `from_str` decode helper)
-- Create: `params_ui` fixtures for: `from_str` with `value_enum`; `from_str` on `Ref`; `sample` on a non-string field; `ignore_case` without `value_enum`
+- Create (`params_ui/`, + `.stderr`): `op_params_from_str_with_value_enum_is_a_compile_error.rs` → "field `x`: from_str and value_enum are exclusive"; `op_params_from_str_on_ref_is_a_compile_error.rs` → "field `x`: from_str does not apply to Ref, Json, Input, SecretFile or bool"; `op_params_sample_on_non_string_is_a_compile_error.rs` → "field `x`: sample applies only to a string-valued field"; `op_params_ignore_case_without_value_enum_is_a_compile_error.rs` → "field `x`: ignore_case needs value_enum"
 - Test: `op-registry/tests/params_flags.rs`
 
 **Interfaces:**
 - Produces: `#[op(from_str)]` on `T`, `Option<T>`, `Vec<T>` and in `OpGlobals` (`T: FromStr`, `T::Err: Display`); failure is `op_registry.usage.invalid` naming the flag/key with the parser's message (a `secret` field: "invalid value"); schema `{"type": "string"}`; `default` is a `T` expression. `#[op(sample = "..")]` on any string-valued field adds `"examples": [".."]`. `#[op(value_enum, ignore_case)]`: clap `.ignore_case(true)`, JSON case-insensitive, schema keeps canonical names. Derive errors from spec PAR-6/PAR-8.
 
-- [ ] **Step 1: Write the failing tests:** `socket_addr_from_str_cli_and_json`; `vec_of_custom_grant_from_str`; `global_principal_id_from_str`; `bad_from_str_is_exit_2_with_parser_message`; `secret_from_str_failure_says_invalid_value`; `sample_puts_examples_in_schema`; `ignore_case_status_cli_and_json` (`IN_PROGRESS`, `"In-Progress"`; schema lists `in-progress`); four UI tests.
+- [ ] **Step 1: Write the failing tests:** `socket_addr_from_str_cli_and_json`; `vec_of_custom_grant_from_str`; `global_principal_id_from_str`; `bad_from_str_is_exit_2_with_parser_message`; `secret_from_str_failure_says_invalid_value`; `sample_puts_examples_in_schema`; `ignore_case_status_cli_and_json` (`IN_PROGRESS`, `"In-Progress"`; schema lists `in-progress`); the four UI tests above.
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test params_flags --test params_ui`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green**, same command; crate `check --tests`.
@@ -479,14 +496,14 @@ Spec: PAR-7, PAR-9, PAR-10 (erratum 2).
 
 **Files:**
 - Modify: `op-registry-derive/src/params/{attrs.rs,clap_gen.rs,mod.rs}` (struct-level `allow_hyphen`)
-- Create: `params_ui` fixtures: `allow_hyphen` on a switch; `hide_default` without `default`; `env` on a `Vec` (`op_params_env_on_vec_is_a_compile_error.rs`)
+- Create (`params_ui/`, + `.stderr`): `op_params_allow_hyphen_on_switch_is_a_compile_error.rs` and `op_params_allow_hyphen_on_map_is_a_compile_error.rs` → "field `x`: allow_hyphen applies to a field that takes a value" (a tri-state is covered by the switch case's message); `op_params_hide_default_without_default_is_a_compile_error.rs` → "field `x`: hide_default needs default"; `op_params_env_on_vec_is_a_compile_error.rs` → "field `x`: env applies to a scalar, path, enum, from_str value or switch"
 - Delete: `op-registry/tests/params_ui/op_params_env_on_params_is_a_compile_error.{rs,stderr}`
 - Test: `op-registry/tests/params_flags.rs`
 
 **Interfaces:**
 - Produces: `#[op(allow_hyphen)]` per field and on the struct (every valued field of that struct, not flattened groups); literal `default` shown as `[default: 50]` (enum: its clap name; empty string and computed defaults not shown); `#[op(hide_default)]`; `#[op(env = "X")]` on plain/optional scalars and switches: clap `.env(X)` + `.hide_env_values(true)` (`secret`: `.hide_env(true)`), same decode as the flag, `FieldMeta.env = Some("X")`, never read on typed/json/MCP. No push-time check on paths.
 
-- [ ] **Step 1: Write the failing tests:** `allow_hyphen_value_minus_one`; `struct_allow_hyphen_reply_message`; `without_allow_hyphen_fails_as_before`; `help_shows_literal_defaults` (`[default: 50]`, `[default: syntax]`); `empty_and_hidden_defaults_not_shown_schema_keeps_default`; `env_fills_absent_flag`; `flag_wins_over_env`; `malformed_env_value_is_exit_2`; `help_shows_env_var`; `env_ignored_off_cli_value_must_be_passed` (same op over `call` without the key is `.missing` while the env var is set); `empty_env_param_is_absent`; three UI tests.
+- [ ] **Step 1: Write the failing tests:** `allow_hyphen_value_minus_one`; `struct_allow_hyphen_reply_message`; `without_allow_hyphen_fails_as_before`; `help_shows_literal_defaults` (`[default: 50]`, `[default: syntax]`); `empty_and_hidden_defaults_not_shown_schema_keeps_default`; `env_fills_absent_flag`; `flag_wins_over_env`; `malformed_env_value_is_exit_2`; `help_shows_env_var`; `env_ignored_off_cli_value_must_be_passed` (same op over `call` without the key is `.missing` while the env var is set); `empty_env_param_is_absent`; the four UI tests above.
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test params_flags --test params_ui`
 - [ ] **Step 3: Implement.** For `empty_env_param_is_absent`, confirm clap 4 treats an empty env value as absent; if it does not, filter it in the derive.
 - [ ] **Step 4: Run green**, same command; crate `check --tests`.
@@ -499,8 +516,8 @@ Spec: PAR-7, PAR-9, PAR-10 (erratum 2).
 Spec: ERR-2, OUT-7. OUT-7 lands before SEC-1 (erratum 8).
 
 **Files:**
-- Modify: `op-registry/src/registry.rs` (`error_mapper`, `merge`), `op-registry/src/invoke.rs`, `op-registry/src/call.rs`, `op-registry/src/mcp/mod.rs`, `op-registry/src/cli/run.rs`, `op-listen/src/*` and `op-status/src/*` call sites of `call_stream`/`call_typed`
-- Test: `op-registry/tests/call.rs`
+- Modify: `op-registry/src/registry.rs` (`error_mapper`, `merge`), `op-registry/src/invoke.rs`, `op-registry/src/call.rs`, `op-registry/src/mcp/mod.rs`, `op-registry/src/cli/run.rs`, `op-listen/src/*` and `op-status/src/*` call sites of `call_stream`/`call_typed`, notably `op-listen/src/detach.rs` (`detached_connect` maps the open and each item with `.map_err(CallFailure::into_coded)`, so the class survives for the follower's Logical-vs-retry decision and the text stays redacted)
+- Test: `op-registry/tests/call.rs`, `op-listen/tests/detach.rs`
 
 **Interfaces:**
 - Produces:
@@ -512,8 +529,8 @@ Spec: ERR-2, OUT-7. OUT-7 lands before SEC-1 (erratum 8).
   ```
 - The mapper is applied once in the pipeline to resolution and op errors and to each stream item error, before `on_error`, strict codes, the CLI exit and every surface's output; never to decode/validate errors. `merge` keeps the receiver's mapper.
 
-- [ ] **Step 1: Write the failing tests:** `mapper_rewrites_io_error_on_every_surface` (CLI error line code, `call`, `call_tool`, `call_typed`); `hook_on_error_sees_mapped_error`; `usage_error_not_mapped`; `merge_keeps_receiver_mapper`; `typed_error_redacts_secret_param`; `typed_failure_downcasts_to_op_error`; `into_coded_keeps_code` (`facts_anyhow(&f.into_coded()).code` is the op's code); `stream_open_and_item_errors_are_call_failures`.
-- [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test call --test registry`
+- [ ] **Step 1: Write the failing tests:** `mapper_rewrites_io_error_on_every_surface` (CLI error line code, `call`, `call_tool`, `call_typed`); `hook_on_error_sees_mapped_error`; `usage_error_not_mapped`; `merge_keeps_receiver_mapper`; `typed_error_redacts_secret_param`; `typed_failure_downcasts_to_op_error`; `into_coded_keeps_code` (`facts_anyhow(&f.into_coded()).code` is the op's code); `stream_open_and_item_errors_are_call_failures`; op-listen `detached_logical_item_error_ends_with_code_redacted` (a Logical item error holding a secret param through `detached_connect` ends the follow with its code, no retry, and the text lacks the secret).
+- [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test call --test registry` and `cargo-slot cargo test -p op-listen --features testkit --test detach`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green**, same command; `cargo-slot cargo check -p op-registry -p op-listen -p op-status --all-features --tests`.
 - [ ] **Step 5: Commit.** `op-registry 0.4: one error mapper per registry; typed and stream calls return CallFailure`
@@ -536,7 +553,7 @@ Spec: KIT-3 (erratum 1), KIT-4.
   pub(crate) struct KitDir { /* path under std::env::temp_dir(), "op-registry-kit-<pid>-<n>"; removed on Drop */ }
   pub(crate) fn kit_args(d: &Descriptor, fields: &[FieldMeta], sampled: Value, dir: &KitDir) -> Value;  // Path → "<dir>/<key>"; SecretFile → a temp file holding "op-registry-kit-sample\n"
   ```
-  Descriptors do not carry `FieldMeta`; read them from the erased entry, adding `pub(crate) fields: fn() -> Vec<FieldMeta>` to it if it has no field list yet. `assert_unknown_ref_not_found` runs on every op whose `FieldMeta.subject` is `Some` and not `absent_ok` (including `id_only`, server kinds, optional subjects, streams), seeds `id` with the random ref, expects a Logical code ending `.not_found`. Any sampled call failing with `op_registry.usage.*` is the problem "<op>: the sampled arguments did not decode (<code>: <message>); give a Fixture". Fixtures always win.
+  Descriptors do not carry `FieldMeta`; read them from the erased entry's existing `Entry.param_fields` (under `testing`; not the `fields` span fn). `assert_unknown_ref_not_found` runs on every op whose `FieldMeta.subject` is `Some` and not `absent_ok` (including `id_only`, server kinds, optional subjects, streams), seeds `id` with the random ref, expects a Logical code ending `.not_found`. Any sampled call failing with `op_registry.usage.*` is the problem "<op>: the sampled arguments did not decode (<code>: <message>); give a Fixture". Fixtures always win.
 
 - [ ] **Step 1: Write the failing tests:** one per sampler rule (`examples[0]`; `const: true`; `minItems`; `minProperties`; `not null`; `if`/`then`; `not allOf` avoided; seeded keys kept first); `one_of_id_or_all_samples_one_member`; `required_vec_gets_one_item`; `pathbuf_output_lands_in_kit_dir` (and the dir is gone afterwards); `from_str_with_sample_decodes`; `from_str_without_sample_reported_did_not_decode`; `id_only_subject_answering_value_fails_not_found`; `id_only_subject_answering_not_found_passes`; `absent_ok_subject_not_run`; `optional_subject_run_with_id_set`.
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test testing_kit`
@@ -556,16 +573,16 @@ Spec: KIT-6, SEC-8 (erratum 5), MAN-6, MAN-7.
 
 **Interfaces:**
 - Consumes: `Paths` (Task 2), `root_class` (Task 9), `FieldMeta.subject` (Task 5).
-- `assert_parity`/`parity_report` keep their signatures; `Reach`/`ParityLine`/`Mount` unchanged. Per op and surface (cli, mcp, each mount as json): reachable exactly when declared. Allowed absences: not declared; a stream on mcp or a mount ("stream"); a list page half on cli. Problems: declared but absent; present but not declared; `root_class == NonObject` on an op reachable on mcp or json ("<op>: the output root is <scalar|nullable|mixed>; give it an object form"); an mcp-reachable op with a `SecretFile` field whose input-schema property has no `inline` object form ("<op>: --<flag> is a SecretFile on mcp; add #[op(secret_inline)] or leave mcp out of paths"). The reason "cli only: <reason>" is gone.
+- `assert_parity`/`parity_report` keep their signatures; `Reach`/`ParityLine`/`Mount` unchanged. Per op and surface (cli, mcp, each mount as json): reachable exactly when declared. Allowed absences: not declared; a stream on mcp or a mount ("stream"); a list page half on cli. Problems: declared but absent; present but not declared; `root_class == NonObject(what)` on an op reachable on mcp or json ("<op>: the output root is <what>; give it an object form"); an mcp-reachable op with a `SecretFile` field whose root input-schema property `/properties/<FieldMeta.key>` has no `oneOf` object branch with `"required": ["inline"]` (read the root property only, never relation fragments inside `oneOf`/`anyOf`/`allOf`) ("<op>: --<flag> is a SecretFile on mcp; add #[op(secret_inline)] or leave mcp out of paths"). The reason "cli only: <reason>" is gone.
 - MAN-6: `assert_help_complete` keys the one-wording rule for `--id` on (flag, subject kind). MAN-7: `walk` skips only the root command's own `help`/`version`.
 
-- [ ] **Step 1: Write the failing tests:** `parity_declared_but_absent`; `parity_present_but_not_declared`; `parity_allows_stream_and_page_half`; `value_output_passes_root_check`; `u32_output_fails_root_check`; `optional_vec_output_fails_parity_root`; `mcp_secret_file_fails_parity`; `mcp_secret_inline_passes`; `cli_only_secret_file_passes`; `id_wording_per_subject_kind_passes`; `two_id_wordings_for_one_kind_fail`; `leaf_version_param_without_help_fails`.
+- [ ] **Step 1: Write the failing tests:** `parity_declared_but_absent`; `parity_present_but_not_declared`; `parity_allows_stream_and_page_half`; `value_output_passes_root_check`; `u32_output_fails_root_check`; `optional_vec_output_fails_parity_root`; `mcp_secret_file_fails_parity`; `mcp_secret_inline_passes`; `cli_only_secret_file_passes`; `id_wording_per_subject_kind_passes`; `two_id_wordings_for_one_kind_fail`; `leaf_version_param_without_help_fails`; `parity_report_names_declared_paths`.
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test testing_kit --test paths`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green**, same command; `cargo-slot cargo test -p op-registry --all-features` (whole crate, once, to give the pilot a clean base); `cargo-slot cargo test -p op-listen --features testkit`; `cargo-slot cargo test -p op-status --all-features`.
 - [ ] **Step 5: Commit.** `op-registry 0.4: exact parity, object output roots, SecretFile on MCP; help kit per subject kind and leaf --version`
 
-> **PILOT COMMIT.** The commit closing Task 19 is the archegraph pilot pin. Record its sha in the orchestrator's integration list. It carries everything archegraph exercises (DEC-5, OUT-2, PAR-1, REL-1, PAR-2, OUT-3, ERR-2, DEC-6, OUT-4, REL-4, plus PAR-8, PAR-9, REL-3, DEC-1, OUT-1, OUT-6, OUT-7, PATH-1, PAR-11 and KIT-1..4, KIT-6). Breaking changes still to come in Part B that may touch the pilot: FB-1 extras/fallback signatures, `Redactor` (`&self`), `Outcome::Err.exit`, `Exit.on`, `Io` non-exhaustive, `SecretSentinel`, op-listen `supervise`. The pilot re-pins to the final 0.4.0 commit before the tag; fixes the pilot finds go into Part B.
+> **PILOT COMMIT.** The commit closing Task 19 is the archegraph pilot pin. Record its sha in the orchestrator's integration list. It carries everything archegraph exercises (DEC-5, OUT-2, PAR-1, REL-1, PAR-2, OUT-3, ERR-2, DEC-6, OUT-4, REL-4, plus PAR-8, PAR-9, REL-3, DEC-1, OUT-1, OUT-6, OUT-7, PATH-1, PAR-11 and KIT-1..4, KIT-6). Breaking changes still to come in Part B that may touch the pilot: FB-1 extras/fallback signatures, `Redactor` (`&self`), `Outcome::Err.exit`, `Exit.on`, `Io` non-exhaustive, `SecretSentinel`, op-listen `supervise`. Part B also moves archegraph's committed goldens again: MAN-1 (Task 24: common codes printed once, per-op code tables), MAN-2 and MAN-5 (Task 33: "Other commands", "Rules:" in help and manual for `verify`'s `conflicts_with` and `graph-search`'s `at_least_one`); and DEC-2's header `errors = [..]` (Task 24), which archegraph wants for its shared enums, arrives after the pilot. So the manual snapshot and help goldens re-render once more at the final re-pin. REL-2 (`required` on Vec/Option, Task 11) is in the pilot. The pilot re-pins to the final 0.4.0 commit before the tag; fixes the pilot finds go into Part B.
 
 ---
 
@@ -645,14 +662,14 @@ Spec: FB-5.
 Spec: DEC-3, DEC-4.
 
 **Files:**
-- Modify: `op-registry-derive/src/ops/{parse.rs,expand.rs}`, `op-registry/src/registry.rs` (`OpSpec.needs_globals`), `op-registry/src/descriptor.rs` (`needs_globals`), `op-registry/src/cli/{parse.rs,tree.rs}`, `op-registry/src/manual.rs`
-- Create: `ops_ui/ops_allow_attr_on_entry_is_a_compile_error.rs`, `ops_globals_twice_is_a_compile_error.rs`, `ops_globals_non_ident_is_a_compile_error.rs` (+ `.stderr`)
+- Modify: `op-registry-derive/src/ops/{parse.rs,expand.rs}`, `op-registry/src/registry.rs` (`OpSpec.needs_globals`, copied by `respec`), `op-registry/src/descriptor.rs` (`needs_globals`), `op-registry/src/cli/{parse.rs,tree.rs}`, `op-registry/src/manual.rs`
+- Create (`ops_ui/`, + `.stderr`): `ops_allow_attr_on_entry_is_a_compile_error.rs` → "only doc comments and #[cfg(..)] are allowed on an op entry"; `ops_globals_twice_is_a_compile_error.rs` → "`globals` names `x` twice"; `ops_globals_non_ident_is_a_compile_error.rs` → "`globals` takes field names of the globals struct"
 - Test: `op-registry/tests/ops_macro.rs`, `op-registry/tests/runner.rs`, `op-registry/tests/manual.rs`
 
 **Interfaces:**
 - Produces: `#[cfg(..)]` on an `ops!` entry is copied onto its push block, its param/output aliases and its marker(s); other attributes fail with "only doc comments and #[cfg(..)] are allowed on an op entry". Entry key `globals: [gait_dir]` → `OpSpec.needs_globals: Vec<&'static str>` (rust names) → `Descriptor.needs_globals: Vec<String>` (long flags). `cli::parse` checks needs after selecting the op (value source `CommandLine` or `EnvVariable`); missing is `op_registry.usage.missing`, exit 2, message "`init` needs --gait-dir (or GAIT_DIR)", reaching `on_usage_error`; `--help`/`--version` never check. `cli::command` panics for an unknown global name or a switch/tri-state ("a needed global must take a value"). Help ends with "Needs: --gait-dir (or GAIT_DIR)."; the manual prints the same line.
 
-- [ ] **Step 1: Write the failing tests:** `cfg_off_entry_absent_and_no_marker`; `cfg_on_entry_present`; `missing_need_exits_2_with_message`; `env_meets_need`; `empty_env_does_not_meet_need`; `flag_before_or_after_verb_meets_need`; `parse_alone_returns_need_failure`; `help_works_without_need`; `unknown_need_panics_at_command`; `need_reaches_usage_hook`; `manual_prints_needs_line`; three UI tests.
+- [ ] **Step 1: Write the failing tests:** `cfg_off_entry_absent_and_no_marker`; `cfg_on_entry_present`; `missing_need_exits_2_with_message`; `env_meets_need`; `empty_env_does_not_meet_need`; `flag_before_or_after_verb_meets_need`; `parse_alone_returns_need_failure`; `help_works_without_need`; `unknown_need_panics_at_command`; `switch_need_panics_at_command` ("a needed global must take a value"); `need_reaches_usage_hook`; `list_halves_share_needs`; `manual_prints_needs_line`; the three UI tests above.
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test ops_macro --test runner --test manual --test ops_ui`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green**, same command; crate `check --tests`.
@@ -665,8 +682,8 @@ Spec: DEC-3, DEC-4.
 Spec: DEC-2, ERR-1, MAN-1.
 
 **Files:**
-- Modify: `op-registry-derive/src/ops/{parse.rs,expand.rs}`, `op-registry/src/registry.rs` (`common_errors`, `merge`, `OpSpec.error_exits`), `op-registry/src/descriptor.rs` (`Exit.on`), `op-registry/src/cli/run.rs` (`Outcome::Err.exit`), `op-registry/src/exit.rs`, `op-registry/src/manual.rs`, `op-registry/src/testing/codes.rs`
-- Create: `ops_ui/ops_errors_twice_in_header_is_a_compile_error.rs`, `ops_exit_number_twice_is_a_compile_error.rs`, `ops_exit_on_without_string_is_a_compile_error.rs` (+ `.stderr`)
+- Modify: `op-registry-derive/src/ops/{parse.rs,expand.rs}`, `op-registry/src/registry.rs` (`common_errors`, `merge`, `OpSpec.error_exits`; `respec` copies `error_exits` to both list halves while still clearing ok `exits`), `op-registry/src/descriptor.rs` (`Exit.on`), `op-registry/src/cli/run.rs` (`Outcome::Err.exit`), `op-registry/src/exit.rs`, `op-registry/src/manual.rs`, `op-registry/src/testing/codes.rs`
+- Create (`ops_ui/`, + `.stderr`): `ops_errors_twice_in_header_is_a_compile_error.rs` → "header key `errors` is given twice"; `ops_exit_number_twice_is_a_compile_error.rs` → "exit 3 is given twice"; `ops_exit_on_without_string_is_a_compile_error.rs` → "`on` takes an error code string"
 - Test: `op-registry/tests/ops_macro.rs`, `op-registry/tests/registry.rs`, `op-registry/tests/runner.rs`, `op-registry/tests/manual.rs`, `op-registry/tests/testing_kit.rs`
 
 **Interfaces:**
@@ -674,7 +691,7 @@ Spec: DEC-2, ERR-1, MAN-1.
 - `exits: { 3 => "timed out" on "grorg.client.wait_timeout" }` → `OpSpec.error_exits: Vec<(u8, &'static str, &'static str)>`; `Exit { code, meaning, on: Option<String> }`; `Outcome::Err { op, error, message, exit }`; `Outcome::exit_code()` returns it. `OkExit` is needed only with ok exits; error exits allowed on lists. CLI: matching code exits with the number, error line still written. `assert_exit_table` fails an `on` code not among the op's codes.
 - Manual: "## Common codes" once after the exit table; op tables list own codes then "Also the common codes."; exit line "- 3: timed out (on grorg.client.wait_timeout)"; the code table shows 3 for that code. `render_json` gains `commonCodes`; each op's `codes` holds its own.
 
-- [ ] **Step 1: Write the failing tests:** `header_code_accepted_by_strict_for_every_op`; `code_in_header_and_entry_listed_once`; `merge_unions_common_errors`; `merge_class_clash_panics`; `error_exit_code_exits_3_with_error_line`; `post_run_sees_exit_3`; `other_code_exits_by_class`; `manual_error_exit_line_and_table`; `manual_common_codes_once_and_json_common_codes`; `undeclared_on_code_fails_exit_table`; three UI tests.
+- [ ] **Step 1: Write the failing tests:** `header_code_accepted_by_strict_for_every_op`; `code_in_header_and_entry_listed_once`; `merge_unions_common_errors`; `merge_class_clash_panics`; `error_exit_code_exits_3_with_error_line`; `post_run_sees_exit_3`; `other_code_exits_by_class`; `manual_error_exit_line_and_table`; `manual_common_codes_once_and_json_common_codes`; `undeclared_on_code_fails_exit_table`; `list_error_exit_applies_to_both_halves`; the three UI tests above.
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test ops_macro --test registry --test runner --test manual --test testing_kit --test ops_ui`
 - [ ] **Step 3: Implement**; re-render `tests/manual_snapshot.md`.
 - [ ] **Step 4: Run green**, same command; `cargo-slot cargo check -p op-registry -p op-listen -p op-status --all-features --tests`.
@@ -695,16 +712,19 @@ Spec: SEC-1, SEC-2 (the `CallOptions::redact` half), SEC-3 (erratum 6). **Risk t
   ```rust
   impl CallOptions { pub fn redact(&self, bytes: &[u8]); }   // adds to the call's handle; a CallOptions clone shares it
   ```
-- The pipeline makes one redactor per call (params' secrets, plus the CLI's secret globals) and puts the same handle in: `CallOptions`, `Invocation`, `CallInfo`, the notice wrapper (always wrapped when a sink exists; redacts at send time), `CallFailure` (`call`, `call_tool`, typed, streams), `tool_error`, the CLI error line (redacts at write time), `Outcome::Err.message` (computed after the op). Usage errors before params exist keep the argv scrub. Docs: "register a secret before you print anything that may contain it".
+- The pipeline makes one redactor per call (params' secrets, plus the CLI's secret globals) and puts the same handle in: `CallOptions`, `Invocation`, `CallInfo`, the notice wrapper (always wrapped when a sink exists; redacts at send time), `CallFailure` (`call`, `call_tool`, typed, streams), `tool_error`, the CLI error line (redacts at write time), `Outcome::Err.message` (computed after the op), the `UsageFailure.message` handed to `on_usage_error` for an op-side usage error (Task 12; computed after the op), and `call_stream_typed_owned` (Task 26). Usage errors before params exist keep the argv scrub.
+- **Nested calls (coordinator ruling):** the redactor travels in `opts`. The pipeline never replaces the handle already in `opts`; it extends that handle with the call's params' secrets (and the CLI's secret globals) and uses it. An op that calls another op with a clone of its `opts` therefore shares one handle: a secret the inner op registers is redacted in the outer op's error line, notices and `Outcome` message too. A caller that reuses one `CallOptions` for unrelated calls only gets more redaction. Docs: "register a secret before you print anything that may contain it".
 
 - [ ] **Step 1: Write the failing tests** in `tests/redaction.rs`, all with an op that declares no secrets and calls `opts.redact(b"s3cr3t-value")`, then sends a notice and fails with an error, both containing it:
   - `cli_error_line_notice_and_outcome_lack_secret` (recording `RunHooks`).
   - `hook_on_error_redact_lacks_secret` (recording `CallHook`, `info.redact(..)`).
   - `call_failure_display_and_redacted_message_lack_secret`; `call_tool_and_tool_error_lack_secret`; `call_typed_failure_lacks_secret`; `stream_item_error_lacks_secret` (via `call_stream`).
   - Review Focus: `mapped_error_is_redacted` (an ERR-2 mapper that formats the secret into a new error); `stream_item_error_on_cli_is_redacted`; `typed_caller_sink_notice_is_redacted`; `options_clone_shares_redactor` (op clones `opts` into a helper before calling `redact` on the original).
+  - `op_usage_error_hook_message_redacted`: the op calls `opts.redact(s)` and returns `usage(..)` whose message holds `s`; the `on_usage_error` message lacks it.
+  - `nested_call_secret_redacted_in_outer_error`: the outer op calls an inner op (via `call_typed` with `opts.clone()`); the inner op calls `opts.redact(s)` and fails with `s`; the outer op sends a notice and fails with an error wrapping the inner one; the CLI error line, the notice line and `Outcome::Err.message` lack `s`.
   - `clone_before_add_sees_it_detached_does_not`.
-  - SEC-3: `secret_file_with_trailing_newline_redacted` (stdin `"sk-abc123\n"`, error containing `sk-abc123`); `secret_with_blank_lines_redacted` (`"\n\nsk-abc123\n\n"`).
-- [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test redaction`
+  - SEC-3, regression, green at write time (not part of the red run): `secret_file_with_trailing_newline_redacted` (stdin `"sk-abc123\n"`, error containing `sk-abc123`); `secret_with_blank_lines_redacted` (`"\n\nsk-abc123\n\n"`).
+- [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test redaction` (every new test except the two SEC-3 regression tests fails).
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green**, same command plus `--test secrets --test call --test mcp --test runner`; `cargo-slot cargo check -p op-registry -p op-listen -p op-status --all-features --tests`.
 - [ ] **Step 5: Commit.** `op-registry 0.4: one shared redactor per call reaching every output site; CallOptions::redact`
@@ -722,7 +742,7 @@ Spec: OUT-8.
 **Interfaces:**
 - Produces `call_stream_typed_owned` exactly as spec OUT-8 (holds both `Arc`s; same path check, validate and hook around the open as `call_stream_typed`).
 
-- [ ] **Step 1: Write the failing test** `owned_stream_survives_dropped_handles`: `tokio::spawn` the stream after dropping the caller's registry and context `Arc`s; it yields every item. Also `owned_stream_checks_path` (`[cli]` op is `wrong_path`).
+- [ ] **Step 1: Write the failing test** `owned_stream_survives_dropped_handles`: `tokio::spawn` the stream after dropping the caller's registry and context `Arc`s; it yields every item. Also `owned_stream_checks_path` (`[cli]` op is `wrong_path`) and `owned_stream_item_error_redacted` (an item error holding a secret the op registered with `opts.redact` lacks it).
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test call owned_`
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run green**, same command.
@@ -758,7 +778,7 @@ Spec: SEC-4, SEC-5.
 **Files:**
 - Modify: `op-registry-derive/src/params/{attrs.rs,clap_gen.rs,mod.rs}`, `op-registry/src/params/rt.rs`, `op-registry/src/call.rs` (`CallOptions` private `prompter`), `op-registry/src/cli/run.rs` (puts the prompter into `CallOptions`)
 - Create: `params_ui/op_params_prompt_on_option_is_a_compile_error.rs`, `op_params_prompt_on_non_secret_file_is_a_compile_error.rs` (+ `.stderr`)
-- Test: `op-registry/tests/secrets.rs`
+- Test: `op-registry/tests/secrets.rs`, `op-registry/tests/secrets_off.rs`
 
 **Interfaces:**
 - Consumes: `Prompter`, `Io::with_prompter` (Task 27); shared `Redactor` (Task 25); `FieldMeta.prompt` (Task 5).
@@ -768,10 +788,10 @@ Spec: SEC-4, SEC-5.
   ```
   On the CLI with a prompter: reads one line, registers it (and its trimmed form via `add`), returns it without the line ending; empty answer → `None`; read error → `None` plus one notice "cannot read from the terminal: ..". Everywhere else `None`.
 
-- [ ] **Step 1: Write the failing tests** (fake prompter recording its calls): `missing_prompted_flag_asks_with_label`; `prompted_bytes_reach_op_and_are_redacted`; `no_prompter_is_missing_exit_2`; `key_file_dash_reads_stdin_without_asking`; `given_path_does_not_ask`; `json_without_key_is_missing_and_prompter_unused` (also MCP and typed); `prompt_empty_answer_is_missing`; `prompt_secret_on_cli_returns_value_and_redacts`; `prompt_secret_off_cli_is_none` (`call`, `call_tool`, `call_typed`); `prompt_secret_no_prompter_is_none`; `prompt_secret_empty_answer_is_none`; `prompt_secret_read_error_sends_notice`; two UI tests.
-- [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test secrets --test params_ui`
+- [ ] **Step 1: Write the failing tests** (fake prompter recording its calls): `missing_prompted_flag_asks_with_label`; `prompted_bytes_reach_op_and_are_redacted`; `no_prompter_is_missing_exit_2`; `key_file_dash_reads_stdin_without_asking`; `given_path_does_not_ask`; `json_without_key_is_missing_and_prompter_unused` (also MCP and typed); `prompt_empty_answer_is_missing`; `prompt_secret_on_cli_returns_value_and_redacts`; `prompt_secret_off_cli_is_none` (`call`, `call_tool`, `call_typed`); `prompt_secret_no_prompter_is_none`; `prompt_secret_empty_answer_is_none`; `prompt_secret_read_error_sends_notice`; `prompter_read_error_is_invalid` (a prompted field whose prompter errors is `.invalid` "cannot read from the terminal: ..", exit 2); in `secrets_off.rs`, `#[cfg(all(feature = "secrets", not(feature = "prompt")))]` `prompted_field_without_prompt_feature_is_missing` (`Io::std()`-style run with no prompter installed is `.missing`, and `prompt_secret` is `None`); two UI tests: `op_params_prompt_on_option_is_a_compile_error` → "an optional secret is not prompted; ask with CallOptions::prompt_secret in the op", `op_params_prompt_on_non_secret_file_is_a_compile_error` → "field `x`: prompt applies only to a plain SecretFile".
+- [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-registry --all-features --test secrets --test params_ui` and `cargo-slot cargo test -p op-registry --no-default-features --features secrets --test secrets_off`
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run green**, same command; `cargo-slot cargo check -p op-registry --no-default-features --features manual`; crate `check --tests`.
+- [ ] **Step 4: Run green**, same commands; `cargo-slot cargo check -p op-registry --no-default-features --features manual`; crate `check --tests`.
 - [ ] **Step 5: Commit.** `op-registry 0.4: #[op(prompt)] secrets asked on a terminal; CallOptions::prompt_secret`
 
 ---
@@ -853,7 +873,7 @@ Spec: STR-5, STR-6.
 - [ ] **Step 1: Write the failing tests:** `op-status/tests/ops.rs`: `remote_snapshot_returned_unchanged_by_status_get`; `merge_with_group_from_group_summary_passes`. op-listen: the existing `follow`/`follow_typed` tests must run with `--no-default-features`.
 - [ ] **Step 2: Run red.** `cargo-slot cargo test -p op-status --all-features --test ops` and `cargo-slot cargo test -p op-listen --no-default-features --test follow --test follow_typed`
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run green**, same commands; `cargo-slot cargo check -p op-listen --no-default-features`; `cargo-slot cargo check -p op-status`; `cargo-slot cargo check -p op-status --features listen`; `cargo-slot cargo tree -p op-listen --no-default-features -e normal,features -i tokio | grep 'tokio feature "rt"'` (no output); `cargo-slot cargo tree -p op-listen --no-default-features -i op-registry` (fails: not in the tree).
+- [ ] **Step 4: Run green**, same commands; `cargo-slot cargo check -p op-listen --no-default-features`; `cargo-slot cargo check -p op-status`; `cargo-slot cargo check -p op-status --features listen`; `cargo-slot cargo tree -p op-listen --no-default-features -e normal,features -i tokio | grep 'tokio feature "rt"'` (no output); `cargo-slot cargo tree -p op-listen --no-default-features -e normal -i op-registry` (fails: not in the normal-dependency tree; `-e normal` excludes op-listen's op-registry dev-dependency).
 - [ ] **Step 5: Commit.** `op-listen 0.4: registry feature; op-status remote_snapshot and GROUP_SUMMARY`
 
 ---
@@ -885,16 +905,11 @@ Spec: section 7, DOC-1, DOC-2, DOC-3, PAR-2's README line.
 - Modify: `Cargo.toml` (`workspace.package.version = "0.4.0"`), `op-registry/Cargo.toml`, `op-listen/Cargo.toml`, `op-status/Cargo.toml` (path-dependency `version = "0.4.0"`), `Cargo.lock`, `CHANGELOG.md`, `README.md`, `op-listen/README.md`, `op-status/README.md` (if it names `supervise` or the summary), `docs/superpowers/specs/2026-11-20-op-registry-v2-design.md`, `scripts/check.sh` (its coded-error pin guard names `ffeaf39..`, but the pin is `de21d22e31baff78eae7d4ca817b87430bff1f81`; correct the guard)
 
 **Content:**
-- CHANGELOG `## 0.4.0`: "Breaking. All four crates move to 0.4.0." Then "### Breaking signatures and types": spec section 7 items 1-16 verbatim in substance, plus: `SubjectMeta { kind, id_only, absent_ok }`; `#[op(subject, absent_ok)]` (not `new`); `call_typed`/`call_stream_typed`/`call_stream` return `CallFailure` (use `.map_err(CallFailure::into_coded)?`); `Io` gains `stdin_tty` and `prompter`; `default` features gain `prompt`. "### Additive": spec section 7's list. "### Behaviour changes": spec section 7's list, plus erratum 4 (`follow_stream` retries a failed open), the `paths: [cli]` meaning change ("write `[cli, typed]` for the old meaning"), and "a param `env` is read on the CLI only; typed, JSON and MCP callers pass the value".
+- CHANGELOG `## 0.4.0`: "Breaking. All four crates move to 0.4.0." Then "### Breaking signatures and types": spec section 7 items 1-16 verbatim in substance, plus: `SubjectMeta { kind, id_only, absent_ok }`; `#[op(subject, absent_ok)]` (not `new`); `call_typed`/`call_stream_typed`/`call_stream` return `CallFailure` (use `.map_err(CallFailure::into_coded)?`); `Io` gains `stdin_tty` and `prompter`; `default` features gain `prompt`. "### Additive": spec section 7's list. "### Behaviour changes": spec section 7's list, plus erratum 4 (`follow_stream` retries a failed open), the `paths: [cli]` meaning change ("write `[cli, typed]` for the old meaning"), "a param `env` is read on the CLI only; typed, JSON and MCP callers pass the value", "the kit's stream checks need a tokio runtime with time (`#[tokio::test]`); under another executor they report a problem", and "a nested op call shares the outer call's redactor through `opts`".
 - README (op-registry): paths subsets; `{"items"}`; object roots; relations incl. presence, dotted targets, `required` on Vec/Option, struct `validate`; optional and `absent_ok` subjects, `check_id`; "an absent optional scope member is left out of the `Scope`" (PAR-2); `from_str`, `sample`, `allow_hyphen`, `ignore_case`, defaults in help, `env` (CLI only); secrets: `opts.redact`, `#[op(secret)]` key-file paths, "register a secret before you print anything that may contain it", "a secret-reading op is not a list", prompts and `prompt_secret`, the `prompt` feature; `cli::select` host pattern (FB-5); `set_error_mapper`; error exits; common errors; DOC-2 (the `schema` feature is not additive across a workspace build; build `gait-min` with `cargo build -p gait-min`).
 - op-listen README (DOC-1): `CliContext::caller()` must return `Some` for listen ops on the CLI; `status_registry` needs a `StatusSource`; `listen_entry_following` and the marker override (grorg's `afterSeq` example); STR-2's rule (only `stop_code()` ends a follow; per-topic stops are item variants; Position-style frames advance the cursor); `stop_codes` is for mid-stream errors; the `registry` feature.
 - v2 spec (DOC-3): every item in spec DOC-3's list, with "PATH-1" text for section 4.4's path rule and `absent_ok` naming.
 
 - [ ] **Step 1: Bump versions and write the docs** as above.
-- [ ] **Step 2: Run the full gates**, once each, output to a file, then grep it:
-  - `cargo-slot cargo fmt --check`
-  - `cargo-slot cargo clippy --workspace --all-targets --all-features -- -D warnings`
-  - `cargo-slot cargo test --workspace --all-features`
-  - `PATH=/Users/aicoder/Documents/systematic-action/scripts:$PATH bash scripts/check.sh` (runs the pin and tokio guards and the per-feature checks through cargo-slot)
-  Expected: all pass; `check: ok`. Fix only failures and rerun only the failing command.
+- [ ] **Step 2: Run the full gates once**, output to a file, then grep it: `PATH=/Users/aicoder/Documents/systematic-action/scripts:$PATH bash scripts/check.sh > <scratch>/check.log 2>&1`. With its pin guard corrected, `check.sh` runs the pin and tokio guards, `fmt --check`, `clippy --workspace --all-targets --all-features -- -D warnings`, `test --workspace --all-features`, and the op-listen/op-status feature matrix (including `test -p op-listen --no-default-features`, STR-5), all through cargo-slot. Expected: `check: ok`. Fix only failures and rerun only the failing command.
 - [ ] **Step 3: Commit.** `op-registry 0.4.0: version, CHANGELOG, README, v2 spec`
