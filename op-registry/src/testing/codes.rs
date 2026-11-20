@@ -17,7 +17,7 @@ pub struct Fixture<'a> {
 /// list op. Every `op_registry.*` code is allowed on top of these.
 fn declared_codes<C: Sync>(registry: &Registry<C>, d: &Descriptor) -> Vec<String> {
     let mut codes: Vec<String> = d.errors.iter().map(|e| e.code.clone()).collect();
-    if d.kind == OpKind::ListAll && d.path.len() >= 2 {
+    if d.kind == OpKind::ListAll {
         codes.push(crate::list::too_many_code(registry.pillar(), &d.path));
     }
     codes

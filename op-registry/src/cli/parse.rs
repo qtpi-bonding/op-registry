@@ -412,6 +412,7 @@ mod tests {
         registry.group("thing", "Things.");
         let mut spec = OpSpec::<Filter, String>::new("thing list", "List.");
         spec.page_size = 7;
+        spec.follow_page = Some(500);
         registry.push_list(
             spec,
             |_c: &Ctx,

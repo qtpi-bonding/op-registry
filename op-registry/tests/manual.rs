@@ -182,6 +182,20 @@ fn too_many_listed_for_list_ops() {
 }
 
 #[test]
+fn one_word_list_cap_code_in_manual() {
+    let mut r = fixture();
+    r.push_list(
+        OpSpec::<Filter, Item>::new("graph-search", "Search the graph."),
+        page_op,
+    );
+    let text = render(&r, &sample_manual()).unwrap();
+    assert!(
+        text.contains("| fix.graph_search.too_many | logical | 65 |"),
+        "{text}"
+    );
+}
+
+#[test]
 fn manual_shows_paths_line() {
     let mut r = fixture();
     let mut owner = OpSpec::<Filter, Item>::new("concept sign", "Sign it.");

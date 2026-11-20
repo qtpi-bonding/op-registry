@@ -46,6 +46,8 @@ pub struct OpSpec<P, O> {
     pub cap: usize,
     /// The default page size of a paged list.
     pub page_size: u32,
+    /// The page size the follow-all half asks for; `None` is `page_size`.
+    pub follow_page: Option<u32>,
     /// Whether the op declares an unpaged form.
     pub unpaged: bool,
     /// Extra `key: value` lines for the text rendering of the parameters.
@@ -74,6 +76,7 @@ impl<P, O> OpSpec<P, O> {
             cursor: false,
             cap: 10_000,
             page_size: 100,
+            follow_page: None,
             unpaged: false,
             fields: None,
             ok_exit: None,
@@ -102,6 +105,7 @@ impl<P, O> OpSpec<P, O> {
             cursor: self.cursor,
             cap: self.cap,
             page_size: self.page_size,
+            follow_page: self.follow_page,
             unpaged: self.unpaged,
             fields,
             ok_exit: None,

@@ -53,6 +53,7 @@ pub struct Entry {
     pub cursor: Option<LitBool>,
     pub cap: Option<LitInt>,
     pub page_size: Option<LitInt>,
+    pub follow_page: Option<LitInt>,
     pub unpaged: Option<LitBool>,
 }
 
@@ -236,6 +237,7 @@ impl Parse for Entry {
         let mut default_key: Option<Ident> = None;
         let mut paths: Option<Vec<Ident>> = None;
         let (mut cursor, mut cap, mut page_size, mut unpaged) = (None, None, None, None);
+        let mut follow_page: Option<(Ident, LitInt)> = None;
         let mut cursor_key = None;
         let mut list_only: Vec<Ident> = Vec::new();
         let mut seen: Vec<String> = Vec::new();
@@ -380,6 +382,16 @@ impl Parse for Entry {
                     list_only.push(key.clone());
                     page_size = Some(body.parse::<LitInt>()?);
                 }
+                "follow_page" => {
+                    let n = body.parse::<LitInt>()?;
+                    if n.base10_parse::<u32>()? == 0 {
+                        return Err(syn::Error::new(
+                            n.span(),
+                            "`follow_page` must be at least 1",
+                        ));
+                    }
+                    follow_page = Some((key.clone(), n));
+                }
                 "unpaged" => {
                     list_only.push(key.clone());
                     unpaged = Some(body.parse::<LitBool>()?);
@@ -390,7 +402,7 @@ impl Parse for Entry {
                         format!(
                             "unknown key `{other}`: expected params, output, item, op, local, \
                              stream, list, access, audience, errors, fields, exits, text, hidden, \
-                             default, paths, cursor, cap, page_size or unpaged"
+                             default, paths, cursor, cap, page_size, follow_page or unpaged"
                         ),
                     ))
                 }
@@ -454,6 +466,11 @@ impl Parse for Entry {
                     format!("`{key}:` is not allowed on a `list:` entry: a list pair has no text or extra exits"),
                 ));
             }
+        } else if let Some((key, _)) = &follow_page {
+            return Err(syn::Error::new(
+                key.span(),
+                "`follow_page` applies only to a `list:` entry",
+            ));
         } else if let Some(key) = list_only.first() {
             return Err(syn::Error::new(
                 key.span(),
@@ -497,6 +514,7 @@ impl Parse for Entry {
             cursor,
             cap,
             page_size,
+            follow_page: follow_page.map(|(_, n)| n),
             unpaged,
         })
     }

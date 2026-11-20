@@ -115,6 +115,9 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
     if let Some(n) = &e.page_size {
         sets.push(quote!(__spec.page_size = #n;));
     }
+    if let Some(n) = &e.follow_page {
+        sets.push(quote!(__spec.follow_page = ::core::option::Option::Some(#n);));
+    }
     if let Some(words) = &e.paths {
         let surfaces = words.iter().map(|w| {
             let v = match w.to_string().as_str() {

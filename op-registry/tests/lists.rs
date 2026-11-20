@@ -27,6 +27,8 @@ struct ListConcepts {
 struct Ctx {
     pages: Vec<Vec<&'static str>>,
     stuck: bool,
+    /// Every page is empty and names a fresh next cursor.
+    endless_empty: bool,
     seen: Mutex<Vec<PageRequest>>,
 }
 impl op_registry::Resolve for Ctx {}
@@ -53,7 +55,9 @@ fn serve(
                     .collect()
             })
             .unwrap_or_default();
-        let next_cursor = if ctx.stuck {
+        let next_cursor = if ctx.endless_empty {
+            Some(format!("c{}", index + 1))
+        } else if ctx.stuck {
             Some("c1".to_owned())
         } else if index + 1 < ctx.pages.len() {
             Some(format!("c{}", index + 1))
@@ -173,7 +177,7 @@ async fn empty_list_is_empty_array_and_empty_page() {
 }
 
 #[tokio::test]
-async fn repeated_cursor_fails() {
+async fn repeated_cursor_is_coded() {
     let r = registry(|_| {});
     let c = Ctx {
         pages: vec![vec!["a"], vec!["b"]],
@@ -181,8 +185,78 @@ async fn repeated_cursor_fails() {
         ..Ctx::default()
     };
     let err = call(&r, &c, "concept_list", json!({})).await.unwrap_err();
-    assert_eq!(err.to_string(), "page cursor repeated");
-    assert_eq!(coded_error::facts_anyhow(&err).code, "unknown");
+    assert_eq!(err.to_string(), "page cursor c1 repeated");
+    let facts = coded_error::facts_anyhow(&err);
+    assert_eq!(facts.code, "op_registry.list.cursor_repeated");
+    assert_eq!(facts.class, ErrorClass::Logical);
+}
+
+#[tokio::test]
+async fn empty_pages_forever_end_with_too_many() {
+    let r = registry(|s| s.cap = 3);
+    let c = Ctx {
+        endless_empty: true,
+        ..Ctx::default()
+    };
+    let err = call(&r, &c, "concept_list", json!({})).await.unwrap_err();
+    assert_eq!(coded_error::facts_anyhow(&err).code, "fix.concept.too_many");
+    // Cap 3: the fourth empty page is the one that fails.
+    assert_eq!(c.seen.lock().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn follow_all_uses_follow_page() {
+    let r = registry(|s| {
+        s.page_size = 2;
+        s.follow_page = Some(500);
+    });
+    let c = ctx(&[&["a"], &["b"]]);
+    call(&r, &c, "concept_list", json!({})).await.unwrap();
+    assert!(c.seen.lock().unwrap().iter().all(|req| req.limit == 500));
+    // The page half takes its limit as given.
+    let c = ctx(&[&["a"]]);
+    call(&r, &c, "concept_list_page", json!({"limit": 2}))
+        .await
+        .unwrap();
+    assert_eq!(c.seen.lock().unwrap()[0].limit, 2);
+}
+
+fn one_word_registry() -> Registry<Ctx> {
+    let mut r: Registry<Ctx> = Registry::new();
+    r.set_pillar("fix");
+    let mut spec = OpSpec::<ListConcepts, Concept>::new("graph-search", "Search the graph.");
+    spec.cap = 2;
+    r.push_list(spec, serve);
+    r
+}
+
+#[tokio::test]
+async fn one_word_list_registers_and_caps() {
+    let r = one_word_registry();
+    assert!(r.get("graph_search").is_some());
+    assert!(r.get("graph_search_page").is_some());
+    let c = ctx(&[&["a", "b"], &["c"]]);
+    let err = call(&r, &c, "graph_search", json!({})).await.unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(&err).code,
+        "fix.graph_search.too_many"
+    );
+}
+
+#[cfg(feature = "testing")]
+#[test]
+fn one_word_list_cap_code_is_accepted_by_assert_error_codes() {
+    use op_registry::testing::{assert_error_codes, Fixture};
+    let r = one_word_registry();
+    let c = ctx(&[&["a", "b"], &["c"]]);
+    futures_executor::block_on(assert_error_codes(
+        &r,
+        &c,
+        &[Fixture {
+            op: "graph_search",
+            args: json!({}),
+        }],
+    ));
 }
 
 #[test]
@@ -254,14 +328,6 @@ fn page_params_roundtrip_json_and_cli() {
         coded_error::facts_anyhow(&err).code,
         "op_registry.usage.missing"
     );
-}
-
-#[test]
-#[should_panic(expected = "list op needs a noun")]
-fn list_without_noun_panics() {
-    let mut r: Registry<Ctx> = Registry::new();
-    r.set_pillar("fix");
-    r.push_list(OpSpec::<ListConcepts, Concept>::new("list", "List."), serve);
 }
 
 #[test]

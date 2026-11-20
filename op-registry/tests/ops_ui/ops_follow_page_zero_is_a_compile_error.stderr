@@ -1,0 +1,5 @@
+error: `follow_page` must be at least 1
+  --> tests/ops_ui/ops_follow_page_zero_is_a_compile_error.rs:23:93
+   |
+23 |     "a list" => { params: P, item: O, access: reads, audience: agent, list: f, follow_page: 0 },
+   |                                                                                             ^

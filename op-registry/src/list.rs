@@ -52,6 +52,16 @@ impl CodedError for TooMany {
     }
 }
 
+/// Errors raised while following a list's pages.
+#[derive(Debug, thiserror::Error, coded_error::CodedError)]
+#[coded(namespace = "op_registry.list")]
+#[non_exhaustive]
+pub enum ListError {
+    #[error("page cursor {cursor} repeated")]
+    #[coded(code = "cursor_repeated", class = Logical)]
+    CursorRepeated { cursor: String },
+}
+
 /// The item type of a list: serialisable, and with a schema when the
 /// `schema` feature is on (so `Vec<T>` and `Page<T>` have one too).
 #[cfg(feature = "schema")]
@@ -178,13 +188,13 @@ impl<P: OpParams> OpParams for PageParams<P> {
 }
 
 /// The code a list op fails with past its cap: `<pillar>.<noun>.too_many`,
-/// the noun being the last word before the verb.
+/// the noun being the last word before the verb, or the only word.
 pub(crate) fn too_many_code(pillar: &str, path: &[String]) -> String {
-    let noun = path[path.len() - 2].replace('-', "_");
+    let noun = path[path.len().saturating_sub(2)].replace('-', "_");
     format!("{pillar}.{noun}.too_many")
 }
 
-/// Follows pages of `limit` items until the cursor ends, up to `cap` items.
+/// Follows pages of `limit` items until the cursor ends, up to `cap` items; an empty page with a next cursor counts as one.
 async fn follow_all<C, P, T, F>(
     f: &F,
     ctx: &C,
@@ -200,10 +210,15 @@ where
     let mut items = Vec::new();
     let mut cursor: Option<String> = None;
     let mut seen = HashSet::new();
+    let mut empty_pages = 0;
     loop {
         let page = f(ctx, params.clone(), PageRequest { limit, cursor }).await?;
+        let advances = page.next_cursor.as_deref().is_some_and(|c| !c.is_empty());
+        if page.items.is_empty() && advances {
+            empty_pages += 1;
+        }
         items.extend(page.items);
-        if items.len() > cap {
+        if items.len() + empty_pages > cap {
             return Err(coded_error::into_anyhow(TooMany {
                 code: too_many.0,
                 cap,
@@ -213,7 +228,9 @@ where
         match page.next_cursor {
             Some(next) if !next.is_empty() => {
                 if !seen.insert(next.clone()) {
-                    return Err(anyhow::anyhow!("page cursor repeated"));
+                    return Err(coded_error::into_anyhow(ListError::CursorRepeated {
+                        cursor: next,
+                    }));
                 }
                 cursor = Some(next);
             }
@@ -230,8 +247,7 @@ impl<C: Resolve + 'static> Registry<C> {
     ///
     /// # Panics
     ///
-    /// Panics when the path has no noun word ("list op needs a noun"), when
-    /// no pillar is set ("set_pillar before push_list"), when `page_size` is 0
+    /// Panics when no pillar is set ("set_pillar before push_list"), when `page_size` is 0
     /// ("page_size must be > 0"), and on the build-time
     /// checks of [`Registry::push_op`].
     pub fn push_list<P, T, F>(&mut self, spec: OpSpec<P, T>, f: F)
@@ -244,18 +260,13 @@ impl<C: Resolve + 'static> Registry<C> {
             + 'static,
     {
         let path = words(spec.path);
-        assert!(
-            path.len() >= 2,
-            "list op needs a noun (path {:?})",
-            spec.path
-        );
         assert!(!self.pillar().is_empty(), "set_pillar before push_list");
         assert!(spec.page_size > 0, "page_size must be > 0");
         let name = derive_name(&path);
         let code: &'static str = Box::leak(too_many_code(self.pillar(), &path).into_boxed_str());
 
         let f = Arc::new(f);
-        let (cap, page_size) = (spec.cap, spec.page_size);
+        let (cap, follow_limit) = (spec.cap, spec.follow_page.unwrap_or(spec.page_size));
 
         let all_spec = spec.respec::<P, Vec<T>>(spec.fields);
         let all_name = name.clone();
@@ -263,7 +274,9 @@ impl<C: Resolve + 'static> Registry<C> {
         let all = coerce(move |ctx: &C, params: P, _opts| {
             let f = all_f.clone();
             let op = all_name.clone();
-            Box::pin(async move { follow_all(&*f, ctx, params, page_size, cap, (code, &op)).await })
+            Box::pin(
+                async move { follow_all(&*f, ctx, params, follow_limit, cap, (code, &op)).await },
+            )
         });
         let mut all_entry = Self::unary_entry(&all_spec, OpKind::ListAll, all);
         all_entry.descriptor.list_pair = Some(format!("{name}_page"));
