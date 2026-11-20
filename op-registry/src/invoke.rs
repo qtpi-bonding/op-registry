@@ -123,8 +123,9 @@ impl<C: Resolve> Registry<C> {
             .result
     }
 
-    /// Decodes JSON arguments and opens a stream op on `path`, keeping the
-    /// call's redactor like [`Registry::call_json`].
+    /// Decodes JSON arguments and opens a stream op on `path`. The kit's
+    /// stream calls use it; the redactor holds only the call's own secrets.
+    #[cfg(feature = "testing")]
     pub(crate) async fn call_stream_json<'a>(
         &'a self,
         name: &str,

@@ -1468,15 +1468,35 @@ mod kit_surfaces {
     #[test]
     fn kit_skips_typed_only_op_and_names_it() {
         let hook = Arc::<Recorder>::default();
-        let r = one_op(
+        let mut r = one_op(
             only(Surface::Typed),
             false,
             || panic!("body ran"),
             hook.clone(),
         );
-        futures_executor::block_on(assert_error_codes(&r, &Ctx, &args()));
+        // A failing op beside it makes the runner panic, so its report shows.
+        r.push_op(
+            OpSpec::<Get, Item>::new("tool bad", "Fails undeclared."),
+            running(rogue),
+        );
+        let both = [
+            Fixture {
+                op: "tool_op",
+                args: json!({"id": "x"}),
+            },
+            Fixture {
+                op: "tool_bad",
+                args: json!({"id": "x"}),
+            },
+        ];
+        let text = panic_text(|| futures_executor::block_on(assert_error_codes(&r, &Ctx, &both)));
+        assert!(
+            text.contains("assert_error_codes: tool_op: typed only: not run"),
+            "{text}"
+        );
+        assert!(text.contains("tool_bad"), "{text}");
         futures_executor::block_on(assert_local_ops_offline(&r, &Ctx, &args()));
         futures_executor::block_on(assert_unknown_ref_not_found(&r, &Ctx, &[]));
-        assert!(ran(&hook).is_empty());
+        assert!(ran(&hook).iter().all(|c| c.0 != "tool_op"));
     }
 }
