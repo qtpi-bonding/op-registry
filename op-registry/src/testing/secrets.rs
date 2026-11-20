@@ -11,7 +11,9 @@ use serde_json::{Map, Value};
 use std::ffi::OsString;
 use std::path::Path;
 
-/// A made-up secret and a file holding made-up key material.
+/// A made-up secret and a file holding made-up key material. Each non-empty
+/// line of the file is searched for on its own, so the lines must be
+/// distinctive (a short or common line would match ordinary text).
 pub struct SecretSentinel<'a> {
     /// The sentinel secret value, given to every secret flag.
     pub value: &'a str,

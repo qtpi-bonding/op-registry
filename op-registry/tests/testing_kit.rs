@@ -688,6 +688,28 @@ fn snapshot_mismatch_reports_and_update_rewrites() {
 }
 
 #[test]
+fn snapshot_line_ending_only_diff_terminates() {
+    let r = fixture();
+    let manual = Manual::default();
+    let path = temp_path("snapshot-eol.md");
+    check_manual_snapshot(&r, &manual, &path, true).unwrap();
+    let fresh = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, fresh.trim_end_matches('\n')).unwrap();
+    let err = check_manual_snapshot(&r, &manual, &path, false).unwrap_err();
+    assert!(
+        err.contains("line endings or the trailing newline"),
+        "{err}"
+    );
+    std::fs::write(&path, fresh.replace('\n', "\r\n")).unwrap();
+    let err = check_manual_snapshot(&r, &manual, &path, false).unwrap_err();
+    assert!(
+        err.contains("line endings or the trailing newline"),
+        "{err}"
+    );
+    std::fs::remove_file(&path).unwrap();
+}
+
+#[test]
 fn exit_table_check_passes_and_flags_missing_code() {
     let r = codes_fixture();
     assert_exit_table(&r, &Manual::default());

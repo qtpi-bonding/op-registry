@@ -384,6 +384,10 @@ impl<C: Sync> Registry<C> {
     ///
     /// Panics on any collision the checks reject.
     pub fn merge(&mut self, other: Registry<C>) {
+        #[cfg(feature = "testing")]
+        {
+            self.strict_codes |= other.strict_codes;
+        }
         for group in other.groups {
             if !self.groups.iter().any(|g| g.path == group.path) {
                 self.group(&group.path.join(" "), &group.summary);

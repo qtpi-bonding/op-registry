@@ -90,6 +90,9 @@ pub(crate) async fn call_errors<C: Resolve>(
 /// Runs each fixture through `Registry::call` and reports every error whose
 /// code the op did not declare, and every uncoded error.
 ///
+/// Do not combine it with [`strict_codes`]: a strict panic stops the report
+/// at the first offender.
+///
 /// # Panics
 ///
 /// Panics with every offender.

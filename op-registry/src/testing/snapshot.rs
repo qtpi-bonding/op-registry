@@ -37,6 +37,12 @@ pub fn check_manual_snapshot<C: CliContext>(
     let mut line = 1;
     let (old_line, new_line) = loop {
         match (old.next(), new.next()) {
+            (None, None) => {
+                return Err(format!(
+                    "the manual differs from {} only in line endings or the trailing newline\n{hint}",
+                    path.display()
+                ));
+            }
             (a, b) if a == b => line += 1,
             (a, b) => break (a.unwrap_or("<end of file>"), b.unwrap_or("<end of file>")),
         }
