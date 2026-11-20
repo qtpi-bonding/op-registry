@@ -33,14 +33,16 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let steps = fields.iter().map(|f| {
         let args = clap_gen::args(f);
         let env = global_env(f);
+        // Clap forbids a required global argument; `from_matches` reports a
+        // missing one as `usage.missing` instead.
         // The env fallback belongs to the first (positive) argument only.
         let first = args
             .first()
-            .map(|a| quote!(cmd = cmd.arg(#a.global(true) #env);));
+            .map(|a| quote!(cmd = cmd.arg(#a.required(false).global(true) #env);));
         let rest = args
             .iter()
             .skip(1)
-            .map(|a| quote!(cmd = cmd.arg(#a.global(true));));
+            .map(|a| quote!(cmd = cmd.arg(#a.required(false).global(true));));
         quote!(#first #(#rest)*)
     });
     let lets = fields.iter().map(|f| {

@@ -167,7 +167,6 @@ pub(crate) enum Run<C> {
 #[allow(dead_code)]
 pub(crate) struct Extras<O> {
     pub cap: usize,
-    pub page_size: u32,
     pub ok_exit: Option<fn(&O) -> u8>,
     pub render_text: Option<fn(&O) -> String>,
 }
@@ -518,7 +517,6 @@ impl<C: Resolve + 'static> Registry<C> {
         check_param_clashes::<P>(&descriptor.name);
         let extras = Extras {
             cap: spec.cap,
-            page_size: spec.page_size,
             ok_exit: spec.ok_exit,
             render_text: spec.render_text,
         };
@@ -618,7 +616,6 @@ impl<C: Resolve + 'static> Registry<C> {
         check_param_clashes::<P>(&descriptor.name);
         let extras = Extras {
             cap: spec.cap,
-            page_size: spec.page_size,
             ok_exit: spec.ok_exit,
             render_text: spec.render_text,
         };

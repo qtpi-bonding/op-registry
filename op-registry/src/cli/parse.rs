@@ -2,7 +2,7 @@
 
 use super::tree::{command, lookup};
 use super::{CliError, ID_COMPACT, ID_PRETTY, ID_TEXT};
-use crate::{CliContext, Cursor, OpGlobals, OpKind, Redactor, Registry, Style, UsageError};
+use crate::{CliContext, Cursor, OpGlobals, OpKind, Redactor, Registry, Style};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::parser::ValueSource;
 use clap::ArgMatches;
@@ -77,22 +77,21 @@ fn unknown_command(message: String) -> UsageFailure {
 /// Parses `argv` (program name first) against the registry's command tree.
 ///
 /// A list command with `--limit` or `--cursor` selects the `_page` op;
-/// the globals are read from the same matches.
+/// the globals are read from the same matches. Help and version carry no
+/// globals (`None`), so a required global never blocks them.
 pub fn parse<C: CliContext>(
     registry: &Registry<C>,
     argv: &[OsString],
-) -> Result<(Parsed, C::Globals), UsageFailure> {
+) -> Result<(Parsed, Option<C::Globals>), UsageFailure> {
     let cmd = command(registry);
     let matches = match cmd.clone().try_get_matches_from(argv) {
         Ok(matches) => matches,
         Err(err) => {
             return match err.kind() {
-                ErrorKind::DisplayHelp => {
-                    Ok((Parsed::Help(err.to_string()), no_args_globals::<C>()?))
-                }
+                ErrorKind::DisplayHelp => Ok((Parsed::Help(err.to_string()), None)),
                 ErrorKind::DisplayVersion => Ok((
                     Parsed::Version(err.to_string().trim_end().to_owned()),
-                    no_args_globals::<C>()?,
+                    None,
                 )),
                 _ => Err(map_error(registry, &cmd, argv, &err)),
             }
@@ -151,28 +150,16 @@ pub fn parse<C: CliContext>(
             text: flag(ID_TEXT),
             cursor,
         },
-        globals,
+        Some(globals),
     ))
-}
-
-/// The globals for a help or version request: read from the environment and
-/// defaults only, since nothing else was parsed.
-fn no_args_globals<C: CliContext>() -> Result<C::Globals, UsageFailure> {
-    let cmd = <C::Globals as OpGlobals>::add_args(clap::Command::new("globals"));
-    let matches = cmd
-        .try_get_matches_from(["globals"])
-        .map_err(|err| UsageFailure {
-            code: MISSING,
-            message: clean(&err.to_string()),
-        })?;
-    <C::Globals as OpGlobals>::from_matches(&matches).map_err(decode_failure)
 }
 
 /// A usage failure for a decoder error.
 fn decode_failure(err: anyhow::Error) -> UsageFailure {
-    let code = match err.downcast_ref::<UsageError>() {
-        Some(UsageError::MissingField { .. }) => MISSING,
-        _ => INVALID,
+    let code = if coded_error::facts_anyhow(&err).code == MISSING {
+        MISSING
+    } else {
+        INVALID
     };
     UsageFailure {
         code,

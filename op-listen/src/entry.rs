@@ -19,11 +19,13 @@ use std::sync::Arc;
 pub fn listen_entry<C, L>(
     registry: &mut Registry<C>,
     listener: Arc<L>,
-    spec: OpSpec<L::Params, ListenFrame<L::Snapshot, L::Item>>,
+    mut spec: OpSpec<L::Params, ListenFrame<L::Snapshot, L::Item>>,
 ) where
     C: op_registry::Resolve + 'static,
     L: Listener<C>,
 {
+    // The entry resumes from a cursor, so the leaf takes `--cursor`.
+    spec.cursor = true;
     let leaked: &'static Arc<L> = Box::leak(Box::new(listener));
     let listener: &'static L = leaked.as_ref();
     registry.push_stream::<L::Params, ListenFrame<L::Snapshot, L::Item>, _>(

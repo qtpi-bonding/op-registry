@@ -153,7 +153,16 @@ fn argv(args: &[&str]) -> Vec<OsString> {
 }
 
 fn parse(args: &[&str]) -> Result<(Parsed, G), UsageFailure> {
-    cli::parse(&reg(), &argv(args))
+    cli::parse(&reg(), &argv(args)).map(|(p, g)| match (&p, g) {
+        (Parsed::Help(_) | Parsed::Version(_), None) => (
+            p,
+            G {
+                hub: None,
+                verbose: false,
+            },
+        ),
+        (_, g) => (p, g.expect("globals on a non-help parse")),
+    })
 }
 
 fn op_name(args: &[&str]) -> String {
@@ -447,4 +456,46 @@ fn library_global_clash_panics() {
         }
     }
     let _ = cli::command(&Registry::<C2>::new());
+}
+
+/// A binary with a required global still answers `--help` and `--version`.
+#[derive(Debug, OpGlobals)]
+struct Strict {
+    /// Required.
+    hub: String,
+}
+
+struct StrictCtx;
+impl op_registry::Resolve for StrictCtx {}
+impl CliContext for StrictCtx {
+    type Globals = Strict;
+    fn from_globals(_g: &Strict) -> anyhow::Result<Self> {
+        Ok(StrictCtx)
+    }
+}
+
+#[test]
+fn help_and_version_work_with_a_required_global() {
+    let mut r = Registry::<StrictCtx>::new();
+    r.set_bin("strict", "9.9.9", "Strict.");
+    let (parsed, globals) = cli::parse(&r, &argv(&["--help"])).unwrap();
+    assert!(matches!(parsed, Parsed::Help(_)) && globals.is_none());
+    let (parsed, globals) = cli::parse(&r, &argv(&["--version"])).unwrap();
+    assert!(matches!(parsed, Parsed::Version(ref v) if v.contains("9.9.9")) && globals.is_none());
+}
+
+#[test]
+fn missing_required_global_is_usage_missing() {
+    let mut r = Registry::<StrictCtx>::new();
+    r.group("a", "A.");
+    r.push_op(
+        OpSpec::<Echo, Out>::new("a b", "B."),
+        |_c: &StrictCtx, _p: Echo, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Out>> {
+            Box::pin(async { Ok(Out { ok: true }) })
+        },
+    );
+    let err = cli::parse(&r, &argv(&["a", "b"])).unwrap_err();
+    assert_eq!(err.code, "op_registry.usage.missing");
+    let (_, g) = cli::parse(&r, &argv(&["a", "b", "--hub", "h"])).unwrap();
+    assert_eq!(g.unwrap().hub, "h");
 }

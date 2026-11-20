@@ -69,6 +69,15 @@ fn listen_entry_is_a_cli_only_streaming_op_and_absent_from_the_tool_list() {
     let cmd = cli::command(&registry);
     assert!(cli_surface(&cmd).names.contains("log_listen"));
     cmd.clone().debug_assert();
+    // The listen leaf resumes from a cursor, so it takes `--cursor`.
+    let argv: Vec<std::ffi::OsString> = ["app", "log", "listen", "--topic", "t", "--cursor", "0:2"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let (parsed, _) = cli::parse(&registry, &argv).ok().expect("--cursor parses");
+    assert!(
+        matches!(parsed, cli::Parsed::Op { ref name, cursor: Some(_), .. } if name == "log_listen")
+    );
 
     futures_executor::block_on(async {
         // A bad cursor argument is a coded error.
