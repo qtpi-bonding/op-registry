@@ -145,7 +145,7 @@ impl<C: Resolve> Registry<C> {
         let result = async {
             (entry.resolve_refs)(self, ctx, &mut *params).await?;
             let info = self.info(entry, &*params, path, &opts);
-            self.pipeline(info, move || run(ctx, params, opts, want_text))
+            self.pipeline(info, move || run(self, ctx, params, opts, want_text))
                 .await
         }
         .await;
@@ -294,7 +294,8 @@ impl<C: Resolve + 'static> Registry<C> {
         opts.notices = opts.notices.redacting(&redactor_of(params.secrets()));
         self.resolve_refs(ctx, &mut params).await?;
         let info = self.info(entry, &params, CallPath::Typed, &opts);
-        self.pipeline(info, move || f(ctx, params, opts)).await
+        self.pipeline(info, move || f(self, ctx, params, opts))
+            .await
     }
 
     /// Opens the streaming operation `O::NAME` with typed parameters. The

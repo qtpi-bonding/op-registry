@@ -1,0 +1,348 @@
+//! The generated manual: Markdown for people and agents, JSON for programs,
+//! and the `manual` op that serves both.
+
+use crate::registry::TypedUnary;
+use crate::{
+    cli, Access, Audience, CallError, CliContext, Descriptor, ErrorCodeEntry, Op, OpKind, OpParams,
+    OpSpec, Registry, RenderText, Resolve,
+};
+use anyhow::{anyhow, Result};
+use coded_error::{CodeCatalog, ErrorClass};
+use serde::Serialize;
+use serde_json::{json, Value};
+use std::marker::PhantomData;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+/// The consumer's part of the manual: front matter and guides.
+#[derive(Clone, Debug, Default)]
+pub struct Manual {
+    /// A SKILL.md's front matter, when the manual is one.
+    pub front_matter: Option<FrontMatter>,
+    /// Sections in order, each a heading over its guides.
+    pub sections: Vec<Section>,
+}
+
+/// The `name` and `description` a SKILL.md opens with.
+#[derive(Clone, Debug)]
+pub struct FrontMatter {
+    pub name: String,
+    pub description: String,
+}
+
+/// A manual section: a `##` heading over guides.
+#[derive(Clone, Debug)]
+pub struct Section {
+    pub title: String,
+    pub guides: Vec<Guide>,
+}
+
+/// A guide: a title, a body, and the commands it covers.
+#[derive(Clone, Debug)]
+pub struct Guide {
+    pub title: String,
+    pub body: String,
+    /// Command paths, e.g. `"concept get"`.
+    pub commands: Vec<String>,
+}
+
+/// The exit table of every binary: code and meaning.
+const EXITS: [(u8, &str); 6] = [
+    (crate::exit::OK, "ok"),
+    (crate::exit::USAGE, "usage"),
+    (crate::exit::LOGICAL, "logical"),
+    (crate::exit::INFRASTRUCTURE, "infrastructure"),
+    (crate::exit::UNKNOWN, "unknown"),
+    (crate::exit::TRANSIENT, "transient"),
+];
+
+/// A code with its class and its command-line exit; both `None` when the
+/// class is decided at run time.
+struct CodeRow {
+    code: String,
+    class: Option<ErrorClass>,
+}
+
+impl CodeRow {
+    fn exit(&self) -> Option<u8> {
+        let class = self.class?;
+        if self.code.starts_with("op_registry.usage.") || self.code.starts_with("op_registry.cli.")
+        {
+            return Some(crate::exit::USAGE);
+        }
+        Some(coded_error::cli::ExitTable::SYSEXITS.code_for(class))
+    }
+
+    fn table_row(&self) -> String {
+        let class = self.class.map_or("varies", |c| c.as_str());
+        let exit = self.exit().map_or("varies".to_owned(), |e| e.to_string());
+        format!("| {} | {class} | {exit} |", self.code)
+    }
+
+    fn json(&self) -> Value {
+        json!({"code": self.code, "class": self.class.map(|c| c.as_str()), "exit": self.exit()})
+    }
+}
+
+/// Every code an op can return: its declared errors, plus the cap code of a
+/// list op.
+fn codes_of<C: Sync>(registry: &Registry<C>, d: &Descriptor) -> Vec<CodeRow> {
+    let mut rows: Vec<CodeRow> = d
+        .errors
+        .iter()
+        .map(|ErrorCodeEntry { code, class }| CodeRow {
+            code: code.clone(),
+            class: *class,
+        })
+        .collect();
+    if d.kind == OpKind::ListAll {
+        rows.push(CodeRow {
+            code: crate::list::too_many_code(registry.pillar(), &d.path),
+            class: Some(ErrorClass::Logical),
+        });
+    }
+    rows
+}
+
+/// The codes the library itself returns.
+fn library_codes() -> Vec<CodeRow> {
+    [
+        crate::UsageError::codes(),
+        cli::CliError::codes(),
+        CallError::codes(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|e| CodeRow {
+        code: e.code.to_owned(),
+        class: e.class,
+    })
+    .collect()
+}
+
+fn access_words(access: &Access) -> String {
+    let words: Vec<&str> = [
+        (access.reads, "reads"),
+        (access.writes, "writes"),
+        (access.network, "network"),
+        (access.spawns, "spawns"),
+        (access.destructive, "destructive"),
+    ]
+    .into_iter()
+    .filter_map(|(on, word)| on.then_some(word))
+    .collect();
+    if words.is_empty() {
+        "none".to_owned()
+    } else {
+        words.join(", ")
+    }
+}
+
+fn code_table(rows: &[CodeRow]) -> String {
+    let mut table = "| Code | Class | Exit |\n|---|---|---|".to_owned();
+    for row in rows {
+        table.push('\n');
+        table.push_str(&row.table_row());
+    }
+    table
+}
+
+/// Renders the Markdown manual: front matter, the exit table, the consumer's
+/// sections, then every visible command with its help, access, exits and
+/// codes, and the library's own codes.
+///
+/// Fails when a guide names a command path the registry does not have.
+pub fn render<C: CliContext>(registry: &Registry<C>, manual: &Manual) -> Result<String> {
+    for guide in manual.sections.iter().flat_map(|s| &s.guides) {
+        for path in &guide.commands {
+            let chain: Vec<String> = path.split_whitespace().map(str::to_owned).collect();
+            if cli::lookup(registry, &chain).is_none() {
+                return Err(anyhow!(
+                    "guide {:?} names the command {path:?}, which does not exist",
+                    guide.title
+                ));
+            }
+        }
+    }
+
+    let mut blocks: Vec<String> = Vec::new();
+    if let Some(front) = &manual.front_matter {
+        blocks.push(format!(
+            "---\nname: {}\ndescription: {}\n---",
+            front.name, front.description
+        ));
+    }
+    blocks.push(format!("# {}", registry.bin()));
+    blocks.push(registry.about().to_owned());
+    blocks.push("## Exit codes".to_owned());
+    let mut table = "| Exit | Meaning |\n|---|---|".to_owned();
+    for (code, meaning) in EXITS {
+        table.push_str(&format!("\n| {code} | {meaning} |"));
+    }
+    blocks.push(table);
+    for section in &manual.sections {
+        blocks.push(format!("## {}", section.title));
+        for guide in &section.guides {
+            blocks.push(format!("### {}", guide.title));
+            blocks.push(guide.body.trim_end().to_owned());
+            if !guide.commands.is_empty() {
+                let commands: Vec<String> =
+                    guide.commands.iter().map(|c| format!("`{c}`")).collect();
+                blocks.push(format!("Commands: {}", commands.join(", ")));
+            }
+        }
+    }
+
+    blocks.push("## Commands".to_owned());
+    let mut root = cli::command(registry);
+    root.build();
+    for index in 0..registry.entries.len() {
+        let d = &registry.entries[index].descriptor;
+        if !cli::on_cli(registry, index) || d.hidden {
+            continue;
+        }
+        blocks.push(format!("### {} {}", registry.bin(), d.path.join(" ")));
+        let mut command = &root;
+        for word in &d.path {
+            command = command
+                .find_subcommand(word)
+                .ok_or_else(|| anyhow!("the command tree has no `{}`", d.path.join(" ")))?;
+        }
+        let help = command.clone().render_long_help().to_string();
+        blocks.push(format!("```text\n{}\n```", help.trim_end()));
+        blocks.push(format!("Access: {}", access_words(&d.access)));
+        if !d.exits.is_empty() {
+            let lines: Vec<String> = d
+                .exits
+                .iter()
+                .map(|e| format!("- {}: {}", e.code, e.meaning))
+                .collect();
+            blocks.push(format!("Exits:\n{}", lines.join("\n")));
+        }
+        let codes = codes_of(registry, d);
+        if !codes.is_empty() {
+            blocks.push(code_table(&codes));
+        }
+    }
+
+    blocks.push("## Library codes".to_owned());
+    blocks.push(code_table(&library_codes()));
+    Ok(blocks.join("\n\n") + "\n")
+}
+
+/// Every descriptor, schema, exit and code as JSON. Output schemas are
+/// present only with the `schema` feature.
+pub fn render_json<C: CliContext>(registry: &Registry<C>) -> Value {
+    let ops: Vec<Value> = registry
+        .entries
+        .iter()
+        .map(|entry| {
+            let d = &entry.descriptor;
+            let mut op = serde_json::to_value(d).expect("a descriptor is serializable");
+            let fields = op.as_object_mut().expect("a descriptor is an object");
+            if d.output_schema.is_none() {
+                fields.remove("output_schema");
+            }
+            let codes: Vec<Value> = codes_of(registry, d).iter().map(CodeRow::json).collect();
+            fields.insert("codes".to_owned(), Value::Array(codes));
+            op
+        })
+        .collect();
+    let exits: Vec<Value> = EXITS
+        .iter()
+        .map(|(code, meaning)| json!({"code": code, "meaning": meaning}))
+        .collect();
+    json!({
+        "bin": registry.bin(),
+        "version": registry.version(),
+        "exits": exits,
+        "ops": ops,
+    })
+}
+
+/// The parameters of the `manual` op.
+#[derive(Clone, Debug, Default, OpParams)]
+pub struct ManualParams {
+    /// Write the Markdown manual to this file instead of returning it.
+    pub out: Option<PathBuf>,
+    /// Return every descriptor, schema, exit and code as JSON.
+    pub json: bool,
+}
+
+/// What the `manual` op returns.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum ManualOutput {
+    /// The manual, when neither `--out` nor `--json` was given.
+    Markdown { markdown: String },
+    /// Where the manual was written.
+    Written { written: PathBuf },
+    /// The JSON form.
+    Json(Value),
+}
+
+impl RenderText for ManualOutput {
+    fn render_text(&self) -> String {
+        match self {
+            ManualOutput::Markdown { markdown } => markdown.clone(),
+            other => serde_json::to_string(other).expect("the manual output is serializable"),
+        }
+    }
+}
+
+/// The typed handle on the `manual` op, for `call_typed`.
+pub struct ManualOp<C>(PhantomData<fn() -> C>);
+
+impl<C> Op for ManualOp<C> {
+    type Ctx = C;
+    type Params = ManualParams;
+    type Output = ManualOutput;
+    const NAME: &'static str = "manual";
+}
+
+impl<C: CliContext + Resolve + 'static> Registry<C> {
+    /// Adds the `manual` op: it renders `manual` together with every op the
+    /// registry holds when it is called, so ops added later are included. With
+    /// `--json` it wins over `--out`.
+    ///
+    /// # Panics
+    ///
+    /// Panics on the build-time checks of [`Registry::push_op`].
+    pub fn with_manual(&mut self, manual: Manual, audience: Audience) {
+        let mut spec =
+            OpSpec::<ManualParams, ManualOutput>::new("manual", "Show this tool's manual.");
+        spec.access = Access::from_words(&["reads", "writes"]);
+        spec.audience = audience;
+        spec.render_text = Some(|out| out.render_text());
+        let manual = Arc::new(manual);
+        let run: TypedUnary<C, ManualParams, ManualOutput> =
+            Arc::new(move |registry, _ctx, params, _opts| {
+                let result = run_manual(registry, &manual, params);
+                Box::pin(async move { result })
+            });
+        let entry = Self::unary_entry(&spec, OpKind::Local, run);
+        self.push_entry(entry);
+    }
+}
+
+fn run_manual<C: CliContext>(
+    registry: &Registry<C>,
+    manual: &Manual,
+    params: ManualParams,
+) -> Result<ManualOutput> {
+    if params.json {
+        return Ok(ManualOutput::Json(render_json(registry)));
+    }
+    let markdown = render(registry, manual)?;
+    match params.out {
+        Some(path) => {
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, markdown)?;
+            Ok(ManualOutput::Written { written: path })
+        }
+        None => Ok(ManualOutput::Markdown { markdown }),
+    }
+}

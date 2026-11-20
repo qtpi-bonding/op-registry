@@ -1,7 +1,6 @@
 //! op-registry: declare operations once, derive the adapters.
 
-// Lets the derive macros' `::op_registry::` paths resolve in unit tests.
-#[cfg(test)]
+// Lets the derive macros' `::op_registry::` paths resolve inside the crate.
 extern crate self as op_registry;
 
 mod call;
@@ -12,6 +11,8 @@ mod globals;
 mod hook;
 mod invoke;
 mod list;
+#[cfg(feature = "manual")]
+pub mod manual;
 pub mod mcp;
 mod notices;
 mod output;

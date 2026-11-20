@@ -116,8 +116,21 @@ impl<P, O> Default for OpSpec<P, O> {
     }
 }
 
-pub(crate) type TypedUnary<C, P, O> =
-    Arc<dyn for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync>;
+/// A unary op's typed function. It also receives the registry it runs in;
+/// user ops ignore it, and only the `manual` op reads it.
+pub(crate) type TypedUnary<C, P, O> = Arc<
+    dyn for<'a> Fn(&'a Registry<C>, &'a C, P, CallOptions) -> BoxFuture<'a, Result<O>>
+        + Send
+        + Sync,
+>;
+
+/// Wraps a user's unary function, which does not see the registry.
+pub(crate) fn ignoring_registry<C, P, O>(
+    f: impl for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync + 'static,
+) -> TypedUnary<C, P, O> {
+    Arc::new(move |_registry, ctx, params, opts| f(ctx, params, opts))
+}
+
 pub(crate) type TypedStream<C, P, O> = Arc<
     dyn for<'a> Fn(
             &'a C,
@@ -143,7 +156,13 @@ pub(crate) struct Ran {
 
 /// Runs a unary op; the flag asks for the text rendering.
 type UnaryRun<C> = Box<
-    dyn for<'a> Fn(&'a C, Box<dyn Any + Send>, CallOptions, bool) -> BoxFuture<'a, Result<Ran>>
+    dyn for<'a> Fn(
+            &'a Registry<C>,
+            &'a C,
+            Box<dyn Any + Send>,
+            CallOptions,
+            bool,
+        ) -> BoxFuture<'a, Result<Ran>>
         + Send
         + Sync,
 >;
@@ -522,7 +541,7 @@ impl<C: Resolve + 'static> Registry<C> {
         O: Serialize + OutputSchema + Send + 'static,
         F: for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync + 'static,
     {
-        let entry = Self::unary_entry(&spec, kind, Arc::new(f));
+        let entry = Self::unary_entry(&spec, kind, ignoring_registry(f));
         self.insert_entry(entry);
     }
 
@@ -545,8 +564,8 @@ impl<C: Resolve + 'static> Registry<C> {
         };
         let runner = f.clone();
         let (ok_exit, render_text) = (spec.ok_exit, spec.render_text);
-        let run: UnaryRun<C> = Box::new(move |ctx, params, opts, want_text| {
-            let fut = runner(ctx, downcast::<P>(params), opts);
+        let run: UnaryRun<C> = Box::new(move |registry, ctx, params, opts, want_text| {
+            let fut = runner(registry, ctx, downcast::<P>(params), opts);
             Box::pin(async move {
                 let out = fut.await?;
                 Ok(Ran {

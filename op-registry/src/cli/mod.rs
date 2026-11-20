@@ -16,6 +16,8 @@ pub use tree::command;
 
 pub(crate) use extra::Extra;
 pub(crate) use fallback::Fallback;
+#[cfg(feature = "manual")]
+pub(crate) use tree::{lookup, on_cli};
 
 /// The id of the library's `--pretty` argument.
 pub(crate) const ID_PRETTY: &str = "op_registry_pretty";

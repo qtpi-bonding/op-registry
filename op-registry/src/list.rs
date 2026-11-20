@@ -1,9 +1,9 @@
 //! List pairs: one page function becomes a follow-all op and a paged op.
 
-use crate::registry::{words, TypedUnary};
+use crate::registry::{ignoring_registry as coerce, words};
 use crate::{
-    derive_name, CallOptions, FieldKind, FieldMeta, OpKind, OpParams, OpSpec, ParseCx, RefSlot,
-    Registry, Resolve,
+    derive_name, FieldKind, FieldMeta, OpKind, OpParams, OpSpec, ParseCx, RefSlot, Registry,
+    Resolve,
 };
 use anyhow::Result;
 use coded_error::{CodedError, ErrorClass};
@@ -177,10 +177,11 @@ impl<P: OpParams> OpParams for PageParams<P> {
     }
 }
 
-fn coerce<C, P, O>(
-    f: impl for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync + 'static,
-) -> TypedUnary<C, P, O> {
-    Arc::new(f)
+/// The code a list op fails with past its cap: `<pillar>.<noun>.too_many`,
+/// the noun being the last word before the verb.
+pub(crate) fn too_many_code(pillar: &str, path: &[String]) -> String {
+    let noun = path[path.len() - 2].replace('-', "_");
+    format!("{pillar}.{noun}.too_many")
 }
 
 /// Follows pages of `limit` items until the cursor ends, up to `cap` items.
@@ -251,9 +252,7 @@ impl<C: Resolve + 'static> Registry<C> {
         assert!(!self.pillar().is_empty(), "set_pillar before push_list");
         assert!(spec.page_size > 0, "page_size must be > 0");
         let name = derive_name(&path);
-        let noun = path[path.len() - 2].replace('-', "_");
-        let code: &'static str =
-            Box::leak(format!("{}.{noun}.too_many", self.pillar()).into_boxed_str());
+        let code: &'static str = Box::leak(too_many_code(self.pillar(), &path).into_boxed_str());
 
         let f = Arc::new(f);
         let (cap, page_size) = (spec.cap, spec.page_size);
