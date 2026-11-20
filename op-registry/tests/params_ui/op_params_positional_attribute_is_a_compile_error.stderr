@@ -1,0 +1,5 @@
+error: unknown #[op] key `positional`: flags are the long kebab-case field name only
+ --> tests/params_ui/op_params_positional_attribute_is_a_compile_error.rs:5:10
+  |
+5 |     #[op(positional)]
+  |          ^^^^^^^^^^

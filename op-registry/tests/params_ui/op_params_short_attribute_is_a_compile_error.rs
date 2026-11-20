@@ -2,9 +2,8 @@ use op_registry::OpParams;
 
 #[derive(OpParams)]
 struct Bad {
-    #[op(required_unless_present = "other")]
+    #[op(short = 'x')]
     value: String,
-    other: Option<String>,
 }
 
 fn main() {}

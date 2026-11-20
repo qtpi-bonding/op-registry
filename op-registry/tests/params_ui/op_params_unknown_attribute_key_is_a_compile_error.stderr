@@ -2,4 +2,4 @@ error: unknown #[op] key `mystery`
  --> tests/params_ui/op_params_unknown_attribute_key_is_a_compile_error.rs:5:10
   |
 5 |     #[op(mystery = "value")]
-  |          ^^^^^^^^^^^^^^^^^
+  |          ^^^^^^^

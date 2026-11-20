@@ -66,13 +66,10 @@ impl StatusOptions {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, OpParams)]
 pub struct GetParams {
     /// Only components of this kind.
-    #[op(long = "kind")]
     pub kind: Option<String>,
     /// Only components with this id.
-    #[op(long = "id")]
     pub id: Option<String>,
     /// Maximum number of components to return.
-    #[op(long = "limit")]
     pub limit: Option<u32>,
 }
 

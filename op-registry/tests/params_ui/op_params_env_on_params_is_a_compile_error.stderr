@@ -1,0 +1,5 @@
+error: unknown #[op] key `env`: flags are the long kebab-case field name only
+ --> tests/params_ui/op_params_env_on_params_is_a_compile_error.rs:5:10
+  |
+5 |     #[op(env = "X")]
+  |          ^^^

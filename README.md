@@ -18,7 +18,7 @@ use schemars::JsonSchema;
 
 #[derive(OpParams, Serialize, Deserialize, JsonSchema)]
 struct ListParams {
-    #[op(long = "limit", default = 10)]
+    #[op(default = 10)]
     limit: u32,
 }
 

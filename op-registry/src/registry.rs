@@ -411,7 +411,7 @@ impl<C: Sync + 'static> Registry<C> {
             errors: spec.errors.iter().map(ErrorCodeEntry::from).collect(),
             paths: spec.paths,
             cursor: spec.cursor,
-            input_schema: P::schema(),
+            input_schema: P::input_schema(),
             output_schema: <O as OutputSchema>::output_schema(),
             list_pair: None,
             unpaged: spec.unpaged,
@@ -445,7 +445,7 @@ impl<C: Sync + 'static> Registry<C> {
             typed: Box::new(f),
             extras: Box::new(extras),
             decode_json: |value, cx| Ok(Box::new(P::from_json(value, cx)?)),
-            augment: P::clap_args,
+            augment: P::add_args,
             decode_matches: |matches, cx| Ok(Box::new(P::from_matches(matches, cx)?)),
             run: Run::Unary(run),
         });
@@ -536,7 +536,7 @@ impl<C: Sync + 'static> Registry<C> {
             typed: Box::new(f),
             extras: Box::new(extras),
             decode_json: |value, cx| Ok(Box::new(P::from_json(value, cx)?)),
-            augment: P::clap_args,
+            augment: P::add_args,
             decode_matches: |matches, cx| Ok(Box::new(P::from_matches(matches, cx)?)),
             run: Run::Stream(run),
         });

@@ -40,7 +40,6 @@ pub fn code_of(err: &anyhow::Error) -> &'static str {
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, OpParams)]
 pub struct TopicParams {
-    #[op(positional)]
     pub topic: String,
 }
 

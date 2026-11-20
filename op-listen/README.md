@@ -231,7 +231,6 @@ struct Ctx;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, OpParams)]
 struct TopicParams {
-    #[op(positional)]
     topic: String,
 }
 

@@ -1,0 +1,73 @@
+//! `from_json()`: camelCase keys only.
+
+use proc_macro2::TokenStream;
+use quote::quote;
+
+use super::attrs::Field;
+use super::types::{Base, Shape};
+
+fn decode(f: &Field) -> TokenStream {
+    let rt = quote!(::op_registry::__private::rt);
+    let key = &f.key;
+    // One optional scalar of a base type; an enum goes through its names.
+    let get = |b: &Base| match b {
+        Base::Enum(ty) => quote! {
+            #rt::get::<::std::string::String>(&o, #key)?
+                .map(|s| #rt::enum_value::<#ty>(#key, &s))
+                .transpose()?
+        },
+        b => {
+            let ty = b.ty();
+            quote!(#rt::get::<#ty>(&o, #key)?)
+        }
+    };
+    match &f.shape {
+        Shape::Plain(b) => {
+            let get = get(b);
+            match f.default_value() {
+                Some(d) => quote!(#get.unwrap_or_else(|| #d)),
+                None => quote!(#rt::require(#get, #key)?),
+            }
+        }
+        Shape::Optional(b) => get(b),
+        Shape::Repeated(Base::Enum(ty)) => quote! {
+            #rt::get::<::std::vec::Vec<::std::string::String>>(&o, #key)?
+                .unwrap_or_default()
+                .iter()
+                .map(|s| #rt::enum_value::<#ty>(#key, s))
+                .collect::<::std::result::Result<::std::vec::Vec<_>, _>>()?
+        },
+        Shape::Repeated(b) => {
+            let ty = b.ty();
+            quote!(#rt::get::<::std::vec::Vec<#ty>>(&o, #key)?.unwrap_or_default())
+        }
+        Shape::Switch => quote!(#rt::get::<bool>(&o, #key)?.unwrap_or(false)),
+        Shape::TriState => quote!(#rt::get::<bool>(&o, #key)?),
+        Shape::Map => {
+            let keys = match &f.keys {
+                Some(keys) => quote!(::std::option::Option::Some(&[#(#keys),*][..])),
+                None => quote!(::std::option::Option::None::<&[&str]>),
+            };
+            quote!(#rt::map_from_json(&o, #key, #keys)?)
+        }
+    }
+}
+
+pub fn from_json_fn(fields: &[Field]) -> TokenStream {
+    let known = fields.iter().map(|f| &f.key);
+    let lets = fields.iter().map(|f| {
+        let (ident, value) = (&f.ident, decode(f));
+        quote!(let #ident = #value;)
+    });
+    let idents = fields.iter().map(|f| &f.ident);
+    quote! {
+        fn from_json(
+            v: ::op_registry::__private::serde_json::Value,
+            _cx: &mut ::op_registry::ParseCx,
+        ) -> ::op_registry::__private::anyhow::Result<Self> {
+            let o = ::op_registry::__private::rt::object(v, &[#(#known),*])?;
+            #(#lets)*
+            ::std::result::Result::Ok(Self { #(#idents),* })
+        }
+    }
+}

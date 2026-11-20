@@ -19,6 +19,7 @@ pub use registry::{OpSpec, Registry};
 
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::params::rt;
     pub use crate::params::usage;
     pub use anyhow;
     pub use clap;
