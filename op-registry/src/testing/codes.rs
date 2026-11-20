@@ -82,6 +82,7 @@ pub(crate) async fn call_errors<C: Resolve>(
             .call(&d.name, args, ctx, CallOptions::default())
             .await
             .err()
+            .map(crate::CallFailure::into_inner)
             .into_iter()
             .collect()
     }

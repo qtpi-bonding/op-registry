@@ -1,4 +1,4 @@
-use crate::{Notices, OpParams};
+use crate::{Notices, OpParams, Redactor};
 
 /// Per-call options.
 #[non_exhaustive]
@@ -111,3 +111,69 @@ pub enum CallError {
     #[coded(code = "wrong_path", class = Logical)]
     WrongPath { name: String },
 }
+
+/// A failed call together with the redactor built from its parameters.
+///
+/// `Display` and `Debug` print the redacted message only. The raw error,
+/// which may carry a secret, stays reachable through [`CallFailure::error`]
+/// for callers that downcast it; they must not print it.
+pub struct CallFailure {
+    error: anyhow::Error,
+    redactor: Redactor,
+}
+
+impl CallFailure {
+    pub(crate) fn new(error: anyhow::Error, redactor: Redactor) -> Self {
+        Self { error, redactor }
+    }
+
+    /// A failure before any parameters exist: nothing to redact.
+    pub(crate) fn plain(error: anyhow::Error) -> Self {
+        Self::new(error, Redactor::default())
+    }
+
+    /// The raw error. It may carry secret values: never print it.
+    pub fn error(&self) -> &anyhow::Error {
+        &self.error
+    }
+
+    /// The raw error, by value. It may carry secret values: never print it.
+    pub fn into_inner(self) -> anyhow::Error {
+        self.error
+    }
+
+    /// The redactor of the call that failed.
+    pub fn redactor(&self) -> &Redactor {
+        &self.redactor
+    }
+
+    /// The whole context chain of the error with the call's secrets redacted.
+    pub fn redacted_message(&self) -> String {
+        self.redactor.redact(&format!("{:#}", self.error))
+    }
+}
+
+impl std::fmt::Display for CallFailure {
+    /// The redacted message (`{:#}` gives the whole context chain).
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = if formatter.alternate() {
+            format!("{:#}", self.error)
+        } else {
+            self.error.to_string()
+        };
+        formatter.write_str(&self.redactor.redact(&text))
+    }
+}
+
+impl std::fmt::Debug for CallFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CallFailure")
+            .field("code", &coded_error::facts_anyhow(&self.error).code)
+            .field("message", &self.redacted_message())
+            .finish()
+    }
+}
+
+/// The source chain is left out: its messages are not redacted.
+impl std::error::Error for CallFailure {}

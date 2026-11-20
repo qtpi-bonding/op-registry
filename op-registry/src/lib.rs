@@ -23,7 +23,7 @@ mod registry;
 pub mod testing;
 
 pub use call::CallError;
-pub use call::{CallOptions, Caller, Cursor, Op, TraceParent};
+pub use call::{CallFailure, CallOptions, Caller, Cursor, Op, TraceParent};
 pub use descriptor::*;
 pub use globals::{CliContext, OpGlobals};
 pub use hook::{CallHook, CallInfo, CallPath, NoHook};

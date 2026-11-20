@@ -10,8 +10,8 @@ use clap::ArgMatches;
 use coded_error::CodedError;
 use std::ffi::OsString;
 
-/// What a command line selects.
-#[derive(Debug)]
+/// What a command line selects. Its `Debug` leaves out the matches, which
+/// hold raw secret values.
 pub enum Parsed {
     /// A registered op.
     Op {
@@ -45,6 +45,35 @@ pub enum Parsed {
     Help(String),
     /// `--version` output.
     Version(String),
+}
+
+impl std::fmt::Debug for Parsed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Parsed::Op {
+                name,
+                style,
+                text,
+                cursor,
+                ..
+            } => f
+                .debug_struct("Op")
+                .field("name", name)
+                .field("style", style)
+                .field("text", text)
+                .field("cursor", cursor)
+                .finish_non_exhaustive(),
+            Parsed::Extra { name, .. } => {
+                f.debug_struct("Extra").field("name", name).finish_non_exhaustive()
+            }
+            Parsed::Fallback { args, .. } => f
+                .debug_struct("Fallback")
+                .field("args", &args.len())
+                .finish_non_exhaustive(),
+            Parsed::Help(text) => f.debug_tuple("Help").field(text).finish(),
+            Parsed::Version(text) => f.debug_tuple("Version").field(text).finish(),
+        }
+    }
 }
 
 /// A command line that is not valid: its code and a message that never
@@ -233,6 +262,24 @@ pub(super) fn secret_flags<C: CliContext>(registry: &Registry<C>) -> Vec<String>
         flags.extend(entry.secret_flags.iter().cloned());
     }
     flags
+}
+
+/// A redactor for the values of the secret globals in `matches`, whether
+/// they came from argv or the environment. Globals propagate, so any level's
+/// matches will do.
+pub(super) fn globals_redactor<C: CliContext>(matches: &ArgMatches) -> Redactor {
+    let mut redactor = Redactor::default();
+    for field in <C::Globals as OpGlobals>::fields() {
+        if !field.secret {
+            continue;
+        }
+        if let Ok(Some(values)) = matches.try_get_raw(field.rust_name) {
+            for value in values {
+                redactor.add(value.to_string_lossy().as_bytes());
+            }
+        }
+    }
+    redactor
 }
 
 /// A redactor for the values `argv` gives to the secret `flags`

@@ -218,7 +218,7 @@ async fn unknown_ref_is_apps_not_found_on_every_path() {
         .call("get", json!({"id": "nope"}), &ctx, CallOptions::default())
         .await
         .unwrap_err();
-    assert_eq!(code(&err), "fix.build.not_found");
+    assert_eq!(code(err.error()), "fix.build.not_found");
     // CLI
     let m = Get::add_args(Command::new("t"))
         .try_get_matches_from(["t", "--id", "nope"])
@@ -246,7 +246,7 @@ async fn unknown_ref_is_apps_not_found_on_every_path() {
         .call("get", json!({"id": "dup"}), &ctx, CallOptions::default())
         .await
         .unwrap_err();
-    assert_eq!(code(&err), "fix.build.ambiguous");
+    assert_eq!(code(err.error()), "fix.build.ambiguous");
 }
 
 #[tokio::test]
@@ -352,7 +352,7 @@ async fn kind_ref_flag_resolves() {
         )
         .await
         .unwrap_err();
-    assert_eq!(code(&err), "fix.build.not_found");
+    assert_eq!(code(err.error()), "fix.build.not_found");
 }
 
 #[tokio::test]
@@ -378,7 +378,7 @@ async fn flattened_group_refs_resolve() {
         )
         .await
         .unwrap_err();
-    assert_eq!(code(&err), "fix.build.not_found");
+    assert_eq!(code(err.error()), "fix.build.not_found");
 }
 
 #[tokio::test]
@@ -395,7 +395,7 @@ async fn non_subject_refs_resolve_before_the_subject() {
         )
         .await
         .unwrap_err();
-    assert_eq!(code(&err), "fix.build.not_found");
+    assert_eq!(code(err.error()), "fix.build.not_found");
     assert!(ctx.seen_scope.lock().unwrap().is_empty());
 }
 

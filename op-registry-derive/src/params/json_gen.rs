@@ -68,6 +68,14 @@ fn decode(f: &Field) -> TokenStream {
     }
 }
 
+/// A `SecretFile` field decodes its own secret-safe errors.
+fn is_secret_file(shape: &Shape) -> bool {
+    matches!(
+        shape,
+        Shape::Plain(Base::SecretFile) | Shape::Optional(Base::SecretFile)
+    )
+}
+
 pub fn from_json_fn(fields: &[Field]) -> TokenStream {
     let known = fields.iter().map(|f| match &f.shape {
         Shape::Flatten(ty) => quote! {
@@ -80,7 +88,20 @@ pub fn from_json_fn(fields: &[Field]) -> TokenStream {
     });
     let lets = fields.iter().map(|f| {
         let (ident, value) = (&f.ident, decode(f));
-        quote!(let #ident = #value;)
+        if f.secret && !is_secret_file(&f.shape) {
+            // serde quotes the value it rejects: say nothing of a secret one.
+            let key = &f.key;
+            quote! {
+                let #ident = ::op_registry::__private::rt::hide_value(
+                    #key,
+                    (|| -> ::op_registry::__private::anyhow::Result<_> {
+                        ::std::result::Result::Ok(#value)
+                    })(),
+                )?;
+            }
+        } else {
+            quote!(let #ident = #value;)
+        }
     });
     let idents = fields.iter().map(|f| &f.ident);
     quote! {

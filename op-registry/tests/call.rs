@@ -270,7 +270,7 @@ async fn typed_only_op_callable_typed() {
         .await
         .unwrap_err();
     assert_eq!(
-        coded_error::facts_anyhow(&err).code,
+        coded_error::facts_anyhow(err.error()).code,
         "op_registry.call.wrong_path"
     );
 }
@@ -394,7 +394,7 @@ async fn wrong_shape_call_on_stream() {
         .await
         .unwrap_err();
     assert_eq!(
-        coded_error::facts_anyhow(&err).code,
+        coded_error::facts_anyhow(err.error()).code,
         "op_registry.call.wrong_shape"
     );
 }
@@ -410,7 +410,7 @@ async fn wrong_shape_is_checked_before_decoding() {
         .await
         .unwrap_err();
     assert_eq!(
-        coded_error::facts_anyhow(&err).code,
+        coded_error::facts_anyhow(err.error()).code,
         "op_registry.call.wrong_shape"
     );
     let err = r

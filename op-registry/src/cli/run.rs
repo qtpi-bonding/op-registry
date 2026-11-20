@@ -5,7 +5,7 @@
 //! app's log text never lands behind it.
 
 use super::io::{Io, SharedWriter};
-use super::parse::{argv_redactor, secret_flags};
+use super::parse::{argv_redactor, globals_redactor, secret_flags};
 use super::{parse, Fallback, Parsed, UsageFailure};
 use crate::{
     exit, notice_line, render, write_error, CallOptions, CallPath, CliContext, Notice, NoticeSink,
@@ -41,8 +41,8 @@ pub struct NoHooks;
 
 impl RunHooks for NoHooks {}
 
-/// How a run ended.
-#[derive(Debug)]
+/// How a run ended. Its `Debug` prints the redacted message, never the
+/// raw error.
 #[non_exhaustive]
 pub enum Outcome {
     /// The op succeeded.
@@ -56,12 +56,42 @@ pub enum Outcome {
     Err {
         /// The op's name, once one was selected.
         op: Option<String>,
-        /// What went wrong.
+        /// What went wrong. It may carry secret values: print `message`
+        /// instead.
         error: anyhow::Error,
+        /// The error's whole context chain with the run's secrets redacted:
+        /// the message of the error line.
+        message: String,
     },
 }
 
+impl std::fmt::Debug for Outcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Outcome::Ok { op, exit } => f
+                .debug_struct("Ok")
+                .field("op", op)
+                .field("exit", exit)
+                .finish(),
+            Outcome::Err { op, error, message } => f
+                .debug_struct("Err")
+                .field("op", op)
+                .field("code", &coded_error::facts_anyhow(error).code)
+                .field("message", message)
+                .finish(),
+        }
+    }
+}
+
 impl Outcome {
+    /// The redacted error message of a failed run; `None` on success.
+    pub fn message(&self) -> Option<&str> {
+        match self {
+            Outcome::Ok { .. } => None,
+            Outcome::Err { message, .. } => Some(message),
+        }
+    }
+
     /// The process exit code of this outcome.
     pub fn exit_code(&self) -> u8 {
         match self {
@@ -127,7 +157,8 @@ pub async fn run_with_io<C: CliContext + Resolve>(
     }
     // Extras and fallbacks read the globals themselves and need no context.
     if matches!(parsed, Parsed::Extra { .. } | Parsed::Fallback { .. }) {
-        return run_unrouted(registry, parsed, &mut io, Some(hooks))
+        let secrets = parsed_secrets::<C>(&parsed);
+        return run_unrouted(registry, parsed, &mut io, Some(hooks), &secrets)
             .await
             .exit_code();
     }
@@ -135,7 +166,9 @@ pub async fn run_with_io<C: CliContext + Resolve>(
     let ctx = match C::from_globals(&globals) {
         Ok(ctx) => ctx,
         Err(error) => {
-            return finish_err(&mut io, Some(hooks), None, error, &scrub()).exit_code();
+            let mut redactor = parsed_secrets::<C>(&parsed);
+            redactor.extend(&scrub());
+            return finish_err(&mut io, Some(hooks), None, error, &redactor).exit_code();
         }
     };
     execute(registry, &ctx, parsed, &mut io, Some(hooks))
@@ -207,7 +240,8 @@ fn finish_err(
     error: anyhow::Error,
     redactor: &Redactor,
 ) -> Outcome {
-    let outcome = Outcome::Err { op, error };
+    let message = redactor.redact(&format!("{error:#}"));
+    let outcome = Outcome::Err { op, error, message };
     if let Some(hooks) = hooks {
         hooks.post_run(&outcome);
     }
@@ -229,6 +263,16 @@ fn wrote(result: std::io::Result<()>) -> Wrote {
         Ok(()) => Wrote::Done,
         Err(e) if e.kind() == ErrorKind::BrokenPipe => Wrote::Closed,
         Err(e) => Wrote::Failed(e),
+    }
+}
+
+/// The secret globals' values in the matches a command line selected.
+fn parsed_secrets<C: CliContext>(parsed: &Parsed) -> Redactor {
+    match parsed {
+        Parsed::Op { matches, .. }
+        | Parsed::Extra { matches, .. }
+        | Parsed::Fallback { matches, .. } => globals_redactor::<C>(matches),
+        Parsed::Help(_) | Parsed::Version(_) => Redactor::default(),
     }
 }
 
@@ -254,6 +298,7 @@ async fn run_unrouted<C>(
     parsed: Parsed,
     io: &mut Io,
     hooks: Option<&dyn RunHooks>,
+    secrets: &Redactor,
 ) -> Outcome {
     let (op, result) = match parsed {
         Parsed::Extra { name, matches } => {
@@ -282,7 +327,7 @@ async fn run_unrouted<C>(
             }
             outcome
         }
-        Err(error) => finish_err(io, hooks, Some(op), error, &Redactor::default()),
+        Err(error) => finish_err(io, hooks, Some(op), error, secrets),
     }
 }
 
@@ -293,6 +338,7 @@ async fn execute<C: CliContext + Resolve>(
     io: &mut Io,
     hooks: Option<&dyn RunHooks>,
 ) -> Outcome {
+    let secrets = parsed_secrets::<C>(&parsed);
     let (name, matches, style, text, cursor) = match parsed {
         Parsed::Op {
             name,
@@ -309,13 +355,13 @@ async fn execute<C: CliContext + Resolve>(
             };
         }
         parsed @ (Parsed::Extra { .. } | Parsed::Fallback { .. }) => {
-            return run_unrouted(registry, parsed, io, hooks).await;
+            return run_unrouted(registry, parsed, io, hooks, &secrets).await;
         }
     };
 
     let entry = match registry.entry(&name) {
         Ok(entry) => entry,
-        Err(error) => return finish_err(io, hooks, Some(name), error, &Redactor::default()),
+        Err(error) => return finish_err(io, hooks, Some(name), error, &secrets),
     };
     let mut cx = match io.stdin.take() {
         Some(stdin) => ParseCx::with_stdin(stdin),
@@ -325,7 +371,8 @@ async fn execute<C: CliContext + Resolve>(
         Ok(params) => params,
         Err(error) => {
             // Nothing is built yet, so the redactor comes from the raw values.
-            let redactor = matches_redactor(&entry.secret_ids, &matches, &cx);
+            let mut redactor = matches_redactor(&entry.secret_ids, &matches, &cx);
+            redactor.extend(&secrets);
             if exit::exit_code(&error) == exit::USAGE {
                 if let Some(hooks) = hooks {
                     hooks.on_usage_error(&UsageFailure {
@@ -351,7 +398,7 @@ async fn execute<C: CliContext + Resolve>(
 
     if entry.descriptor.kind == OpKind::Stream {
         let invocation = registry
-            .call_stream_decoded(&name, params, ctx, opts, cursor, CallPath::Cli)
+            .call_stream_decoded(&name, params, ctx, opts, cursor, CallPath::Cli, secrets)
             .await;
         let redactor = invocation.redactor;
         let mut stream = match invocation.result {
@@ -382,7 +429,7 @@ async fn execute<C: CliContext + Resolve>(
     }
 
     let invocation = registry
-        .call_decoded(&name, params, ctx, opts, CallPath::Cli, text)
+        .call_decoded(&name, params, ctx, opts, CallPath::Cli, text, secrets)
         .await;
     let redactor = invocation.redactor;
     let value = match invocation.result {

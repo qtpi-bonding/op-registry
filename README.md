@@ -175,8 +175,10 @@ the flag:
   `Input` is a base64 string. Only one field per call may read stdin; a second
   read fails with `op_registry.usage.stdin_twice` at run time.
 - `Patch<T>` (`#[op(clearable)]`) keeps, sets or clears a stored value.
-- Secrets (`#[op(secret)]`) are redacted from the error line and notices.
-  `SecretFile` needs the `secrets` feature.
+- Secrets (`#[op(secret)]`, `SecretFile` contents and secret globals, whether
+  given on the command line or through the environment) are redacted from the
+  error line and notices. A JSON decode error of a secret field says only
+  `invalid value`. `SecretFile` needs the `secrets` feature.
 - `#[derive(OpGlobals)]` declares process-wide flags and environment variables
   (`--hub`, `APP_HUB`). They may come before or after the verb and are not tool
   params.
@@ -225,8 +227,16 @@ wrong_path}`. `get` and `delete` of a missing object are
   `--help` never connect. `Resolve` maps a `Ref` to an id for ops that take
   one; the default does nothing.
 - Every call path (CLI, `mcp::call_tool`, `Registry::call`, `call_typed`) runs
-  one pipeline: decode, validate, resolve refs, run, redact. An op marked
+  one pipeline: decode, validate, resolve refs, run. An op marked
   `paths: [typed]` is reachable only in process.
+- Redaction: `Registry::call` and `mcp::call_tool` fail with a `CallFailure`.
+  Its `Display`, `Debug` and `redacted_message()` have the call's secrets
+  replaced by `<secret>`; `error()` and `into_inner()` give the raw error for
+  downcasting and must not be printed. `mcp::tool_error` and the CLI error line
+  are redacted. `call_typed` and `call_stream` return the raw error: the caller
+  holds the params. `CallHook::on_error` gets the raw error; pass any text taken
+  from it through `CallInfo::redact`. `RunHooks::post_run` gets an `Outcome`
+  whose `message()` is redacted and whose `Debug` prints only that.
 - `Registry::set_call_hook` takes a `CallHook` (`around` wraps the call,
   `on_error` sees a failure). `CallInfo` carries the op name, the path
   (`Cli`, `Mcp`, ...) and the span fields. Errors that happen before the call

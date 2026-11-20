@@ -81,6 +81,7 @@ fn many(n: usize) -> Vec<Component> {
 
 fn call(reg: &Registry<ToySource>, src: &ToySource, args: Value) -> anyhow::Result<Value> {
     futures_executor::block_on(reg.call("status_get", args, src, CallOptions::default()))
+        .map_err(op_registry::CallFailure::into_inner)
 }
 
 fn ids(v: &Value) -> Vec<String> {

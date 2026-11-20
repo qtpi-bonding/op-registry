@@ -36,6 +36,11 @@ op-registry, changed:
 - List ops come as a pair (`<name>` follows all pages, `<name>_page` returns
   one page).
 - Extras and fallbacks return a `u8` exit code, not `ExitCode`.
+- `Registry::call` returns `Result<Value, CallFailure>` instead of
+  `anyhow::Result<Value>`, and `mcp::call_tool` fails with `CallFailure`, which
+  replaces `mcp::ToolError`. Its `Display`, `Debug` and `redacted_message()`
+  have the call's secrets redacted; `error()` and `into_inner()` give the raw
+  error for downcasting.
 - Stdin may be read by one field per call. A second read fails at run time with
   `op_registry.usage.stdin_twice`, not at build time.
 
@@ -67,7 +72,10 @@ op-status and op-listen, wire change:
 - `CallHook` and `CallInfo`; `Registry::call` and `call_typed` with the `Op`
   marker trait; one pipeline for every path.
 - Paged lists: `Page`, `PageRequest`, `TooMany`, the follow-all-pages pair.
-- Secret redaction in the error line and notices.
+- Secret redaction in the error line and notices, including secret globals
+  from argv or the environment.
+- `CallFailure`, the redacted failure of a JSON call; `CallInfo::redact` and
+  `cli::Outcome::message()` (a redacted copy of the error) for hooks.
 - The manual: `Registry::with_manual` and the `manual` op (feature `manual`).
 - The `rmcp` feature: `RegistryServer`, serving one audience.
 - The testing kit (feature `testing`): `assert_parity`, `assert_canonical`,

@@ -307,15 +307,36 @@ pub fn find_clash(fields: &[FieldMeta]) -> Option<(&FieldMeta, &FieldMeta)> {
     None
 }
 
-fn read_path(flag: &str, path: &str) -> Result<Vec<u8>> {
-    std::fs::read(path).map_err(|e| invalid(flag, format!("cannot read {path}: {e}")))
+/// Reads `path`; with `hide` the error leaves the (secret) path out.
+fn read_path(flag: &str, path: &str, hide: bool) -> Result<Vec<u8>> {
+    std::fs::read(path).map_err(|e| {
+        let reason = if hide {
+            format!("cannot read the file: {e}")
+        } else {
+            format!("cannot read {path}: {e}")
+        };
+        invalid(flag, reason)
+    })
+}
+
+/// The decode result of an `#[op(secret)]` field: any error but a missing
+/// value becomes a bare `invalid value`, since serde's messages quote the
+/// value they reject.
+pub fn hide_value<T>(key: &str, result: Result<T>) -> Result<T> {
+    result.map_err(|err| {
+        if coded_error::facts_anyhow(&err).code == "op_registry.usage.missing" {
+            err
+        } else {
+            invalid(key, "invalid value")
+        }
+    })
 }
 
 /// A `Json` flag value: JSON text, `@path` or `@-`.
 pub fn json_arg(cx: &mut ParseCx, flag: &str, text: &str) -> Result<Json> {
     let bytes = match text.strip_prefix('@') {
         Some("-") => cx.read_stdin(flag)?,
-        Some(path) => read_path(flag, path)?,
+        Some(path) => read_path(flag, path, false)?,
         None => text.as_bytes().to_vec(),
     };
     serde_json::from_slice(&bytes)
@@ -328,7 +349,7 @@ pub fn input_arg(cx: &mut ParseCx, flag: &str, text: &str) -> Result<Input> {
     let bytes = if text == "-" {
         cx.read_stdin(flag)?
     } else {
-        read_path(flag, text)?
+        read_path(flag, text, false)?
     };
     Ok(Input(bytes))
 }
@@ -463,7 +484,7 @@ pub fn secret_file_arg(
     let file = if text == "-" {
         crate::SecretFile::new(None, cx.read_stdin(flag)?)
     } else {
-        crate::SecretFile::new(Some(text.into()), read_path(flag, text)?)
+        crate::SecretFile::new(Some(text.into()), read_path(flag, text, hide_path)?)
     };
     Ok(if hide_path { file.hide_path() } else { file })
 }
@@ -480,7 +501,7 @@ pub fn secret_file_json(
     let file = match object.get(key) {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::String(path)) => {
-            crate::SecretFile::new(Some(path.into()), read_path(key, path)?)
+            crate::SecretFile::new(Some(path.into()), read_path(key, path, hide_path)?)
         }
         Some(Value::Object(o)) if inline => {
             let text = match (o.len(), o.get("inline")) {

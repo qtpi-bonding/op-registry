@@ -107,6 +107,16 @@ impl Redactor {
         self.secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
     }
 
+    /// Adds every secret of `other`.
+    pub fn extend(&mut self, other: &Redactor) {
+        for secret in &other.secrets {
+            if !self.secrets.contains(secret) {
+                self.secrets.push(secret.clone());
+            }
+        }
+        self.secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    }
+
     /// Whether nothing is to be redacted.
     pub fn is_empty(&self) -> bool {
         self.secrets.is_empty()

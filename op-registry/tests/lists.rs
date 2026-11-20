@@ -87,7 +87,9 @@ async fn call(
     name: &str,
     args: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    r.call(name, args, c, CallOptions::default()).await
+    r.call(name, args, c, CallOptions::default())
+        .await
+        .map_err(op_registry::CallFailure::into_inner)
 }
 
 #[tokio::test]

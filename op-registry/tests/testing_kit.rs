@@ -651,6 +651,7 @@ fn get_errors() -> Vec<CodeEntry> {
 
 fn call_json(r: &Registry<Ctx>, op: &str) -> anyhow::Result<serde_json::Value> {
     futures_executor::block_on(r.call(op, json!({"id": "x"}), &Ctx, CallOptions::default()))
+        .map_err(op_registry::CallFailure::into_inner)
 }
 
 #[test]
@@ -768,7 +769,7 @@ fn strict_codes_panics_on_undeclared_code() {
         CallOptions::default(),
     ))
     .unwrap_err();
-    assert!(coded_error::facts_anyhow(&err)
+    assert!(coded_error::facts_anyhow(err.error())
         .code
         .starts_with("op_registry."));
     // An undeclared code names the op and the code.
@@ -914,7 +915,26 @@ mod secrets_kit {
             },
         );
         r.push_op(OpSpec::<Get, Item>::new("vault look", "Look."), get_op);
+        r.push_op(
+            OpSpec::<Pinned, Said>::new("vault pin", "Pin the vault."),
+            |_c: &Ctx, _p: Pinned, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Said>> {
+                Box::pin(async move {
+                    Ok(Said {
+                        said: "pinned".to_owned(),
+                    })
+                })
+            },
+        );
         r
+    }
+
+    /// A numeric secret: the sentinel text is a bad value for it on both
+    /// the CLI and the JSON path.
+    #[derive(OpParams)]
+    struct Pinned {
+        /// A PIN.
+        #[op(secret)]
+        pin: Option<u64>,
     }
 
     const SENTINEL: &str = "SENTINEL-token-4471";

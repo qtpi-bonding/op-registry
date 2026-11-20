@@ -1,6 +1,6 @@
 //! The call hook and the facts it sees about each call.
 
-use crate::{Access, Audience, Caller, TraceParent};
+use crate::{Access, Audience, Caller, Redactor, TraceParent};
 use futures_util::future::BoxFuture;
 
 /// The path a call took to reach the operation.
@@ -34,6 +34,17 @@ pub struct CallInfo {
     pub fields: Vec<(&'static str, String)>,
     /// The trace context, passed through untouched.
     pub trace: TraceParent,
+    /// The call's secrets, for [`CallInfo::redact`].
+    pub(crate) redactor: Redactor,
+}
+
+impl CallInfo {
+    /// `text` with every secret of this call replaced by `<secret>`: the
+    /// values of its `#[op(secret)]` parameters, the contents of its
+    /// `SecretFile`s and, on the command line, its secret globals.
+    pub fn redact(&self, text: &str) -> String {
+        self.redactor.redact(text)
+    }
 }
 
 /// Wraps every call of a registry.
@@ -46,6 +57,9 @@ pub trait CallHook: Send + Sync {
     }
 
     /// Called exactly once when the call fails after its `CallInfo` is built.
+    ///
+    /// `err` is the raw error and may carry secret values: pass any text
+    /// taken from it through [`CallInfo::redact`] before it is logged.
     fn on_error(&self, info: &CallInfo, err: &anyhow::Error) {
         let _ = (info, err);
     }

@@ -134,7 +134,7 @@ fn typed_only_op_called_by_json_is_wrong_path() {
         futures_executor::block_on(registry.call("x", json!({}), &Ctx, CallOptions::default()))
             .unwrap_err();
     assert_eq!(
-        coded_error::facts_anyhow(&err).code,
+        coded_error::facts_anyhow(err.error()).code,
         "op_registry.call.wrong_path"
     );
 }
@@ -154,7 +154,7 @@ fn call_runs_a_json_op() {
         futures_executor::block_on(registry.call("nope", json!({}), &Ctx, CallOptions::default()))
             .unwrap_err();
     assert_eq!(
-        coded_error::facts_anyhow(&err).code,
+        coded_error::facts_anyhow(err.error()).code,
         "op_registry.call.unknown_operation"
     );
 }

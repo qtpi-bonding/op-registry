@@ -5,7 +5,7 @@ use super::fail_on;
 use super::sample_params;
 use crate::cli::{run_with_io, Io, NoHooks};
 use crate::manual::{render, Manual};
-use crate::{CliContext, FieldKind, FieldMeta, Registry, Resolve};
+use crate::{CliContext, FieldKind, FieldMeta, ParseCx, Registry, Resolve};
 use clap::Command;
 use serde_json::{Map, Value};
 use std::ffi::OsString;
@@ -157,7 +157,8 @@ async fn run<C: CliContext + Resolve>(
 ///   and output schema;
 /// - the clap error of a bad use of each secret flag;
 /// - the error line, the notices and stdout of a CLI run of each op with
-///   secret fields, given `sample_params` with those fields set.
+///   secret fields, given `sample_params` with those fields set;
+/// - the JSON decode error, if any, of those same arguments.
 ///
 /// # Panics
 ///
@@ -234,6 +235,12 @@ pub async fn assert_secrets_not_echoed<C: CliContext + Resolve>(
                 stderr,
             ));
             places.push((format!("stdout of the CLI run of {}", d.name), stdout));
+            if let Err(err) = (entry.decode_json)(args, &mut ParseCx::default()) {
+                places.push((
+                    format!("the JSON decode error of {}", d.name),
+                    format!("{err:#}"),
+                ));
+            }
         }
     }
 
