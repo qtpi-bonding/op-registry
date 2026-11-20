@@ -1,5 +1,6 @@
 //! Parsing argv into the selected op, its leaf matches and the globals.
 
+use super::fallback::route;
 use super::tree::{command, lookup};
 use super::{CliError, ID_COMPACT, ID_PRETTY, ID_TEXT};
 use crate::{CliContext, Cursor, OpGlobals, OpKind, Redactor, Registry, Style};
@@ -36,6 +37,9 @@ pub enum Parsed {
     Fallback {
         /// The arguments, unparsed.
         args: Vec<OsString>,
+        /// The matches of the leading registry globals (empty for a
+        /// flags-only fallback, which reads none).
+        matches: ArgMatches,
     },
     /// `--help` output, rendered.
     Help(String),
@@ -64,7 +68,7 @@ impl std::error::Error for UsageFailure {}
 const MISSING: &str = "op_registry.usage.missing";
 const INVALID: &str = "op_registry.usage.invalid";
 
-fn unknown_command(message: String) -> UsageFailure {
+pub(super) fn unknown_command(message: String) -> UsageFailure {
     UsageFailure {
         code: CliError::UnknownCommand {
             name: String::new(),
@@ -84,6 +88,9 @@ pub fn parse<C: CliContext>(
     argv: &[OsString],
 ) -> Result<(Parsed, Option<C::Globals>), UsageFailure> {
     let cmd = command(registry);
+    if let Some(routed) = route(registry, &cmd, argv)? {
+        return Ok(routed);
+    }
     let matches = match cmd.clone().try_get_matches_from(argv) {
         Ok(matches) => matches,
         Err(err) => {
@@ -102,6 +109,21 @@ pub fn parse<C: CliContext>(
     while let Some((name, sub)) = leaf.subcommand() {
         chain.push(name.to_owned());
         leaf = sub;
+    }
+    if let Some(first) = chain.first() {
+        if registry
+            .extras
+            .iter()
+            .any(|e| e.command.get_name() == first)
+        {
+            let globals = <C::Globals as OpGlobals>::from_matches(leaf).map_err(decode_failure)?;
+            let matches = matches
+                .subcommand_matches(first)
+                .expect("the chain starts at this subcommand")
+                .clone();
+            let name = first.clone();
+            return Ok((Parsed::Extra { name, matches }, Some(globals)));
+        }
     }
     let Some(index) = lookup(registry, &chain) else {
         return Err(unknown_command(format!(
@@ -154,7 +176,7 @@ pub fn parse<C: CliContext>(
 }
 
 /// A usage failure for a decoder error.
-fn decode_failure(err: anyhow::Error) -> UsageFailure {
+pub(super) fn decode_failure(err: anyhow::Error) -> UsageFailure {
     let code = if coded_error::facts_anyhow(&err).code == MISSING {
         MISSING
     } else {
@@ -238,7 +260,7 @@ pub(super) fn argv_redactor(flags: &[String], argv: &[OsString]) -> Redactor {
 }
 
 /// Maps a clap error to a usage failure (ruling 9), without secret values.
-fn map_error<C: CliContext>(
+pub(super) fn map_error<C: CliContext>(
     registry: &Registry<C>,
     cmd: &clap::Command,
     argv: &[OsString],

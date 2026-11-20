@@ -1,6 +1,6 @@
 //! The clap command tree of a registry.
 
-use super::{ID_COMPACT, ID_PRETTY, ID_TEXT};
+use super::{Fallback, ID_COMPACT, ID_PRETTY, ID_TEXT};
 use crate::{CliContext, OpGlobals, OpKind, Paths, Registry};
 use clap::{Arg, ArgAction, Command};
 
@@ -41,13 +41,39 @@ pub(crate) fn lookup<C>(registry: &Registry<C>, chain: &[String]) -> Option<usiz
         })
 }
 
+/// The words that start a command: op and group words, extras and `help`.
+pub(crate) fn top_words<C>(registry: &Registry<C>) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    let paths = (0..registry.entries.len())
+        .filter(|&i| on_cli(registry, i))
+        .map(|i| &registry.entries[i].descriptor.path)
+        .chain(registry.groups.iter().map(|g| &g.path));
+    for path in paths {
+        if let Some(word) = path.first() {
+            if !words.contains(word) {
+                words.push(word.clone());
+            }
+        }
+    }
+    words.extend(
+        registry
+            .extras
+            .iter()
+            .map(|e| e.command.get_name().to_owned()),
+    );
+    words.push("help".to_owned());
+    words
+}
+
 /// Builds the clap command for a registry: the binary's name, about and
 /// version, the globals, and one group per noun word with a leaf per op.
 ///
 /// # Panics
 ///
 /// Panics when a `C::Globals` flag is one the library owns (`--pretty`,
-/// `--compact`, `--text`, `--help`, `--version`).
+/// `--compact`, `--text`, `--help`, `--version`), when a free-text fallback
+/// declares a flag that a global already has, or when an extra's name is an
+/// op or group word.
 pub fn command<C: CliContext>(registry: &Registry<C>) -> Command {
     for field in <C::Globals as OpGlobals>::fields() {
         assert!(
@@ -56,6 +82,16 @@ pub fn command<C: CliContext>(registry: &Registry<C>) -> Command {
             field.rust_name,
             field.flag
         );
+    }
+    if let Some(Fallback::FreeText { name, flags, .. }) = &registry.fallback {
+        let globals = <C::Globals as OpGlobals>::fields();
+        for flag in flags.iter() {
+            let flag = flag.trim_start_matches('-');
+            assert!(
+                !LIBRARY_FLAGS.contains(&flag) && !globals.iter().any(|f| f.flag == flag),
+                "fallback `{name}` flag --{flag} clashes with a registry global"
+            );
+        }
     }
     let mut root = Command::new(registry.bin())
         .about(registry.about())
@@ -85,6 +121,9 @@ pub fn command<C: CliContext>(registry: &Registry<C>) -> Command {
                 .help("Print the JSON output on one line."),
         );
     root = <C::Globals as OpGlobals>::add_args(root);
+    if let Some(fallback) = &registry.fallback {
+        root = root.after_help(fallback.listing());
+    }
 
     let mut top: Vec<(String, Node)> = Vec::new();
     for index in (0..registry.entries.len()).filter(|&i| on_cli(registry, i)) {
@@ -105,7 +144,14 @@ pub fn command<C: CliContext>(registry: &Registry<C>) -> Command {
         insert(&mut top, &d.path, index);
     }
     for (word, node) in top {
+        assert!(
+            !registry.extras.iter().any(|e| e.command.get_name() == word),
+            "extra `{word}` clashes with op word"
+        );
         root = root.subcommand(to_command(registry, &[word.clone()], node));
+    }
+    for extra in &registry.extras {
+        root = root.subcommand(extra.command.clone());
     }
     root
 }

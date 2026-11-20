@@ -214,6 +214,10 @@ pub struct Registry<C> {
     /// Kinds the server resolves: the library passes their refs through raw.
     pub(crate) server_kinds: HashSet<&'static str>,
     pub(crate) hook: Arc<dyn CallHook>,
+    /// Extra (non-op) commands, in declaration order.
+    pub(crate) extras: Vec<crate::cli::Extra>,
+    /// The root fallback, when there is one.
+    pub(crate) fallback: Option<crate::cli::Fallback>,
 }
 
 pub(crate) fn words(path: &str) -> Vec<String> {
@@ -243,6 +247,8 @@ impl<C: Sync> Registry<C> {
             about: "",
             server_kinds: HashSet::new(),
             hook: Arc::new(NoHook),
+            extras: Vec::new(),
+            fallback: None,
         }
     }
 
@@ -358,6 +364,22 @@ impl<C: Sync> Registry<C> {
         self.server_kinds.extend(other.server_kinds);
         for entry in other.entries {
             self.insert_entry(entry);
+        }
+        for extra in other.extras {
+            let name = extra.command.get_name();
+            assert!(
+                !self.extras.iter().any(|e| e.command.get_name() == name),
+                "extra `{name}` is declared twice"
+            );
+            self.extras.push(extra);
+        }
+        if let Some(fallback) = other.fallback {
+            assert!(
+                self.fallback.is_none(),
+                "both registries have a fallback (`{}`)",
+                fallback.name()
+            );
+            self.fallback = Some(fallback);
         }
     }
 

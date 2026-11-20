@@ -1,15 +1,21 @@
 //! The command line: the tree built from a registry, and parsing into a
 //! selected op, and the runner that dispatches it.
 
+mod extra;
+mod fallback;
 mod io;
 mod parse;
 mod run;
 mod tree;
 
+pub use fallback::edit_distance;
 pub use io::{Captured, Io, SharedWriter};
 pub use parse::{parse, Parsed, UsageFailure};
 pub use run::{dispatch, run, run_with_io, NoHooks, Outcome, RunHooks};
 pub use tree::command;
+
+pub(crate) use extra::Extra;
+pub(crate) use fallback::Fallback;
 
 /// The id of the library's `--pretty` argument.
 pub(crate) const ID_PRETTY: &str = "op_registry_pretty";

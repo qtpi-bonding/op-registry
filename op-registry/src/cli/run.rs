@@ -6,7 +6,7 @@
 
 use super::io::{Io, SharedWriter};
 use super::parse::{argv_redactor, secret_flags};
-use super::{parse, CliError, Parsed, UsageFailure};
+use super::{parse, Fallback, Parsed, UsageFailure};
 use crate::{
     exit, notice_line, render, write_error, CallOptions, CallPath, CliContext, Notice, NoticeSink,
     Notices, OpKind, ParseCx, Redactor, Registry, Resolve, Style, TraceParent,
@@ -125,6 +125,12 @@ pub async fn run_with_io<C: CliContext + Resolve>(
         let _ = write_line(&mut io, text.trim_end());
         return exit::OK;
     }
+    // Extras and fallbacks read the globals themselves and need no context.
+    if matches!(parsed, Parsed::Extra { .. } | Parsed::Fallback { .. }) {
+        return run_unrouted(registry, parsed, &mut io, Some(hooks))
+            .await
+            .exit_code();
+    }
     let globals = globals.expect("parse gives globals for everything but help and version");
     let ctx = match C::from_globals(&globals) {
         Ok(ctx) => ctx,
@@ -242,6 +248,44 @@ fn matches_redactor(ids: &[String], matches: &clap::ArgMatches, cx: &ParseCx) ->
     redactor
 }
 
+/// Runs an extra or the fallback: its exit code is the outcome.
+async fn run_unrouted<C>(
+    registry: &Registry<C>,
+    parsed: Parsed,
+    io: &mut Io,
+    hooks: Option<&dyn RunHooks>,
+) -> Outcome {
+    let (op, result) = match parsed {
+        Parsed::Extra { name, matches } => {
+            let extra = registry
+                .extras
+                .iter()
+                .find(|e| e.command.get_name() == name)
+                .expect("parse names a registered extra");
+            let result = (extra.run)(&matches).await;
+            (name, result)
+        }
+        Parsed::Fallback { args, matches } => match registry.fallback.as_ref() {
+            Some(Fallback::FlagsOnly { name, run, .. }) => (name.to_string(), Ok(run(args).await)),
+            Some(Fallback::FreeText { name, run, .. }) => {
+                (name.to_string(), run(&matches, args).await)
+            }
+            None => unreachable!("parse gives a fallback only when the registry has one"),
+        },
+        _ => unreachable!("only extras and fallbacks are run here"),
+    };
+    match result {
+        Ok(exit) => {
+            let outcome = Outcome::Ok { op, exit };
+            if let Some(hooks) = hooks {
+                hooks.post_run(&outcome);
+            }
+            outcome
+        }
+        Err(error) => finish_err(io, hooks, Some(op), error, &Redactor::default()),
+    }
+}
+
 async fn execute<C: CliContext + Resolve>(
     registry: &Registry<C>,
     ctx: &C,
@@ -264,16 +308,8 @@ async fn execute<C: CliContext + Resolve>(
                 exit: exit::OK,
             };
         }
-        // Extras and fallbacks are dispatched from Task 15 on.
-        Parsed::Extra { name, .. } => {
-            let error = coded_error::into_anyhow(CliError::UnknownCommand { name });
-            return finish_err(io, hooks, None, error, &Redactor::default());
-        }
-        Parsed::Fallback { .. } => {
-            let error = coded_error::into_anyhow(CliError::UnknownCommand {
-                name: String::new(),
-            });
-            return finish_err(io, hooks, None, error, &Redactor::default());
+        parsed @ (Parsed::Extra { .. } | Parsed::Fallback { .. }) => {
+            return run_unrouted(registry, parsed, io, hooks).await;
         }
     };
 
