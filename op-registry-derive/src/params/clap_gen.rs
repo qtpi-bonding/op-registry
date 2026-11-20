@@ -26,7 +26,7 @@ fn args(f: &Field) -> Vec<TokenStream> {
         quote!(.help(#h))
     });
     let valued = |base: &Base, action: Option<TokenStream>, required: bool| {
-        let ty = base.ty();
+        let ty = base.clap_ty();
         let negative = base
             .allows_negative()
             .then(|| quote!(.allow_negative_numbers(true)));
@@ -113,8 +113,20 @@ fn decode(f: &Field) -> TokenStream {
     let rt = quote!(::op_registry::__private::rt);
     let (id, key, flag) = (&f.rust_name, &f.key, &f.flag);
     let get_one = |b: &Base| {
-        let ty = b.ty();
-        quote!(m.get_one::<#ty>(#id).cloned())
+        let ty = b.clap_ty();
+        match b {
+            Base::Json => quote! {
+                m.get_one::<#ty>(#id)
+                    .map(|s| #rt::json_arg(_cx, #flag, s))
+                    .transpose()?
+            },
+            Base::Input => quote! {
+                m.get_one::<#ty>(#id)
+                    .map(|s| #rt::input_arg(_cx, #flag, s))
+                    .transpose()?
+            },
+            _ => quote!(m.get_one::<#ty>(#id).cloned()),
+        }
     };
     match &f.shape {
         Shape::Flatten(ty) => quote!(<#ty as ::op_registry::OpParams>::from_matches(m, _cx)?),
@@ -143,6 +155,13 @@ fn decode(f: &Field) -> TokenStream {
             }
         },
         Shape::Optional(b) => get_one(b),
+        Shape::Repeated(Base::Json) => quote! {
+            m.get_many::<::std::string::String>(#id)
+                .into_iter()
+                .flatten()
+                .map(|s| #rt::json_arg(_cx, #flag, s))
+                .collect::<::op_registry::__private::anyhow::Result<::std::vec::Vec<_>>>()?
+        },
         Shape::Repeated(b) => {
             let ty = b.ty();
             quote!(m.get_many::<#ty>(#id).map(|v| v.cloned().collect()).unwrap_or_default())

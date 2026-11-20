@@ -6,7 +6,7 @@ use clap::ValueEnum;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
-use super::{usage, Patch, UsageError};
+use super::{usage, Input, Json, ParseCx, Patch, UsageError};
 use crate::FieldMeta;
 
 type Result<T> = anyhow::Result<T>;
@@ -295,4 +295,30 @@ pub fn find_clash(fields: &[FieldMeta]) -> Option<(&FieldMeta, &FieldMeta)> {
         }
     }
     None
+}
+
+fn read_path(flag: &str, path: &str) -> Result<Vec<u8>> {
+    std::fs::read(path).map_err(|e| invalid(flag, format!("cannot read {path}: {e}")))
+}
+
+/// A `Json` flag value: JSON text, `@path` or `@-`.
+pub fn json_arg(cx: &mut ParseCx, flag: &str, text: &str) -> Result<Json> {
+    let bytes = match text.strip_prefix('@') {
+        Some("-") => cx.read_stdin(flag)?,
+        Some(path) => read_path(flag, path)?,
+        None => text.as_bytes().to_vec(),
+    };
+    serde_json::from_slice(&bytes)
+        .map(Json)
+        .map_err(|e| invalid(flag, format!("not valid JSON: {e}")))
+}
+
+/// An `Input` flag value: a path, or `-` for stdin.
+pub fn input_arg(cx: &mut ParseCx, flag: &str, text: &str) -> Result<Input> {
+    let bytes = if text == "-" {
+        cx.read_stdin(flag)?
+    } else {
+        read_path(flag, text)?
+    };
+    Ok(Input(bytes))
 }

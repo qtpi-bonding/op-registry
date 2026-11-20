@@ -20,6 +20,8 @@ fn base_schema(base: &Base) -> TokenStream {
         }
         Base::Float => quote!(#json::json!({"type": "number"})),
         Base::Bool => quote!(#json::json!({"type": "boolean"})),
+        Base::Json => quote!(#json::json!({})),
+        Base::Input => quote!(#json::json!({"type": "string", "contentEncoding": "base64"})),
         Base::Enum(ty) => quote!(#json::json!({
             "type": "string",
             "enum": ::op_registry::__private::rt::enum_names::<#ty>(),
@@ -85,6 +87,13 @@ pub fn input_schema_fn(fields: &[Field]) -> TokenStream {
             quote!(object.insert("description".to_owned(), #json::json!(#help));)
         };
         let default = default_schema(f);
+        let any_json = matches!(&f.shape, Shape::Plain(Base::Json) | Shape::Optional(Base::Json))
+            && f.help.is_empty();
+        let description = if any_json {
+            quote!(object.insert("description".to_owned(), #json::json!("Any JSON value."));)
+        } else {
+            description
+        };
         let require = f.required().then(|| quote!(builder.require(#key);));
         quote! {
             let mut property = #schema;
@@ -156,6 +165,8 @@ pub fn fields_fn(fields: &[Field]) -> TokenStream {
         }
         let (rust_name, flag, key, help) = (&f.rust_name, &f.flag, &f.key, &f.help);
         let kind = match &f.shape {
+            Shape::Plain(Base::Json) | Shape::Optional(Base::Json) => quote!(Json),
+            Shape::Plain(Base::Input) | Shape::Optional(Base::Input) => quote!(Input),
             Shape::Plain(_) | Shape::Optional(_) | Shape::Patch(_) => quote!(Scalar),
             Shape::Switch => quote!(Switch),
             Shape::TriState => quote!(TriState),

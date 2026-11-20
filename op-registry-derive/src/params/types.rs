@@ -13,6 +13,10 @@ pub enum Base {
     Bool,
     /// An `#[op(value_enum)]` type.
     Enum(Type),
+    /// `op_registry::Json`: any JSON value.
+    Json,
+    /// `op_registry::Input`: bytes from a path or stdin.
+    Input,
 }
 
 impl Base {
@@ -24,6 +28,17 @@ impl Base {
             Base::Int { ty, .. } | Base::Enum(ty) => quote!(#ty),
             Base::Float => quote!(f64),
             Base::Bool => quote!(bool),
+            Base::Json => quote!(::op_registry::Json),
+            Base::Input => quote!(::op_registry::Input),
+        }
+    }
+
+    /// The type clap parses: `Json` and `Input` arrive as text and are
+    /// resolved (file, stdin) at decode time.
+    pub fn clap_ty(&self) -> proc_macro2::TokenStream {
+        match self {
+            Base::Json | Base::Input => quote::quote!(::std::string::String),
+            b => b.ty(),
         }
     }
 
@@ -76,11 +91,14 @@ fn base(ty: &Type, value_enum: bool) -> Option<Base> {
     let name = name_of(ty);
     let name = name.strip_prefix("std::path::").unwrap_or(&name);
     let name = name.strip_prefix("std::string::").unwrap_or(name);
+    let name = name.strip_prefix("op_registry::").unwrap_or(name);
     Some(match name {
         "String" => Base::String,
         "PathBuf" => Base::Path,
         "bool" => Base::Bool,
         "f64" => Base::Float,
+        "Json" => Base::Json,
+        "Input" => Base::Input,
         "i32" | "i64" => Base::Int {
             ty: ty.clone(),
             signed: true,
@@ -106,13 +124,13 @@ pub fn classify(ty: &Type, value_enum: bool) -> Option<Shape> {
             }
             "Vec" => {
                 return match base(inner, value_enum)? {
-                    Base::Bool => None,
+                    Base::Bool | Base::Input => None,
                     b => Some(Shape::Repeated(b)),
                 }
             }
             "Patch" => {
                 return match base(inner, value_enum)? {
-                    Base::Bool => None,
+                    Base::Bool | Base::Json | Base::Input => None,
                     b => Some(Shape::Patch(b)),
                 }
             }
