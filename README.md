@@ -239,9 +239,10 @@ wrong_path}`. `get` and `delete` of a missing object are
   whose `message()` is redacted and whose `Debug` prints only that.
 - `Registry::set_call_hook` takes a `CallHook` (`around` wraps the call,
   `on_error` sees a failure). `CallInfo` carries the op name, the path
-  (`Cli`, `Mcp`, ...) and the span fields. Errors that happen before the call
-  info exists (unknown op, wrong shape, decode failure, ref resolution) do not
-  reach `on_error`.
+  (`Cli`, `Mcp`, ...) and the span fields, taken before refs resolve. Ref
+  resolution runs inside the hook, so `around` wraps it and `on_error` sees a
+  `*.not_found`. Errors that happen before the call info exists (unknown op,
+  wrong path or shape, decode or validation failure) do not reach `on_error`.
 - `cli::RunHooks` (`pre_parse`, `on_usage_error`, `post_run`) wraps the runner;
   flush logs in `post_run`.
 - The root can hold extra non-registry subcommands and one fallback

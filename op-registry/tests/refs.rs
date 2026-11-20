@@ -408,3 +408,58 @@ fn ref_schema_is_string() {
     assert_eq!(waits["properties"]["more"]["items"]["type"], "string");
     assert_eq!(schema["required"], json!(["id", "blueprint"]));
 }
+
+/// Records what the hook sees: each `around` and each `on_error` code.
+#[derive(Default)]
+struct Recorder {
+    arounds: Mutex<Vec<String>>,
+    errors: Mutex<Vec<String>>,
+}
+
+impl op_registry::CallHook for Recorder {
+    fn around<'a>(
+        &'a self,
+        info: &op_registry::CallInfo,
+        call: BoxFuture<'a, ()>,
+    ) -> BoxFuture<'a, ()> {
+        self.arounds.lock().unwrap().push(info.name.clone());
+        call
+    }
+    fn on_error(&self, info: &op_registry::CallInfo, err: &anyhow::Error) {
+        self.errors
+            .lock()
+            .unwrap()
+            .push(format!("{} {}", info.name, code(err)));
+    }
+}
+
+#[tokio::test]
+async fn resolution_failure_reaches_the_hook_on_every_path() {
+    let hook = std::sync::Arc::new(Recorder::default());
+    let mut r = registry(None);
+    r.set_call_hook(hook.clone());
+    let ctx = Ctx::default();
+    // JSON
+    let err = r
+        .call("get", json!({"id": "nope"}), &ctx, CallOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(code(err.error()), "fix.build.not_found");
+    // typed
+    let err = r
+        .call_typed::<GetOp>(
+            &ctx,
+            Get {
+                build: Ref::new("nope"),
+            },
+            CallOptions::default(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(code(&err), "fix.build.not_found");
+    assert_eq!(hook.arounds.lock().unwrap().as_slice(), ["get", "get"]);
+    assert_eq!(
+        hook.errors.lock().unwrap().as_slice(),
+        ["get fix.build.not_found", "get fix.build.not_found"]
+    );
+}

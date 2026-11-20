@@ -30,7 +30,8 @@ pub struct CallInfo {
     pub path: CallPath,
     /// Who is calling.
     pub caller: Option<Caller>,
-    /// The `key: value` facts the op's `fields` function gave for its parameters.
+    /// The `key: value` facts the op's `fields` function gave for its
+    /// parameters, before their refs are resolved (a ref shows its raw text).
     pub fields: Vec<(&'static str, String)>,
     /// The trace context, passed through untouched.
     pub trace: TraceParent,
@@ -56,7 +57,9 @@ pub trait CallHook: Send + Sync {
         call
     }
 
-    /// Called exactly once when the call fails after its `CallInfo` is built.
+    /// Called exactly once when the call fails after its `CallInfo` is built:
+    /// a ref that does not resolve or a failure of the op. Decode and
+    /// validation errors come before the info and do not reach it.
     ///
     /// `err` is the raw error and may carry secret values: pass any text
     /// taken from it through [`CallInfo::redact`] before it is logged.

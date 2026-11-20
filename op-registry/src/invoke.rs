@@ -1,10 +1,11 @@
 //! The one call pipeline every path runs through.
 //!
-//! Steps: look up the op, check the path and shape, decode, validate, resolve
-//! refs (non-subject refs first, then the subject), build the `CallInfo`, run inside the hook, and
-//! report a failure to the hook. Errors before the `CallInfo` exists (unknown
-//! op, wrong path or shape, decode, validate) are returned without the hook:
-//! there is no info to hand it.
+//! Steps: look up the op, check the path and shape, decode, validate, build
+//! the `CallInfo` from the unresolved parameters, then inside the hook resolve
+//! refs (non-subject refs first, then the subject) and run, and report a
+//! failure to the hook. Errors before the `CallInfo` exists (unknown op, wrong
+//! path or shape, decode, validate) are returned without the hook: there is
+//! no info to hand it. A resolution failure reaches the hook.
 
 use crate::registry::{Entry, Run, TypedStream, TypedUnary};
 use crate::{
@@ -157,13 +158,15 @@ impl<C: Resolve> Registry<C> {
         let mut redactor = secrets;
         redactor.extend(&redactor_of((entry.secrets)(&*params)));
         opts.notices = opts.notices.redacting(&redactor);
-        let result = async {
-            (entry.resolve_refs)(self, ctx, &mut *params).await?;
-            let info = self.info(entry, &*params, path, &opts, &redactor);
-            self.pipeline(info, move || run(self, ctx, params, opts, want_text))
-                .await
-        }
-        .await;
+        let info = self.info(entry, &*params, path, &opts, &redactor);
+        let result = self
+            .pipeline(info, move || {
+                Box::pin(async move {
+                    (entry.resolve_refs)(self, ctx, &mut *params).await?;
+                    run(self, ctx, params, opts, want_text).await
+                })
+            })
+            .await;
         match result {
             Ok(ran) => Invocation {
                 result: Ok(ran.value),
@@ -209,13 +212,15 @@ impl<C: Resolve> Registry<C> {
         let mut redactor = secrets;
         redactor.extend(&redactor_of((entry.secrets)(&*params)));
         opts.notices = opts.notices.redacting(&redactor);
-        let result = async {
-            (entry.resolve_refs)(self, ctx, &mut *params).await?;
-            let info = self.info(entry, &*params, path, &opts, &redactor);
-            self.pipeline(info, move || run(ctx, params, opts, cursor))
-                .await
-        }
-        .await;
+        let info = self.info(entry, &*params, path, &opts, &redactor);
+        let result = self
+            .pipeline(info, move || {
+                Box::pin(async move {
+                    (entry.resolve_refs)(self, ctx, &mut *params).await?;
+                    run(ctx, params, opts, cursor).await
+                })
+            })
+            .await;
         if let Err(err) = &result {
             self.strict(name, err);
         }
@@ -332,13 +337,15 @@ impl<C: Resolve + 'static> Registry<C> {
         crate::OpParams::validate(&params)?;
         let redactor = redactor_of(params.secrets());
         opts.notices = opts.notices.redacting(&redactor);
-        let result = async {
-            self.resolve_refs(ctx, &mut params).await?;
-            let info = self.info(entry, &params, CallPath::Typed, &opts, &redactor);
-            self.pipeline(info, move || f(self, ctx, params, opts))
-                .await
-        }
-        .await;
+        let info = self.info(entry, &params, CallPath::Typed, &opts, &redactor);
+        let result = self
+            .pipeline(info, move || {
+                Box::pin(async move {
+                    self.resolve_refs(ctx, &mut params).await?;
+                    f(self, ctx, params, opts).await
+                })
+            })
+            .await;
         if let Err(err) = &result {
             self.strict(O::NAME, err);
         }
@@ -362,13 +369,15 @@ impl<C: Resolve + 'static> Registry<C> {
         crate::OpParams::validate(&params)?;
         let redactor = redactor_of(params.secrets());
         opts.notices = opts.notices.redacting(&redactor);
-        let result = async {
-            self.resolve_refs(ctx, &mut params).await?;
-            let info = self.info(entry, &params, CallPath::Typed, &opts, &redactor);
-            self.pipeline(info, move || f(ctx, params, cursor, opts))
-                .await
-        }
-        .await;
+        let info = self.info(entry, &params, CallPath::Typed, &opts, &redactor);
+        let result = self
+            .pipeline(info, move || {
+                Box::pin(async move {
+                    self.resolve_refs(ctx, &mut params).await?;
+                    f(ctx, params, cursor, opts).await
+                })
+            })
+            .await;
         if let Err(err) = &result {
             self.strict(O::NAME, err);
         }
