@@ -2,6 +2,9 @@
 
 #[doc(hidden)]
 pub mod rt;
+mod types;
+
+pub use types::Patch;
 
 use serde_json::Value;
 

@@ -41,6 +41,10 @@ pub enum Shape {
     Switch,
     TriState,
     Map,
+    /// A clearable `Patch<T>`.
+    Patch(Base),
+    /// A flattened `OpParams` group.
+    Flatten(Type),
 }
 
 /// Splits `Wrapper<T>` into the wrapper's name and `T`.
@@ -104,6 +108,12 @@ pub fn classify(ty: &Type, value_enum: bool) -> Option<Shape> {
                 return match base(inner, value_enum)? {
                     Base::Bool => None,
                     b => Some(Shape::Repeated(b)),
+                }
+            }
+            "Patch" => {
+                return match base(inner, value_enum)? {
+                    Base::Bool => None,
+                    b => Some(Shape::Patch(b)),
                 }
             }
             "BTreeMap" => {

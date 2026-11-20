@@ -38,6 +38,20 @@ fn args(f: &Field) -> Vec<TokenStream> {
     };
     let append = Some(quote!(.action(#clap::ArgAction::Append)));
     match &f.shape {
+        Shape::Flatten(_) => Vec::new(),
+        Shape::Patch(b) => {
+            let clear_id = format!("clear_{}", f.rust_name);
+            let clear_flag = format!("clear-{}", f.flag);
+            let clear_help = format!("Remove the stored value of --{flag}.");
+            let set = valued(b, None, false);
+            vec![
+                quote!(#set.conflicts_with(#clear_id)),
+                quote! {
+                    #clap::Arg::new(#clear_id).long(#clear_flag).help(#clear_help)
+                        .action(#clap::ArgAction::SetTrue).conflicts_with(#id)
+                },
+            ]
+        }
         Shape::Plain(b) => vec![valued(b, None, f.required())],
         Shape::Optional(b) => vec![valued(b, None, false)],
         Shape::Repeated(b) => vec![valued(b, append, false)],
@@ -70,10 +84,27 @@ fn args(f: &Field) -> Vec<TokenStream> {
 
 pub fn add_args_fn(fields: &[Field]) -> TokenStream {
     let clap = clap();
-    let args = fields.iter().flat_map(args);
+    let steps = fields.iter().map(|f| match &f.shape {
+        Shape::Flatten(ty) => quote!(cmd = <#ty as ::op_registry::OpParams>::add_args(cmd);),
+        _ => {
+            let args = args(f);
+            quote!(#(cmd = cmd.arg(#args);)*)
+        }
+    });
+    let groups = super::schema::one_of_groups(fields).into_iter().map(|(name, optional, members)| {
+        let ids = members.iter().map(|f| &f.rust_name);
+        let required = !optional;
+        quote! {
+            cmd = cmd.group(
+                #clap::ArgGroup::new(#name).args([#(#ids),*]).required(#required).multiple(false),
+            );
+        }
+    });
     quote! {
-        fn add_args(cmd: #clap::Command) -> #clap::Command {
-            cmd #(.arg(#args))*
+        fn add_args(mut cmd: #clap::Command) -> #clap::Command {
+            #(#steps)*
+            #(#groups)*
+            cmd
         }
     }
 }
@@ -86,6 +117,21 @@ fn decode(f: &Field) -> TokenStream {
         quote!(m.get_one::<#ty>(#id).cloned())
     };
     match &f.shape {
+        Shape::Flatten(ty) => quote!(<#ty as ::op_registry::OpParams>::from_matches(m, _cx)?),
+        Shape::Patch(b) => {
+            let clear_id = format!("clear_{}", f.rust_name);
+            let get = get_one(b);
+            quote! {
+                if m.get_flag(#clear_id) {
+                    ::op_registry::Patch::Clear
+                } else {
+                    match #get {
+                        ::std::option::Option::Some(v) => ::op_registry::Patch::Set(v),
+                        ::std::option::Option::None => ::op_registry::Patch::Keep,
+                    }
+                }
+            }
+        }
         Shape::Plain(b) => match f.default_value() {
             Some(d) => {
                 let get = get_one(b);
@@ -134,7 +180,9 @@ pub fn from_matches_fn(fields: &[Field]) -> TokenStream {
             _cx: &mut ::op_registry::ParseCx,
         ) -> ::op_registry::__private::anyhow::Result<Self> {
             #(#lets)*
-            ::std::result::Result::Ok(Self { #(#idents),* })
+            let this = Self { #(#idents),* };
+            ::op_registry::OpParams::validate(&this)?;
+            ::std::result::Result::Ok(this)
         }
     }
 }

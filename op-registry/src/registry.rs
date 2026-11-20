@@ -425,6 +425,7 @@ impl<C: Sync + 'static> Registry<C> {
         F: for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync + 'static,
     {
         let descriptor = Self::describe(&spec, kind);
+        check_param_clashes::<P>(&descriptor.name);
         let extras = Extras {
             cap: spec.cap,
             page_size: spec.page_size,
@@ -501,6 +502,7 @@ impl<C: Sync + 'static> Registry<C> {
     {
         let mut descriptor = Self::describe(&spec, OpKind::Stream);
         descriptor.cursor = true;
+        check_param_clashes::<P>(&descriptor.name);
         let extras = Extras {
             cap: spec.cap,
             page_size: spec.page_size,
@@ -540,6 +542,25 @@ impl<C: Sync + 'static> Registry<C> {
             decode_matches: |matches, cx| Ok(Box::new(P::from_matches(matches, cx)?)),
             run: Run::Stream(run),
         });
+    }
+}
+
+/// Flattened groups are opaque to the derive, so a name used by two fields
+/// of one op is found here.
+fn check_param_clashes<P: OpParams>(op: &str) {
+    let fields = P::fields();
+    if let Some((a, b)) = crate::__private::rt::find_clash(&fields) {
+        let origin = |f: &crate::FieldMeta| match f.from_group {
+            Some(group) => format!("`{}` (from group {group})", f.rust_name),
+            None => format!("`{}`", f.rust_name),
+        };
+        panic!(
+            "operation {op:?}: field {} clashes with field {} (flag --{} / key {})",
+            origin(a),
+            origin(b),
+            a.flag,
+            a.key
+        );
     }
 }
 

@@ -18,6 +18,10 @@ pub struct Field {
     /// A closed key set for map fields.
     pub keys: Option<Vec<String>>,
     pub secret: bool,
+    /// `(group, optional)` from `one_of` / `one_of_optional`.
+    pub one_of: Option<(String, bool)>,
+    /// The Rust name of the field this one is required with.
+    pub requires_if: Option<String>,
 }
 
 impl Field {
@@ -32,6 +36,10 @@ impl Field {
         let mut value_enum = false;
         let mut keys = None;
         let mut secret = false;
+        let mut one_of: Option<(String, bool)> = None;
+        let mut requires_if = None;
+        let mut clearable = false;
+        let mut flatten = false;
         for attr in f.attrs.iter().filter(|a| a.path().is_ident("op")) {
             attr.parse_nested_meta(|m| {
                 let key = m.path.get_ident().map(Ident::to_string).unwrap_or_default();
@@ -39,6 +47,19 @@ impl Field {
                     "default" => default = Some(m.value()?.parse::<Expr>()?),
                     "value_enum" => value_enum = true,
                     "secret" => secret = true,
+                    "clearable" => clearable = true,
+                    "flatten" => flatten = true,
+                    "one_of" | "one_of_optional" => {
+                        let group: syn::LitStr = m.value()?.parse()?;
+                        if one_of.is_some() {
+                            return Err(m.error("one field takes one one_of group"));
+                        }
+                        one_of = Some((group.value(), key == "one_of_optional"));
+                    }
+                    "requires_if" => {
+                        let other: syn::LitStr = m.value()?.parse()?;
+                        requires_if = Some(other.value());
+                    }
                     "keys" => {
                         let array: ExprArray = m.value()?.parse()?;
                         let mut out = Vec::new();
@@ -68,6 +89,10 @@ impl Field {
             })?;
         }
 
+        if flatten {
+            return Self::flatten(f, ident, rust_name, secret || default.is_some() || value_enum
+                || keys.is_some() || clearable || one_of.is_some() || requires_if.is_some());
+        }
         let shape = classify(&f.ty, value_enum).ok_or_else(|| {
             let ty = &f.ty;
             syn::Error::new_spanned(
@@ -78,6 +103,26 @@ impl Field {
                 ),
             )
         })?;
+        if matches!(shape, Shape::Patch(_)) != clearable {
+            return Err(syn::Error::new_spanned(
+                &f.ty,
+                format!(
+                    "field `{rust_name}`: `#[op(clearable)]` and a `Patch<T>` field type go together"
+                ),
+            ));
+        }
+        if one_of.is_some() && !matches!(shape, Shape::Optional(_)) {
+            return Err(syn::Error::new_spanned(
+                &f.ty,
+                format!("field `{rust_name}`: one_of applies only to an `Option<T>` field"),
+            ));
+        }
+        if requires_if.is_some() && !matches!(shape, Shape::Optional(_)) {
+            return Err(syn::Error::new_spanned(
+                &f.ty,
+                format!("field `{rust_name}`: requires_if applies only to an `Option<T>` field"),
+            ));
+        }
         if let Some(d) = &default {
             if !matches!(shape, Shape::Plain(_)) {
                 return Err(syn::Error::new_spanned(
@@ -109,6 +154,56 @@ impl Field {
             default,
             keys,
             secret,
+            one_of,
+            requires_if,
+        })
+    }
+
+    fn flatten(
+        f: &syn::Field,
+        ident: Ident,
+        rust_name: String,
+        other_attrs: bool,
+    ) -> syn::Result<Field> {
+        if other_attrs {
+            return Err(syn::Error::new_spanned(
+                f,
+                format!("field `{rust_name}`: flatten takes no other #[op] key"),
+            ));
+        }
+        if !matches!(f.ty, syn::Type::Path(_)) {
+            return Err(syn::Error::new_spanned(
+                &f.ty,
+                format!("field `{rust_name}`: flatten needs a struct type that derives OpParams"),
+            ));
+        }
+        Ok(Field {
+            key: camel(&rust_name),
+            flag: rust_name.replace('_', "-"),
+            help: doc(f),
+            ident,
+            rust_name,
+            shape: Shape::Flatten(f.ty.clone()),
+            default: None,
+            keys: None,
+            secret: false,
+            one_of: None,
+            requires_if: None,
+        })
+    }
+
+    /// Whether the field was given, as an expression over `self`.
+    pub fn present(&self) -> Option<proc_macro2::TokenStream> {
+        use quote::quote;
+        let ident = &self.ident;
+        Some(match &self.shape {
+            Shape::Optional(_) | Shape::TriState => quote!(self.#ident.is_some()),
+            Shape::Repeated(_) | Shape::Map => quote!(!self.#ident.is_empty()),
+            Shape::Switch => quote!(self.#ident),
+            Shape::Patch(_) => {
+                quote!(!::std::matches!(self.#ident, ::op_registry::Patch::Keep))
+            }
+            Shape::Plain(_) | Shape::Flatten(_) => return None,
         })
     }
 

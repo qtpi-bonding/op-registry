@@ -22,6 +22,17 @@ fn decode(f: &Field) -> TokenStream {
         }
     };
     match &f.shape {
+        Shape::Flatten(ty) => quote! {
+            <#ty as ::op_registry::OpParams>::from_json(
+                #rt::sub_object(&o, &<#ty as ::op_registry::OpParams>::fields()),
+                _cx,
+            )?
+        },
+        Shape::Patch(Base::Enum(ty)) => quote!(#rt::patch_enum::<#ty>(&o, #key)?),
+        Shape::Patch(b) => {
+            let ty = b.ty();
+            quote!(#rt::patch::<#ty>(&o, #key)?)
+        }
         Shape::Plain(b) => {
             let get = get(b);
             match f.default_value() {
@@ -54,7 +65,15 @@ fn decode(f: &Field) -> TokenStream {
 }
 
 pub fn from_json_fn(fields: &[Field]) -> TokenStream {
-    let known = fields.iter().map(|f| &f.key);
+    let known = fields.iter().map(|f| match &f.shape {
+        Shape::Flatten(ty) => quote! {
+            known.extend(<#ty as ::op_registry::OpParams>::fields().into_iter().map(|f| f.key));
+        },
+        _ => {
+            let key = &f.key;
+            quote!(known.push(#key.to_owned());)
+        }
+    });
     let lets = fields.iter().map(|f| {
         let (ident, value) = (&f.ident, decode(f));
         quote!(let #ident = #value;)
@@ -65,9 +84,13 @@ pub fn from_json_fn(fields: &[Field]) -> TokenStream {
             v: ::op_registry::__private::serde_json::Value,
             _cx: &mut ::op_registry::ParseCx,
         ) -> ::op_registry::__private::anyhow::Result<Self> {
-            let o = ::op_registry::__private::rt::object(v, &[#(#known),*])?;
+            let mut known: ::std::vec::Vec<::std::string::String> = ::std::vec::Vec::new();
+            #(#known)*
+            let o = ::op_registry::__private::rt::object(v, &known)?;
             #(#lets)*
-            ::std::result::Result::Ok(Self { #(#idents),* })
+            let this = Self { #(#idents),* };
+            ::op_registry::OpParams::validate(&this)?;
+            ::std::result::Result::Ok(this)
         }
     }
 }

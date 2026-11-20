@@ -1,0 +1,5 @@
+error: field `host`: `#[op(clearable)]` and a `Patch<T>` field type go together
+ --> tests/params_ui/op_params_clearable_needs_option_is_a_compile_error.rs:6:11
+  |
+6 |     host: Option<String>,
+  |           ^^^^^^^^^^^^^^
