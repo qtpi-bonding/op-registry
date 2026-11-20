@@ -100,6 +100,32 @@ fn concept_watch(
     })
 }
 
+#[derive(Clone, Debug, PartialEq, OpParams)]
+pub struct PlanParams {
+    pub goal: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, OpParams)]
+pub struct Index {
+    pub path: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Plan {
+    pub goal: String,
+}
+
+async fn plan(_c: &Ctx, p: PlanParams, _o: CallOptions) -> anyhow::Result<Plan> {
+    Ok(Plan {
+        goal: p.goal.unwrap_or_default(),
+    })
+}
+
+async fn index(_c: &Ctx, _p: Index, _o: CallOptions) -> anyhow::Result<Plan> {
+    Ok(Plan { goal: "indexed".into() })
+}
+
 mod fixture {
     use super::*;
 
@@ -130,6 +156,12 @@ mod fixture {
         "concept list" => { params: ListConcepts, item: Concept,
                             access: reads, audience: agent, list: concept_page,
                             cap: 50, page_size: 10 },
+        /// Make a plan. Bare verb whose output type is named like its marker.
+        "plan" => { params: PlanParams, output: Plan,
+                    access: reads, audience: agent, op: plan },
+        /// Index. Bare verb whose params type is named like its marker.
+        "index" => { params: Index, output: Plan,
+                     access: reads, audience: agent, op: index },
         /// Watch a concept.
         "concept watch" => { params: Watch, output: Concept,
                              access: reads, audience: dev,
@@ -168,6 +200,8 @@ fn derived_names_and_marker_types() {
             "key_keygen",
             "concept_list",
             "concept_list_page",
+            "plan",
+            "index",
             "concept_watch"
         ]
     );
@@ -267,7 +301,7 @@ fn groups_registered_with_summary() {
     // A noun path without a declared group panics in `push`, so the
     // registry building at all proves both groups were registered first.
     let r = registry();
-    assert_eq!(r.names().len(), 5);
+    assert_eq!(r.names().len(), 7);
 }
 
 #[test]
@@ -307,4 +341,25 @@ async fn json_call_runs_the_wrapped_functions() {
         .await
         .unwrap();
     assert_eq!(out["nextCursor"], "n1");
+}
+
+#[test]
+fn marker_named_like_a_user_type_does_not_shadow_it() {
+    // `ops::Plan` and `ops::Index` share their names with the user's `Plan`
+    // output and `Index` params; the markers still resolve to the user types.
+    let r = registry();
+    let out: Plan = futures_executor::block_on(r.call_typed::<ops::Plan>(
+        &Ctx,
+        PlanParams { goal: Some("g".into()) },
+        CallOptions::default(),
+    ))
+    .unwrap();
+    assert_eq!(out, Plan { goal: "g".into() });
+    let out = futures_executor::block_on(r.call_typed::<ops::Index>(
+        &Ctx,
+        Index { path: None },
+        CallOptions::default(),
+    ))
+    .unwrap();
+    assert_eq!(out.goal, "indexed");
 }

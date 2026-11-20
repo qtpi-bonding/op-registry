@@ -15,7 +15,8 @@ pub fn expand(ops: &Ops) -> TokenStream {
     let servers = ops.resolve_server.iter().map(|k| quote!(__r.resolve_server(#k);));
     let groups = ops.groups.iter().map(|(p, s)| quote!(__r.group(#p, #s);));
     let pushes = ops.entries.iter().map(|e| push(ctx, e));
-    let markers = ops.entries.iter().map(|e| markers(ctx, e));
+    let markers = ops.entries.iter().enumerate().map(|(i, e)| markers(i, e));
+    let aliases = ops.entries.iter().enumerate().map(|(i, e)| aliases(i, e));
 
     quote! {
         /// The registry of this binary's operations.
@@ -29,10 +30,14 @@ pub fn expand(ops: &Ops) -> TokenStream {
             __r
         }
 
+        // The user's types are named here, outside `mod ops`, so a marker
+        // named like one of them cannot shadow it.
+        #[doc(hidden)]
+        type __OpCtx = #ctx;
+        #(#aliases)*
+
         /// One marker type per operation, for `Registry::call_typed`.
-        #[allow(unused_imports)]
         pub mod ops {
-            use super::*;
             #(#markers)*
         }
     }
@@ -139,9 +144,26 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
     }
 }
 
-fn markers(ctx: &syn::Type, e: &Entry) -> TokenStream {
-    let path = e.path.value();
+fn alias_names(i: usize) -> (syn::Ident, syn::Ident) {
+    (format_ident!("__OpParams{i}"), format_ident!("__OpOutput{i}"))
+}
+
+fn aliases(i: usize, e: &Entry) -> TokenStream {
+    let (p, o) = alias_names(i);
     let (params, output) = (&e.params, &e.output);
+    quote! {
+        #[doc(hidden)]
+        type #p = #params;
+        #[doc(hidden)]
+        type #o = #output;
+    }
+}
+
+fn markers(i: usize, e: &Entry) -> TokenStream {
+    let path = e.path.value();
+    let (p, o) = alias_names(i);
+    let ctx = quote!(super::__OpCtx);
+    let (params, output) = (quote!(super::#p), quote!(super::#o));
     let one = |ident: syn::Ident, name: String, params: TokenStream, output: TokenStream| {
         quote! {
             pub struct #ident;

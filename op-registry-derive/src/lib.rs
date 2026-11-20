@@ -18,6 +18,10 @@ pub fn derive_op_params(input: TokenStream) -> TokenStream {
 /// `registry()` and a typed marker per op in `ops`.
 ///
 /// See the op-registry design, section 2.1, for the grammar.
+///
+/// The markers are `pub` items of `pub mod ops` and name the op's param and
+/// output types in their `Op` impls, so those types must be at least as
+/// visible as the markers need (a private type gives error E0446).
 #[proc_macro]
 pub fn ops(input: TokenStream) -> TokenStream {
     ops::expand(input.into()).into()
