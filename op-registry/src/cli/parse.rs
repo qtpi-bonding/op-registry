@@ -89,10 +89,9 @@ pub fn parse<C: CliContext>(
         Err(err) => {
             return match err.kind() {
                 ErrorKind::DisplayHelp => Ok((Parsed::Help(err.to_string()), None)),
-                ErrorKind::DisplayVersion => Ok((
-                    Parsed::Version(err.to_string().trim_end().to_owned()),
-                    None,
-                )),
+                ErrorKind::DisplayVersion => {
+                    Ok((Parsed::Version(err.to_string().trim_end().to_owned()), None))
+                }
                 _ => Err(map_error(registry, &cmd, argv, &err)),
             }
         }
@@ -201,13 +200,8 @@ fn named_args(err: &clap::Error) -> Vec<String> {
     out
 }
 
-/// Maps a clap error to a usage failure (ruling 9), without secret values.
-fn map_error<C: CliContext>(
-    registry: &Registry<C>,
-    cmd: &clap::Command,
-    argv: &[OsString],
-    err: &clap::Error,
-) -> UsageFailure {
+/// The long flags of every secret field: the globals' and each op's.
+pub(super) fn secret_flags<C: CliContext>(registry: &Registry<C>) -> Vec<String> {
     let mut flags: Vec<String> = <C::Globals as OpGlobals>::fields()
         .into_iter()
         .filter(|f| f.secret)
@@ -216,6 +210,41 @@ fn map_error<C: CliContext>(
     for entry in &registry.entries {
         flags.extend(entry.secret_flags.iter().cloned());
     }
+    flags
+}
+
+/// A redactor for the values `argv` gives to the secret `flags`
+/// (`--flag value` and `--flag=value`).
+pub(super) fn argv_redactor(flags: &[String], argv: &[OsString]) -> Redactor {
+    let mut redactor = Redactor::default();
+    for (at, token) in argv.iter().enumerate() {
+        let token = token.to_string_lossy();
+        let Some(rest) = token.strip_prefix("--") else {
+            continue;
+        };
+        let (name, inline) = match rest.split_once('=') {
+            Some((name, value)) => (name, Some(value.to_owned())),
+            None => (rest, None),
+        };
+        if flags.iter().any(|f| f == name) {
+            let value =
+                inline.or_else(|| argv.get(at + 1).map(|v| v.to_string_lossy().into_owned()));
+            if let Some(value) = value {
+                redactor.add(value.as_bytes());
+            }
+        }
+    }
+    redactor
+}
+
+/// Maps a clap error to a usage failure (ruling 9), without secret values.
+fn map_error<C: CliContext>(
+    registry: &Registry<C>,
+    cmd: &clap::Command,
+    argv: &[OsString],
+    err: &clap::Error,
+) -> UsageFailure {
+    let flags = secret_flags(registry);
 
     let code = match err.kind() {
         ErrorKind::MissingRequiredArgument => MISSING,
@@ -247,24 +276,7 @@ fn map_error<C: CliContext>(
     }
 
     // Any other message: scrub the values given to secret flags.
-    let mut redactor = Redactor::default();
-    for (at, token) in argv.iter().enumerate() {
-        let token = token.to_string_lossy();
-        let Some(rest) = token.strip_prefix("--") else {
-            continue;
-        };
-        let (name, inline) = match rest.split_once('=') {
-            Some((name, value)) => (name, Some(value.to_owned())),
-            None => (rest, None),
-        };
-        if flags.iter().any(|f| f == name) {
-            let value =
-                inline.or_else(|| argv.get(at + 1).map(|v| v.to_string_lossy().into_owned()));
-            if let Some(value) = value {
-                redactor.add(value.as_bytes());
-            }
-        }
-    }
+    let redactor = argv_redactor(&flags, argv);
     UsageFailure {
         code,
         message: redactor.redact(&clean(&err.to_string())),

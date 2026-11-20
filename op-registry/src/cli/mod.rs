@@ -1,10 +1,14 @@
 //! The command line: the tree built from a registry, and parsing into a
-//! selected op. Dispatch and the runner come in the next layer.
+//! selected op, and the runner that dispatches it.
 
+mod io;
 mod parse;
+mod run;
 mod tree;
 
+pub use io::{Captured, Io, SharedWriter};
 pub use parse::{parse, Parsed, UsageFailure};
+pub use run::{dispatch, run, run_with_io, NoHooks, Outcome, RunHooks};
 pub use tree::command;
 
 /// The id of the library's `--pretty` argument.

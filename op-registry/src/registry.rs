@@ -182,7 +182,6 @@ pub(crate) struct Entry<C> {
     pub extras: Box<dyn Any + Send + Sync>,
     pub decode_json: fn(Value, &mut ParseCx) -> Result<Box<dyn Any + Send>>,
     pub augment: fn(clap::Command) -> clap::Command,
-    #[allow(dead_code)] // read by the runner (Task 14)
     pub decode_matches: fn(&clap::ArgMatches, &mut ParseCx) -> Result<Box<dyn Any + Send>>,
     /// Resolves the refs of erased parameters in place.
     pub resolve_refs: ResolveRefs<C>,
@@ -190,6 +189,8 @@ pub(crate) struct Entry<C> {
     pub page_size: u32,
     /// The long flags of `#[op(secret)]` fields, for secret-safe CLI errors.
     pub secret_flags: Vec<String>,
+    /// The clap argument ids of those fields, to read their raw values.
+    pub secret_ids: Vec<String>,
     /// The secrets of erased parameters, for redaction.
     pub secrets: fn(&(dyn Any + Send)) -> Vec<Vec<u8>>,
     pub run: Run<C>,
@@ -543,6 +544,7 @@ impl<C: Resolve + 'static> Registry<C> {
             decode_matches: |matches, cx| Ok(Box::new(P::from_matches(matches, cx)?)),
             page_size: spec.page_size,
             secret_flags: secret_flags::<P>(),
+            secret_ids: secret_ids::<P>(),
             resolve_refs: |registry, ctx, params| {
                 let params = params
                     .downcast_mut::<P>()
@@ -642,6 +644,7 @@ impl<C: Resolve + 'static> Registry<C> {
             decode_matches: |matches, cx| Ok(Box::new(P::from_matches(matches, cx)?)),
             page_size: spec.page_size,
             secret_flags: secret_flags::<P>(),
+            secret_ids: secret_ids::<P>(),
             resolve_refs: |registry, ctx, params| {
                 let params = params
                     .downcast_mut::<P>()
@@ -672,6 +675,14 @@ pub(crate) fn erase_fields<P: 'static>(
 }
 
 /// The long flags of a parameter type's `#[op(secret)]` fields.
+fn secret_ids<P: OpParams>() -> Vec<String> {
+    P::fields()
+        .into_iter()
+        .filter(|f| f.secret)
+        .map(|f| f.rust_name.to_owned())
+        .collect()
+}
+
 fn secret_flags<P: OpParams>() -> Vec<String> {
     P::fields()
         .into_iter()

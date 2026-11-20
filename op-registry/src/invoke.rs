@@ -25,10 +25,8 @@ pub(crate) struct Invocation<T> {
     pub redactor: Redactor,
     /// The process exit code of a successful call (0 unless the op declares
     /// one); meaningless for a failure.
-    #[allow(dead_code)] // read by the command-line adapter (Task 13)
     pub exit: u8,
     /// The text rendering, when asked for and the op has one.
-    #[allow(dead_code)] // read by the command-line adapter (Task 13)
     pub text: Option<String>,
 }
 
