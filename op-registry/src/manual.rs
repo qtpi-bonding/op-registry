@@ -3,7 +3,7 @@
 
 use crate::registry::TypedUnary;
 use crate::{
-    cli, Access, Audience, CallError, CliContext, Descriptor, ErrorCodeEntry, Op, OpKind, OpParams,
+    cli, Access, Audience, CallError, CallPath, CliContext, Descriptor, ErrorCodeEntry, Op, OpKind, OpParams,
     OpSpec, Registry, RenderText, Resolve,
 };
 use anyhow::{anyhow, Result};
@@ -263,7 +263,8 @@ pub fn render_json<C: CliContext>(registry: &Registry<C>) -> Value {
 /// The parameters of the `manual` op.
 #[derive(Clone, Debug, Default, OpParams)]
 pub struct ManualParams {
-    /// Write the Markdown manual to this file instead of returning it.
+    /// Write the Markdown manual to this file instead of returning it. Only
+    /// the command line may: elsewhere it is a usage error.
     pub out: Option<PathBuf>,
     /// Return every descriptor, schema, exit and code as JSON.
     pub json: bool,
@@ -317,8 +318,9 @@ impl<C: CliContext + Resolve + 'static> Registry<C> {
         spec.render_text = Some(|out| out.render_text());
         let manual = Arc::new(manual);
         let run: TypedUnary<C, ManualParams, ManualOutput> =
-            Arc::new(move |registry, _ctx, params, _opts| {
-                let result = run_manual(registry, &manual, params);
+            Arc::new(move |registry, _ctx, params, opts| {
+                let on_cli = opts.path == Some(CallPath::Cli);
+                let result = run_manual(registry, &manual, params, on_cli);
                 Box::pin(async move { result })
             });
         let entry = Self::unary_entry(&spec, OpKind::Local, run);
@@ -330,9 +332,17 @@ fn run_manual<C: CliContext>(
     registry: &Registry<C>,
     manual: &Manual,
     params: ManualParams,
+    on_cli: bool,
 ) -> Result<ManualOutput> {
     if params.json {
         return Ok(ManualOutput::Json(render_json(registry)));
+    }
+    // An MCP tool or a mount must not overwrite a file of its host.
+    if params.out.is_some() && !on_cli {
+        return Err(crate::__private::usage(crate::UsageError::InvalidField {
+            name: "out".to_owned(),
+            reason: "only the command line may write the manual to a file".to_owned(),
+        }));
     }
     let markdown = render(registry, manual)?;
     match params.out {

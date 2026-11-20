@@ -77,6 +77,7 @@ op-status and op-listen, wire change:
 - `CallFailure`, the redacted failure of a JSON call; `CallInfo::redact` and
   `cli::Outcome::message()` (a redacted copy of the error) for hooks.
 - The manual: `Registry::with_manual` and the `manual` op (feature `manual`).
+  Its `--out` writes a file on the command line only.
 - The `rmcp` feature: `RegistryServer`, serving one audience.
 - The testing kit (feature `testing`): `assert_parity`, `assert_canonical`,
   `assert_casing`, `assert_help_complete`, `assert_manual_snapshot`,

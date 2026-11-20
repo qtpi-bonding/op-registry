@@ -366,3 +366,48 @@ fn help_never_shows_env_value() {
     assert!(!help.contains(&format!("{HUB_ENV}=")));
     std::env::remove_var(HUB_ENV);
 }
+
+#[test]
+fn out_is_refused_off_the_command_line() {
+    let r = with_manual();
+    let dir = std::env::temp_dir().join(format!("oprm-off-cli-{}", std::process::id()));
+    let file = dir.join("never.md");
+    let failure = futures_executor::block_on(call_tool(
+        &r,
+        &Ctx,
+        Audience::Agent,
+        "manual",
+        json!({"out": file.to_str().unwrap()}),
+        CallOptions::default(),
+    ))
+    .unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(failure.error()).code,
+        "op_registry.usage.invalid"
+    );
+    let failure = futures_executor::block_on(r.call(
+        "manual",
+        json!({"out": file.to_str().unwrap()}),
+        &Ctx,
+        CallOptions::default(),
+    ))
+    .unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(failure.error()).code,
+        "op_registry.usage.invalid"
+    );
+    let err = futures_executor::block_on(r.call_typed::<ManualOp<Ctx>>(
+        &Ctx,
+        op_registry::manual::ManualParams {
+            out: Some(file.clone()),
+            json: false,
+        },
+        CallOptions::default(),
+    ))
+    .unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(&err).code,
+        "op_registry.usage.invalid"
+    );
+    assert!(!dir.exists(), "nothing is written off the command line");
+}

@@ -158,6 +158,7 @@ impl<C: Resolve> Registry<C> {
         let mut redactor = secrets;
         redactor.extend(&redactor_of((entry.secrets)(&*params)));
         opts.notices = opts.notices.redacting(&redactor);
+        opts.path = Some(path.clone());
         let info = self.info(entry, &*params, path, &opts, &redactor);
         let result = self
             .pipeline(info, move || {
@@ -212,6 +213,7 @@ impl<C: Resolve> Registry<C> {
         let mut redactor = secrets;
         redactor.extend(&redactor_of((entry.secrets)(&*params)));
         opts.notices = opts.notices.redacting(&redactor);
+        opts.path = Some(path.clone());
         let info = self.info(entry, &*params, path, &opts, &redactor);
         let result = self
             .pipeline(info, move || {
@@ -337,6 +339,7 @@ impl<C: Resolve + 'static> Registry<C> {
         crate::OpParams::validate(&params)?;
         let redactor = redactor_of(params.secrets());
         opts.notices = opts.notices.redacting(&redactor);
+        opts.path = Some(CallPath::Typed);
         let info = self.info(entry, &params, CallPath::Typed, &opts, &redactor);
         let result = self
             .pipeline(info, move || {
@@ -369,6 +372,7 @@ impl<C: Resolve + 'static> Registry<C> {
         crate::OpParams::validate(&params)?;
         let redactor = redactor_of(params.secrets());
         opts.notices = opts.notices.redacting(&redactor);
+        opts.path = Some(CallPath::Typed);
         let info = self.info(entry, &params, CallPath::Typed, &opts, &redactor);
         let result = self
             .pipeline(info, move || {

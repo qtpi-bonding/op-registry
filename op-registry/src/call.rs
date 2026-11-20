@@ -1,4 +1,4 @@
-use crate::{Notices, OpParams, Redactor};
+use crate::{CallPath, Notices, OpParams, Redactor};
 
 /// Per-call options.
 #[non_exhaustive]
@@ -12,6 +12,8 @@ pub struct CallOptions {
     pub notices: Notices,
     /// The name of the transport, for the `json` path.
     pub transport: Option<String>,
+    /// The path the call took; the library sets it before the op runs.
+    pub(crate) path: Option<CallPath>,
 }
 
 /// Identifies the caller of an operation.

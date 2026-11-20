@@ -254,7 +254,9 @@ wrong_path}`. `get` and `delete` of a missing object are
 
 With the `manual` feature, `Registry::with_manual(manual, audience)` adds a
 `manual` op that renders every op the registry holds into one document;
-`manual --json` gives the descriptors, `--out` writes a file.
+`manual --json` gives the descriptors, `--out` writes a file. Only the command
+line may write: on any other path (an MCP tool, a mount, a typed call) `out` is
+refused with `op_registry.usage.invalid`.
 
 ## Tool lists and other transports
 
