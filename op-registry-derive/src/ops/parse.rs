@@ -9,6 +9,7 @@ use syn::{
 
 pub struct Ops {
     pub ctx: Type,
+    pub globals: Option<Type>,
     pub pillar: Option<LitStr>,
     pub bin: Option<Bin>,
     pub resolve_server: Vec<LitStr>,
@@ -60,6 +61,7 @@ const AUDIENCES: [&str; 3] = ["agent", "owner", "dev"];
 impl Parse for Ops {
     fn parse(input: ParseStream) -> Result<Self> {
         let mut ctx = None;
+        let mut globals = None;
         let mut pillar = None;
         let (mut bin, mut version, mut about) = (None, None, None);
         let mut resolve_server = Vec::new();
@@ -71,10 +73,7 @@ impl Parse for Ops {
             input.parse::<Token![=]>()?;
             match key.to_string().as_str() {
                 "Ctx" => once(&mut ctx, &key, input.parse::<Type>()?)?,
-                // Parsed and ignored here; the globals check comes with the runner.
-                "globals" => {
-                    input.parse::<Type>()?;
-                }
+                "globals" => once(&mut globals, &key, input.parse::<Type>()?)?,
                 "pillar" => once(&mut pillar, &key, input.parse::<LitStr>()?)?,
                 "bin" => once(&mut bin, &key, input.parse::<LitStr>()?)?,
                 "version" => once(&mut version, &key, input.parse::<Expr>()?)?,
@@ -137,6 +136,7 @@ impl Parse for Ops {
         }
         Ok(Ops {
             ctx,
+            globals,
             pillar,
             bin,
             resolve_server,

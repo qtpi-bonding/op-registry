@@ -26,6 +26,8 @@ pub struct Field {
     pub requires_if: Option<String>,
     /// Set on a `Ref` field.
     pub reference: Option<RefInfo>,
+    /// The environment variable a global falls back to (`OpGlobals` only).
+    pub env: Option<String>,
 }
 
 /// What `subject`, `kind`, `id_only` and `scope` say about a `Ref` field.
@@ -38,6 +40,11 @@ pub struct RefInfo {
 
 impl Field {
     pub fn parse(f: &syn::Field) -> syn::Result<Field> {
+        Self::parse_with(f, false)
+    }
+
+    /// Parses a field; `allow_env` accepts `#[op(env = "...")]` (globals).
+    pub fn parse_with(f: &syn::Field, allow_env: bool) -> syn::Result<Field> {
         let ident = f
             .ident
             .clone()
@@ -57,6 +64,7 @@ impl Field {
         let mut kind: Option<String> = None;
         let mut id_only = false;
         let mut scope: Option<Vec<String>> = None;
+        let mut env: Option<String> = None;
         for attr in f.attrs.iter().filter(|a| a.path().is_ident("op")) {
             attr.parse_nested_meta(|m| {
                 let key = m.path.get_ident().map(Ident::to_string).unwrap_or_default();
@@ -117,6 +125,7 @@ impl Field {
                         }
                         keys = Some(out);
                     }
+                    "env" if allow_env => env = Some(m.value()?.parse::<syn::LitStr>()?.value()),
                     "long" | "short" | "positional" | "env" => {
                         return Err(m.error(format!(
                             "unknown #[op] key `{key}`: flags are the long kebab-case field name only"
@@ -219,6 +228,7 @@ impl Field {
             one_of,
             requires_if,
             reference,
+            env,
         })
     }
 
@@ -254,6 +264,7 @@ impl Field {
             one_of: None,
             requires_if: None,
             reference: None,
+            env: None,
         })
     }
 

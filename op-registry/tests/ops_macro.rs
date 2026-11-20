@@ -8,6 +8,16 @@ use serde_json::json;
 pub struct Ctx;
 impl op_registry::Resolve for Ctx {}
 
+#[derive(op_registry::OpGlobals)]
+pub struct Globals {}
+
+impl op_registry::CliContext for Ctx {
+    type Globals = Globals;
+    fn from_globals(_: &Globals) -> anyhow::Result<Self> {
+        Ok(Ctx)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, OpParams)]
 pub struct GetConcept {
     #[op(subject = "concept")]
@@ -140,7 +150,7 @@ mod fixture {
 
     op_registry::ops! {
         Ctx = Ctx;
-        globals = ();
+        globals = Globals;
         pillar = "fix";
         bin = "fixd"; version = "1.2.3"; about = "A fixture.";
         resolve_server = ["concept", "tag"];

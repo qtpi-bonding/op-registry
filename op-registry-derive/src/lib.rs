@@ -1,5 +1,6 @@
 //! Derive macros for op-registry.
 
+mod globals;
 mod ops;
 mod params;
 
@@ -25,4 +26,16 @@ pub fn derive_op_params(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn ops(input: TokenStream) -> TokenStream {
     ops::expand(input.into()).into()
+}
+
+/// Derives `op_registry::OpGlobals`: the process settings of one binary, as
+/// global clap arguments with an optional `#[op(env = "...")]` fallback.
+///
+/// The field rules are those of `OpParams`, except `Ref`, `Json`, `Input`,
+/// `SecretFile` and `flatten` fields are rejected.
+#[proc_macro_derive(OpGlobals, attributes(op))]
+pub fn derive_op_globals(input: TokenStream) -> TokenStream {
+    globals::derive(syn::parse_macro_input!(input as syn::DeriveInput))
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }

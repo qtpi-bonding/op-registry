@@ -1,6 +1,6 @@
 #![allow(clippy::err_expect, clippy::ok_expect)]
 use futures_util::future::BoxFuture;
-use op_registry::cli::{self, CliOutput};
+use op_registry::cli::{self, Parsed};
 use op_registry::parity::{assert_parity, cli_surface};
 use op_registry::{mcp, Audience, CallOptions, OpParams, OpSpec, Registry};
 use op_status::ops::{status_registry, StatusOptions};
@@ -17,6 +17,16 @@ struct ToySource {
 }
 
 impl op_registry::Resolve for ToySource {}
+
+#[derive(op_registry::OpGlobals)]
+pub struct NoGlobals {}
+
+impl op_registry::CliContext for ToySource {
+    type Globals = NoGlobals;
+    fn from_globals(_: &NoGlobals) -> anyhow::Result<Self> {
+        Ok(ToySource::new(Vec::new()))
+    }
+}
 
 impl ToySource {
     fn new(components: Vec<Component>) -> Self {
@@ -224,7 +234,8 @@ fn status_registry_merges_into_an_app_registry_and_cli_and_mcp_parity_holds() {
     app.merge(status_registry::<ToySource>(StatusOptions::new()));
     assert_eq!(app.names(), vec!["system_ping", "status_get"]);
 
-    let cmd = cli::command(&app, "app", "toy app");
+    app.set_bin("app", "0.0.0", "toy app");
+    let cmd = cli::command(&app);
     cmd.clone().debug_assert();
     let surface = cli_surface(&cmd);
     let tools = mcp::tool_list(&app, Audience::Agent);
@@ -233,18 +244,25 @@ fn status_registry_merges_into_an_app_registry_and_cli_and_mcp_parity_holds() {
     assert!(surface.names.contains("system_ping"));
     assert!(tools.iter().any(|t| t.name == "status_get"));
 
-    // CLI flags --kind --id --limit reach the op and match the MCP result.
+    // CLI flags --kind --limit select the op; its JSON call matches MCP.
     let src = ToySource::new(many(5));
-    let matches = cmd
-        .try_get_matches_from(["app", "status", "get", "--kind", "room", "--limit", "2"])
-        .unwrap();
-    let from_cli =
-        futures_executor::block_on(cli::dispatch(&app, &src, &matches, CallOptions::default()))
-            .ok()
-            .expect("dispatch");
-    let CliOutput::Value(from_cli) = from_cli else {
-        panic!("expected a value");
+    let argv: Vec<std::ffi::OsString> =
+        ["app", "status", "get", "--kind", "room", "--limit", "2"]
+            .into_iter()
+            .map(Into::into)
+            .collect();
+    let (Parsed::Op { name, .. }, _) = cli::parse(&app, &argv).ok().expect("parse") else {
+        panic!("expected an op");
     };
+    assert_eq!(name, "status_get");
+    let from_cli = futures_executor::block_on(app.call(
+        &name,
+        json!({"kind": "room", "limit": 2}),
+        &src,
+        CallOptions::default(),
+    ))
+    .ok()
+    .expect("call");
     let from_mcp = futures_executor::block_on(mcp::call_tool(
         &app,
         &src,

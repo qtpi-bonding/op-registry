@@ -1,12 +1,12 @@
 //! The `OpParams` derive: parse the struct once into `Field`s, then emit one
 //! trait method per generator module.
 
-mod attrs;
-mod clap_gen;
+pub(crate) mod attrs;
+pub(crate) mod clap_gen;
 mod json_gen;
 mod ref_gen;
-mod schema;
-mod types;
+pub(crate) mod schema;
+pub(crate) mod types;
 
 use proc_macro2::TokenStream;
 use quote::quote;

@@ -18,7 +18,7 @@ fn keys_expr(f: &Field) -> TokenStream {
 }
 
 /// The clap arguments of one field (two for a tri-state).
-fn args(f: &Field) -> Vec<TokenStream> {
+pub(crate) fn args(f: &Field) -> Vec<TokenStream> {
     let clap = clap();
     let (id, flag) = (&f.rust_name, &f.flag);
     let help = (!f.help.is_empty()).then(|| {
@@ -109,7 +109,7 @@ pub fn add_args_fn(fields: &[Field]) -> TokenStream {
     }
 }
 
-fn decode(f: &Field) -> TokenStream {
+pub(crate) fn decode(f: &Field) -> TokenStream {
     let rt = quote!(::op_registry::__private::rt);
     let (id, key, flag) = (&f.rust_name, &f.key, &f.flag);
     let get_one = |b: &Base| {

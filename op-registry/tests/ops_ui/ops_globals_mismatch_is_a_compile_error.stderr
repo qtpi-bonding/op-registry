@@ -1,0 +1,22 @@
+error[E0271]: type mismatch resolving `<Ctx as CliContext>::Globals == OtherGlobals`
+  --> tests/ops_ui/ops_globals_mismatch_is_a_compile_error.rs:34:11
+   |
+34 |     Ctx = Ctx;
+   |           ^^^ type mismatch resolving `<Ctx as CliContext>::Globals == OtherGlobals`
+   |
+note: expected this to be `OtherGlobals`
+  --> tests/ops_ui/ops_globals_mismatch_is_a_compile_error.rs:18:20
+   |
+18 |     type Globals = Globals;
+   |                    ^^^^^^^
+note: required by a bound in `__check_globals`
+  --> tests/ops_ui/ops_globals_mismatch_is_a_compile_error.rs:33:1
+   |
+33 | / op_registry::ops! {
+34 | |     Ctx = Ctx;
+35 | |     globals = OtherGlobals;
+36 | |     /// Doc.
+37 | |     "a b" => { params: P, output: serde_json::Value, access: reads, audience: agent, op: f },
+38 | | }
+   | |_^ required by this bound in `__check_globals`
+   = note: this error originates in the macro `op_registry::ops` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -8,6 +8,7 @@ mod call;
 pub mod cli;
 mod descriptor;
 pub mod exit;
+mod globals;
 mod hook;
 mod invoke;
 mod list;
@@ -22,10 +23,11 @@ mod registry;
 pub use call::CallError;
 pub use call::{CallOptions, Caller, Cursor, Op, TraceParent};
 pub use descriptor::*;
+pub use globals::{CliContext, OpGlobals};
 pub use hook::{CallHook, CallInfo, CallPath, NoHook};
 pub use list::{ListItem, Page, PageParams, PageRequest, TooMany};
 pub use notices::{Notice, NoticeSink, Notices};
-pub use op_registry_derive::{ops, OpParams};
+pub use op_registry_derive::{ops, OpGlobals, OpParams};
 pub use output::{
     error_value, notice_line, print_json, render, write_error, write_private, OkExit, OutputSchema,
     RenderText, Style,

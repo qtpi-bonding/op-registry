@@ -5,12 +5,23 @@ use common::*;
 use op_listen::listen_entry;
 use op_registry::mcp;
 use op_registry::parity::cli_surface;
-use op_registry::{cli, Audience, CallOptions, Caller, Cursor, OpSpec, Registry};
+use op_registry::{cli, Audience, CallOptions, Caller, CliContext, Cursor, OpGlobals, OpSpec, Registry};
 use serde_json::json;
 use std::sync::Arc;
 
+#[derive(OpGlobals)]
+pub struct NoGlobals {}
+
+impl CliContext for Ctx {
+    type Globals = NoGlobals;
+    fn from_globals(_: &NoGlobals) -> anyhow::Result<Self> {
+        Ok(Ctx)
+    }
+}
+
 fn toy() -> Registry<Ctx> {
     let mut registry = Registry::new();
+    registry.set_bin("app", "0.0.0", "toy");
     registry.group("log", "Log.");
     let l = LogListener::new(vec![(1, "a"), (2, "b"), (3, "c")]);
     listen_entry(
@@ -55,7 +66,7 @@ fn listen_entry_is_a_cli_only_streaming_op_and_absent_from_the_tool_list() {
         );
     }
 
-    let cmd = cli::command(&registry, "app", "toy");
+    let cmd = cli::command(&registry);
     assert!(cli_surface(&cmd).names.contains("log_listen"));
     cmd.clone().debug_assert();
 

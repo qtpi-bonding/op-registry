@@ -18,6 +18,15 @@ pub fn expand(ops: &Ops) -> TokenStream {
         .map(|k| quote!(__r.resolve_server(#k);));
     let groups = ops.groups.iter().map(|(p, s)| quote!(__r.group(#p, #s);));
     let pushes = ops.entries.iter().map(|e| push(ctx, e));
+    let globals = ops.globals.as_ref().map(|g| {
+        // Fails to compile unless the context's `CliContext::Globals` is `g`.
+        quote! {
+            const _: () = {
+                fn __check_globals<C: ::op_registry::CliContext<Globals = #g>>() {}
+                let _ = __check_globals::<#ctx>;
+            };
+        }
+    });
     let markers = ops.entries.iter().enumerate().map(|(i, e)| markers(i, e));
     let aliases = ops.entries.iter().enumerate().map(|(i, e)| aliases(i, e));
 
@@ -37,6 +46,7 @@ pub fn expand(ops: &Ops) -> TokenStream {
         // named like one of them cannot shadow it.
         #[doc(hidden)]
         type __OpCtx = #ctx;
+        #globals
         #(#aliases)*
 
         /// One marker type per operation, for `Registry::call_typed`.

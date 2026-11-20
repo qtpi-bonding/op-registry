@@ -9,13 +9,23 @@ use futures_util::{FutureExt, StreamExt};
 use op_listen::{
     follow, listen_stream, Caller, FollowOptions, ListenCursor, Listener, Opened, OverflowPolicy,
 };
-use op_registry::cli::{self};
+use op_registry::cli::{self, Parsed};
 use op_registry::parity::{assert_parity, cli_surface};
 use op_registry::{mcp, Audience};
 use op_status::ops::{status_registry, GetParams, StatusOptions};
 use op_status::{open_status, Component, StatusFilter, StatusListener, WATCH_BUFFER};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
+
+#[derive(op_registry::OpGlobals)]
+pub struct NoGlobals {}
+
+impl op_registry::CliContext for Toy {
+    type Globals = NoGlobals;
+    fn from_globals(_: &NoGlobals) -> anyhow::Result<Self> {
+        Ok(Toy::new())
+    }
+}
 
 fn gp() -> GetParams {
     GetParams {
@@ -273,13 +283,20 @@ fn status_watch_is_a_cli_only_stream_entry_and_parity_holds() {
     assert!(tools.iter().all(|t| t.name != "status_watch"));
     assert!(tools.iter().any(|t| t.name == "status_get"));
 
-    let cmd = cli::command(&reg, "app", "toy app");
+    let mut reg = reg;
+    reg.set_bin("app", "0.0.0", "toy app");
+    let cmd = cli::command(&reg);
     cmd.clone().debug_assert();
     let surface = cli_surface(&cmd);
     assert!(surface.names.contains("status_watch"));
     assert_parity(&reg, &surface, &tools, &[], &[], Audience::Agent).unwrap();
-    cmd.try_get_matches_from(["app", "status", "watch", "--kind", "room", "--limit", "2"])
-        .unwrap();
+    let argv: Vec<std::ffi::OsString> =
+        ["app", "status", "watch", "--kind", "room", "--limit", "2"]
+            .into_iter()
+            .map(Into::into)
+            .collect();
+    let (parsed, _) = cli::parse(&reg, &argv).ok().expect("parse");
+    assert!(matches!(parsed, Parsed::Op { ref name, .. } if name == "status_watch"));
 
     let owner = status_registry::<Toy>(StatusOptions::new().audience(Audience::Owner));
     assert_eq!(owner.get("status_watch").unwrap().audience, Audience::Owner);

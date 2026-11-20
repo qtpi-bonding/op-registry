@@ -1,0 +1,5 @@
+error: global `value`: a global cannot be a Ref, Json, Input or SecretFile
+ --> tests/params_ui/op_globals_json_field_is_a_compile_error.rs:5:12
+  |
+5 |     value: op_registry::Json,
+  |            ^^^^^^^^^^^^^^^^^
