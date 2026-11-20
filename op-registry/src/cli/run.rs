@@ -25,7 +25,9 @@ pub trait RunHooks {
     fn pre_parse(&self, argv: &[OsString]) {
         let _ = argv;
     }
-    /// A clap or library usage error, before the error line is written.
+    /// A run that fails with exit 2, wherever the failure came from (clap,
+    /// decode, validate, or an op returning an `op_registry.usage.*` error).
+    /// Called once per run, before `post_run` and before the error line.
     fn on_usage_error(&self, failure: &UsageFailure) {
         let _ = failure;
     }
@@ -146,7 +148,6 @@ pub async fn run_with_io<C: CliContext + Resolve>(
         Ok(parsed) => parsed,
         Err(mut failure) => {
             failure.message = scrub().redact(&failure.message);
-            hooks.on_usage_error(&failure);
             let error = coded_error::into_anyhow(UsageCoded(failure));
             return finish_err(&mut io, Some(hooks), None, error, &Redactor::default()).exit_code();
         }
@@ -244,6 +245,14 @@ fn finish_err(
     let message = redactor.redact(&format!("{error:#}"));
     let outcome = Outcome::Err { op, error, message };
     if let Some(hooks) = hooks {
+        if let Outcome::Err { error, message, .. } = &outcome {
+            if exit::exit_code(error) == exit::USAGE {
+                hooks.on_usage_error(&UsageFailure {
+                    code: coded_error::facts_anyhow(error).code,
+                    message: message.clone(),
+                });
+            }
+        }
         hooks.post_run(&outcome);
     }
     if let Outcome::Err { error, .. } = &outcome {
@@ -371,14 +380,6 @@ async fn execute<C: CliContext + Resolve>(
             // Nothing is built yet, so the redactor comes from the raw values.
             let mut redactor = matches_redactor(&entry.secret_ids, &matches);
             redactor.extend(&secrets);
-            if exit::exit_code(&error) == exit::USAGE {
-                if let Some(hooks) = hooks {
-                    hooks.on_usage_error(&UsageFailure {
-                        code: coded_error::facts_anyhow(&error).code,
-                        message: redactor.redact(&format!("{error:#}")),
-                    });
-                }
-            }
             return finish_err(io, hooks, Some(name), error, &redactor);
         }
     };

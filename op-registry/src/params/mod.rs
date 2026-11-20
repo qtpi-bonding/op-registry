@@ -380,7 +380,8 @@ impl coded_error::CodeCatalog for MissingUnless {
     }
 }
 
-#[doc(hidden)]
+/// Wraps a [`UsageError`] as the error an op or a validator returns: it exits
+/// 2 and reaches [`RunHooks::on_usage_error`](crate::cli::RunHooks::on_usage_error).
 pub fn usage(error: UsageError) -> anyhow::Error {
     coded_error::into_anyhow(error)
 }

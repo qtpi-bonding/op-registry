@@ -192,6 +192,16 @@ fn reg() -> Registry<Ctx> {
             })
         },
     );
+    unary(
+        &mut r,
+        OpSpec::<Nothing, Out>::new("task usage", "Returns a usage error."),
+        |_| {
+            Err(op_registry::usage(op_registry::UsageError::InvalidField {
+                name: "x".to_owned(),
+                reason: "the op says so".to_owned(),
+            }))
+        },
+    );
     items(&mut r, OpSpec::new("feed watch", "Watch."), None);
     items(&mut r, OpSpec::new("feed broken", "Breaks."), Some(2));
     r.push_list(
@@ -328,6 +338,20 @@ fn usage_error_exits_2_and_calls_on_usage_error() {
     let e = r.last_err();
     assert_eq!(e["error"]["code"], "op_registry.cli.unknown_command");
     assert_eq!(e["error"]["class"], "logical");
+}
+
+#[test]
+fn op_usage_error_reaches_hook_once_and_exits_2() {
+    let rec = Rec::default();
+    let r = run_with(&["task", "usage"], b"", false, false, &rec);
+    assert_eq!(r.code, 2);
+    assert_eq!(rec.log(), ["pre_parse", "on_usage_error", "post_run_err"]);
+    assert_eq!(r.last_err()["error"]["code"], "op_registry.usage.invalid");
+    // A failure that is not exit 2 does not reach the hook.
+    let rec = Rec::default();
+    let r = run_with(&["task", "fail"], b"", false, false, &rec);
+    assert_ne!(r.code, 2);
+    assert_eq!(rec.log(), ["pre_parse", "post_run_err"]);
 }
 
 #[test]

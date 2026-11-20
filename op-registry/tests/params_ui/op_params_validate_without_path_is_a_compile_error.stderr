@@ -1,0 +1,5 @@
+error: `validate` takes a function path: #[op(validate = check)]
+ --> tests/params_ui/op_params_validate_without_path_is_a_compile_error.rs:4:6
+  |
+4 | #[op(validate)]
+  |      ^^^^^^^^

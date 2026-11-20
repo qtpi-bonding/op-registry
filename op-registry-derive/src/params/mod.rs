@@ -38,7 +38,8 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let add_args = clap_gen::add_args_fn(&fields);
     let from_matches = clap_gen::from_matches_fn(&fields);
     let from_json = json_gen::from_json_fn(&fields);
-    let validate = schema::validate_fn(&fields);
+    let validator = struct_validator(&input.attrs)?;
+    let validate = schema::validate_fn(&fields, validator.as_ref());
     let ref_slots = ref_gen::ref_slots_fn(&fields);
     let secrets = schema::secrets_fn(&fields);
     let needs_secrets = fields.iter().any(|f| {
@@ -69,4 +70,32 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             #secrets
         }
     })
+}
+
+/// The struct-level `#[op(validate = path)]`: the keys of a struct-level
+/// `#[op(..)]` are `validate` only (more arrive with their changes).
+fn struct_validator(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Path>> {
+    let mut validator = None;
+    for attr in attrs.iter().filter(|a| a.path().is_ident("op")) {
+        attr.parse_nested_meta(|m| {
+            let key = m
+                .path
+                .get_ident()
+                .map(|i| i.to_string())
+                .unwrap_or_default();
+            match key.as_str() {
+                "validate" => {
+                    let bad =
+                        || m.error("`validate` takes a function path: #[op(validate = check)]");
+                    if !m.input.peek(syn::Token![=]) {
+                        return Err(bad());
+                    }
+                    validator = Some(m.value()?.parse::<syn::Path>().map_err(|_| bad())?);
+                    Ok(())
+                }
+                _ => Err(m.error(format!("unknown #[op] key `{key}`"))),
+            }
+        })?;
+    }
+    Ok(validator)
 }

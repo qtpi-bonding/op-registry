@@ -42,4 +42,6 @@ fn op_params_compile_failures() {
     tests.compile_fail(
         "tests/params_ui/op_params_dotted_target_empty_segment_is_a_compile_error.rs",
     );
+    tests.compile_fail("tests/params_ui/op_params_unknown_struct_key_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_validate_without_path_is_a_compile_error.rs");
 }

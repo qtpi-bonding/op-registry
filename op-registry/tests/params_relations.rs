@@ -1088,3 +1088,147 @@ fn every_shape_clap_group_ids_are_valid() {
         assert_eq!(exit_of::<EveryShape>(args), 2, "{args:?}");
     }
 }
+
+// ---- Struct-level validator ----
+
+/// gait's rule: `--all` needs `--yes` unless `--dry-run`.
+fn check_bulk(p: &Bulk) -> Result<(), op_registry::UsageError> {
+    if p.all && !p.yes && !p.dry_run {
+        return Err(op_registry::UsageError::InvalidField {
+            name: "all".into(),
+            reason: "--all needs --yes unless --dry-run".into(),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, OpParams)]
+#[op(validate = check_bulk)]
+struct Bulk {
+    all: bool,
+    yes: bool,
+    dry_run: bool,
+}
+
+fn bulk(all: bool, yes: bool, dry_run: bool) -> Bulk {
+    Bulk { all, yes, dry_run }
+}
+
+#[test]
+fn struct_validator_all_needs_yes_unless_dry_run() {
+    // CLI: exit 2 when it fails.
+    assert_eq!(exit_of::<Bulk>(&["--all"]), 2);
+    assert_eq!(exit_of::<Bulk>(&["--all", "--yes"]), 0);
+    assert_eq!(exit_of::<Bulk>(&["--all", "--dry-run"]), 0);
+    assert_eq!(exit_of::<Bulk>(&[]), 0);
+    // Decoding validates.
+    assert_eq!(
+        code(cli::<Bulk>(&["--all"]).unwrap()),
+        "op_registry.usage.invalid"
+    );
+    // JSON and typed calls.
+    assert!(!on_json::<Bulk>(json!({"all": true})));
+    assert!(on_json::<Bulk>(json!({"all": true, "yes": true})));
+    assert!(on_json::<Bulk>(json!({"all": true, "dryRun": true})));
+    assert!(!on_typed(bulk(true, false, false)));
+    assert!(on_typed(bulk(true, true, false)));
+    assert!(on_typed(bulk(true, false, true)));
+}
+
+/// A validator on a group runs through the flattening struct.
+#[derive(Debug, OpParams)]
+struct BulkWrapper {
+    #[op(flatten)]
+    bulk: Bulk,
+}
+
+#[test]
+fn struct_validator_of_a_flattened_group_runs() {
+    assert!(!on_json::<BulkWrapper>(json!({"all": true})));
+    assert!(on_json::<BulkWrapper>(json!({"all": true, "yes": true})));
+}
+
+/// The built-in relations run before the struct validator.
+fn never_reached(_: &Ordered) -> Result<(), op_registry::UsageError> {
+    Err(op_registry::UsageError::InvalidField {
+        name: "x".into(),
+        reason: "struct validator".into(),
+    })
+}
+
+#[derive(Debug, OpParams)]
+#[op(validate = never_reached)]
+struct Ordered {
+    #[op(required)]
+    name: Option<String>,
+}
+
+#[test]
+fn struct_validator_runs_after_relations() {
+    assert_eq!(
+        code(json_of::<Ordered>(json!({}))),
+        "op_registry.usage.missing"
+    );
+    assert_eq!(
+        code(json_of::<Ordered>(json!({"name": "n"}))),
+        "op_registry.usage.invalid"
+    );
+}
+
+/// A resolver that counts its calls.
+struct CountingCtx(std::sync::atomic::AtomicUsize);
+impl Resolve for CountingCtx {
+    fn resolve<'a>(
+        &'a self,
+        _kind: &'a str,
+        r: &'a Ref,
+        _scope: &'a Scope,
+    ) -> BoxFuture<'a, anyhow::Result<Resolved>> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move { Ok(Resolved::Id(r.as_raw().to_owned())) })
+    }
+}
+
+fn no_thing_with_all(p: &RefBulk) -> Result<(), op_registry::UsageError> {
+    if p.all && p.id.is_some() {
+        return Err(op_registry::UsageError::InvalidField {
+            name: "id".into(),
+            reason: "not with --all".into(),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, OpParams)]
+#[op(validate = no_thing_with_all)]
+struct RefBulk {
+    #[op(kind = "thing")]
+    id: Option<Ref>,
+    all: bool,
+}
+
+#[test]
+fn validate_runs_before_refs_resolve() {
+    let ctx = CountingCtx(Default::default());
+    let mut r: Registry<CountingCtx> = Registry::new();
+    r.set_pillar("fix");
+    r.set_bin("app", "1.0.0", "A test app.");
+    r.push_op(
+        OpSpec::<RefBulk, Out>::new("go", "Go."),
+        |_c: &CountingCtx, _p: RefBulk, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Out>> {
+            Box::pin(async { Ok(Out { ok: true }) })
+        },
+    );
+    let failed = futures_executor::block_on(r.call(
+        "go",
+        json!({"id": "x", "all": true}),
+        &ctx,
+        CallOptions::default(),
+    ));
+    assert!(failed.is_err());
+    assert_eq!(ctx.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let ok =
+        futures_executor::block_on(r.call("go", json!({"id": "x"}), &ctx, CallOptions::default()));
+    assert!(ok.is_ok());
+    assert_eq!(ctx.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+}

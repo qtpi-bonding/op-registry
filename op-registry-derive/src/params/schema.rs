@@ -286,8 +286,9 @@ pub fn fields_fn(fields: &[Field]) -> TokenStream {
     }
 }
 
-/// `validate()`: the relations, then each flattened group's own.
-pub fn validate_fn(fields: &[Field]) -> TokenStream {
+/// `validate()`: the relations, then each flattened group's own, then the
+/// struct's `#[op(validate = ..)]`, whose `Err` is a usage error.
+pub fn validate_fn(fields: &[Field], validator: Option<&syn::Path>) -> TokenStream {
     let rt = quote!(::op_registry::__private::rt);
     let groups = one_of_groups(fields)
         .into_iter()
@@ -363,6 +364,13 @@ pub fn validate_fn(fields: &[Field]) -> TokenStream {
         }
         _ => None,
     });
+    let validator = validator.map(|path| {
+        quote! {
+            if let ::std::result::Result::Err(error) = #path(self) {
+                return ::std::result::Result::Err(::op_registry::usage(error));
+            }
+        }
+    });
     quote! {
         fn validate(&self) -> ::op_registry::__private::anyhow::Result<()> {
             #(#required)*
@@ -370,6 +378,7 @@ pub fn validate_fn(fields: &[Field]) -> TokenStream {
             #(#at_least_one)*
             #(#relations)*
             #(#nested)*
+            #validator
             ::std::result::Result::Ok(())
         }
     }
