@@ -39,10 +39,12 @@ fn toy() -> Registry<Ctx> {
 fn listen_entry_output_schema_is_the_frame_schema() {
     let registry = toy();
     let d = registry.get("log_listen").expect("registered");
-    assert_eq!(
-        d.output_schema,
+    // Every frame variant is an object, so the descriptor marks the root `"type": "object"`.
+    let mut expected =
         <op_listen::ListenFrame<(), String> as op_registry::OutputSchema>::output_schema()
-    );
+            .expect("frame schema");
+    expected["type"] = json!("object");
+    assert_eq!(d.output_schema, Some(expected));
 }
 
 #[test]
