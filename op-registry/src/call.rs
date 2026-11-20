@@ -12,6 +12,9 @@ pub struct CallOptions {
     pub notices: Notices,
     /// The name of the transport, for the `json` path.
     pub transport: Option<String>,
+    /// A hint for reconnecting streams: how many consecutive failed
+    /// connections they may retry. `None` leaves the stream's own default.
+    pub max_retries: Option<u32>,
     /// The path the call took; the library sets it before the op runs.
     pub(crate) path: Option<CallPath>,
 }
@@ -53,6 +56,12 @@ impl CallOptions {
     /// Returns these options with the transport name set.
     pub fn with_transport(mut self, transport: impl Into<String>) -> Self {
         self.transport = Some(transport.into());
+        self
+    }
+
+    /// Returns these options with the reconnect limit hint set.
+    pub fn with_max_retries(mut self, n: u32) -> Self {
+        self.max_retries = Some(n);
         self
     }
 }

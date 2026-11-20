@@ -1,8 +1,8 @@
 //! `assert_local_ops_offline`: a local op never touches a connection.
 
 use super::refs::args_for;
-use super::{fail_on, Fixture};
-use crate::{CallOptions, OpKind, Paths, Registry, Resolve};
+use super::{fail_on, kit_options, Fixture};
+use crate::{OpKind, Paths, Registry, Resolve};
 use futures_util::FutureExt;
 use std::panic::AssertUnwindSafe;
 
@@ -24,7 +24,7 @@ pub async fn assert_local_ops_offline<C: Resolve>(
             continue;
         }
         let args = args_for(d, overrides);
-        let call = registry.call(&d.name, args, ctx, CallOptions::default());
+        let call = registry.call(&d.name, args, ctx, kit_options());
         if let Err(payload) = AssertUnwindSafe(call).catch_unwind().await {
             let message = payload
                 .downcast_ref::<String>()

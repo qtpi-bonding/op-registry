@@ -63,7 +63,16 @@ pub async fn assert_unknown_ref_not_found<C: Resolve>(
         }
         let random = random_hex();
         args["id"] = Value::String(random.clone());
-        let errors = call_errors(registry, ctx, d, args).await;
+        let errors = match call_errors(registry, ctx, d, args)
+            .await
+            .errors_or_problem(&d.name)
+        {
+            Ok(errors) => errors,
+            Err(problem) => {
+                problems.push(problem);
+                continue;
+            }
+        };
         let Some(err) = errors.first() else {
             problems.push(format!(
                 "{}: the unknown ref `{random}` did not fail; a missing object is `not_found`, never a value",

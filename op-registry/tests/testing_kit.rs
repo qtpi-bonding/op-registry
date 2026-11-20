@@ -836,8 +836,8 @@ fn error_codes_report_lists_offender() {
     assert!(!text.contains("concept_missing"), "{text}");
 }
 
-#[test]
-fn error_codes_check_stream_items() {
+#[tokio::test]
+async fn error_codes_check_stream_items() {
     let mut r = codes_fixture();
     r.push_stream(
         OpSpec::<Filter, Item>::new("concept follow", "Follow."),
@@ -848,8 +848,8 @@ fn error_codes_check_stream_items() {
          -> BoxFuture<'_, anyhow::Result<BoxStream<'_, anyhow::Result<Item>>>> {
             Box::pin(async {
                 Ok(stream::iter(vec![
-                    Ok(item()),
                     Err(coded_error::into_anyhow(ConceptError::Rogue)),
+                    Ok(item()),
                 ])
                 .boxed())
             })
@@ -859,10 +859,101 @@ fn error_codes_check_stream_items() {
         op: "concept_follow",
         args: json!({}),
     }];
-    let text = panic_text(|| futures_executor::block_on(assert_error_codes(&r, &Ctx, &fixtures)));
+    let text = async_panic_text(assert_error_codes(&r, &Ctx, &fixtures)).await;
     assert!(
         text.contains("concept_follow") && text.contains("fix.concept.rogue"),
         "{text}"
+    );
+}
+
+fn stream_registry<S>(make: fn() -> S) -> Registry<Ctx>
+where
+    S: futures_util::Stream<Item = anyhow::Result<Item>> + Send + 'static,
+{
+    let mut r = codes_fixture();
+    r.push_stream(
+        OpSpec::<Filter, Item>::new("concept follow", "Follow."),
+        move |_c: &Ctx,
+              _p: Filter,
+              _cur: Option<Cursor>,
+              _o: CallOptions|
+              -> BoxFuture<'_, anyhow::Result<BoxStream<'_, anyhow::Result<Item>>>> {
+            Box::pin(async move { Ok(make().boxed()) })
+        },
+    );
+    r
+}
+
+fn follow() -> [Fixture<'static>; 1] {
+    [Fixture {
+        op: "concept_follow",
+        args: json!({}),
+    }]
+}
+
+async fn async_panic_text(f: impl std::future::Future<Output = ()>) -> String {
+    use futures_util::FutureExt;
+    let err = std::panic::AssertUnwindSafe(f)
+        .catch_unwind()
+        .await
+        .expect_err("expected a panic");
+    err.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_default()
+}
+
+#[tokio::test(start_paused = true)]
+async fn kit_stream_that_never_yields_is_reported_after_timeout() {
+    let r = stream_registry(stream::pending);
+    let text = async_panic_text(assert_error_codes(&r, &Ctx, &follow())).await;
+    assert!(text.contains("did not end within 10 s"), "{text}");
+    assert!(text.contains("concept_follow"), "{text}");
+}
+
+#[tokio::test]
+async fn kit_endless_stream_is_cut_after_first_item() {
+    let r = stream_registry(|| {
+        stream::iter(0..).map(|i| {
+            assert!(i < 1000, "kit drained the stream");
+            Ok(item())
+        })
+    });
+    assert_error_codes(&r, &Ctx, &follow()).await;
+}
+
+#[test]
+fn kit_stream_without_runtime_reports_problem() {
+    let r = stream_registry(|| stream::iter(vec![Ok(item())]));
+    let text = panic_text(|| futures_executor::block_on(assert_error_codes(&r, &Ctx, &follow())));
+    assert!(text.contains("need a tokio runtime with time"), "{text}");
+}
+
+#[tokio::test]
+async fn kit_calls_carry_max_retries_zero() {
+    use std::sync::{Arc, Mutex};
+    let seen: Arc<Mutex<Vec<Option<u32>>>> = Arc::default();
+    let mut r = Registry::<Ctx>::new();
+    r.set_pillar("fix");
+    r.group("tool", "Tools.");
+    let sink = seen.clone();
+    r.push_local(
+        OpSpec::<Get, Item>::new("tool peek", "Records its options."),
+        move |_c: &Ctx, _p: Get, o: CallOptions| -> BoxFuture<'_, anyhow::Result<Item>> {
+            sink.lock().unwrap().push(o.max_retries);
+            Box::pin(async { Ok(item()) })
+        },
+    );
+    op_registry::testing::assert_local_ops_offline(&r, &Ctx, &[]).await;
+    assert_eq!(*seen.lock().unwrap(), vec![Some(0)]);
+}
+
+#[test]
+fn with_max_retries_sets_field() {
+    assert_eq!(CallOptions::default().max_retries, None);
+    assert_eq!(
+        CallOptions::default().with_max_retries(3).max_retries,
+        Some(3)
     );
 }
 

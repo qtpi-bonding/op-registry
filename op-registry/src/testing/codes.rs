@@ -1,9 +1,9 @@
 //! `assert_exit_table`, `strict_codes` and `assert_error_codes`: every code
 //! an op returns is one it declared (spec 6.3), and the manual lists them.
 
-use super::fail_on;
+use super::{fail_on, kit_options, KIT_STREAM_TIMEOUT};
 use crate::manual::{render, Manual};
-use crate::{CallOptions, CliContext, Descriptor, OpKind, Registry, Resolve};
+use crate::{CliContext, Descriptor, OpKind, Registry, Resolve};
 use futures_util::StreamExt;
 use serde_json::Value;
 
@@ -53,38 +53,71 @@ pub fn strict_codes<C>(registry: &mut Registry<C>) {
     registry.strict_codes = true;
 }
 
-/// The errors one call of `d` produced: the call's own, and for a stream
-/// every item error. Empty when the call succeeded.
+/// What one kit call of an op produced.
+pub(crate) enum Called {
+    /// The errors of the call; empty when it succeeded.
+    Errors(Vec<anyhow::Error>),
+    /// A stream op gave no item and did not end within [`KIT_STREAM_TIMEOUT`].
+    TimedOut,
+    /// A stream op was called outside a tokio runtime.
+    NoRuntime,
+}
+
+impl Called {
+    /// The errors, or the problem a timeout or a missing runtime is, for op
+    /// `name`.
+    pub(crate) fn errors_or_problem(self, name: &str) -> Result<Vec<anyhow::Error>, String> {
+        match self {
+            Called::Errors(errors) => Ok(errors),
+            Called::TimedOut => Err(format!(
+                "{name}: the stream gave no item and did not end within 10 s; give a Fixture or a context that answers"
+            )),
+            Called::NoRuntime => Err(format!(
+                "{name}: stream checks need a tokio runtime with time (use #[tokio::test])"
+            )),
+        }
+    }
+}
+
+/// The errors one call of `d` produced: the call's own, and for a stream the
+/// error of its first item. A stream is read to its first item (`Ok` or
+/// `Err`) or its end, under a 10 s timeout that covers opening it.
 pub(crate) async fn call_errors<C: Resolve>(
     registry: &Registry<C>,
     ctx: &C,
     d: &Descriptor,
     args: Value,
-) -> Vec<anyhow::Error> {
+) -> Called {
     if d.kind == OpKind::Stream {
-        match registry
-            .call_stream(&d.name, args, ctx, CallOptions::default(), None)
-            .await
-        {
-            Err(err) => vec![err],
-            Ok(mut items) => {
-                let mut errors = Vec::new();
-                while let Some(item) = items.next().await {
-                    if let Err(err) = item {
-                        errors.push(err);
-                    }
-                }
-                errors
+        if tokio::runtime::Handle::try_current().is_err() {
+            return Called::NoRuntime;
+        }
+        let call = async {
+            match registry
+                .call_stream(&d.name, args, ctx, kit_options(), None)
+                .await
+            {
+                Err(err) => vec![err],
+                Ok(mut items) => match items.next().await {
+                    Some(Err(err)) => vec![err],
+                    _ => Vec::new(),
+                },
             }
+        };
+        match tokio::time::timeout(KIT_STREAM_TIMEOUT, call).await {
+            Ok(errors) => Called::Errors(errors),
+            Err(_) => Called::TimedOut,
         }
     } else {
-        registry
-            .call(&d.name, args, ctx, CallOptions::default())
-            .await
-            .err()
-            .map(crate::CallFailure::into_inner)
-            .into_iter()
-            .collect()
+        Called::Errors(
+            registry
+                .call(&d.name, args, ctx, kit_options())
+                .await
+                .err()
+                .map(crate::CallFailure::into_inner)
+                .into_iter()
+                .collect(),
+        )
     }
 }
 
@@ -111,10 +144,18 @@ pub async fn assert_error_codes<C: Resolve>(
             ));
             continue;
         };
-        for err in call_errors(registry, ctx, d, fixture.args.clone()).await {
-            if let Some(what) = offence(registry, d, &err) {
-                problems.push(format!("{} returned {what}", d.name));
+        match call_errors(registry, ctx, d, fixture.args.clone())
+            .await
+            .errors_or_problem(&d.name)
+        {
+            Ok(errors) => {
+                for err in errors {
+                    if let Some(what) = offence(registry, d, &err) {
+                        problems.push(format!("{} returned {what}", d.name));
+                    }
+                }
             }
+            Err(problem) => problems.push(problem),
         }
     }
     fail_on("assert_error_codes", &problems);

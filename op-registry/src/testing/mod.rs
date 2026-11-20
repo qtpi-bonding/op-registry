@@ -24,6 +24,15 @@ pub use sample::sample_params;
 pub use secrets::{assert_secrets_not_echoed, SecretSentinel};
 pub use snapshot::{assert_manual_snapshot, check_manual_snapshot};
 
+/// The longest a kit call of a stream op may run without an item or an end.
+pub(crate) const KIT_STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The options every kit call carries: reconnecting streams give up after
+/// their first failed connection.
+pub(crate) fn kit_options() -> crate::CallOptions {
+    crate::CallOptions::default().with_max_retries(0)
+}
+
 /// Panics with `title` and one indented line per problem; does nothing when
 /// there are none.
 pub(crate) fn fail_on(title: &str, problems: &[String]) {
