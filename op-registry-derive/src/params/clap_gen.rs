@@ -125,6 +125,7 @@ fn decode(f: &Field) -> TokenStream {
                     .map(|s| #rt::input_arg(_cx, #flag, s))
                     .transpose()?
             },
+            Base::Ref => quote!(m.get_one::<#ty>(#id).cloned().map(::op_registry::Ref::new)),
             _ => quote!(m.get_one::<#ty>(#id).cloned()),
         }
     };
@@ -161,6 +162,14 @@ fn decode(f: &Field) -> TokenStream {
                 .flatten()
                 .map(|s| #rt::json_arg(_cx, #flag, s))
                 .collect::<::op_registry::__private::anyhow::Result<::std::vec::Vec<_>>>()?
+        },
+        Shape::Repeated(Base::Ref) => quote! {
+            m.get_many::<::std::string::String>(#id)
+                .into_iter()
+                .flatten()
+                .cloned()
+                .map(::op_registry::Ref::new)
+                .collect::<::std::vec::Vec<_>>()
         },
         Shape::Repeated(b) => {
             let ty = b.ty();

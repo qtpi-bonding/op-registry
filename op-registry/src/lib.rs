@@ -10,16 +10,18 @@ mod notices;
 mod output;
 mod params;
 pub mod parity;
+mod refs;
 mod registry;
 
 pub use call::CallError;
 pub use call::{CallOptions, Caller, Cursor, Op, TraceParent};
+pub use descriptor::*;
 pub use hook::{CallHook, CallInfo, CallPath, NoHook};
 pub use notices::{Notice, NoticeSink, Notices};
-pub use descriptor::*;
 pub use op_registry_derive::OpParams;
 pub use output::OutputSchema;
 pub use params::*;
+pub use refs::{Ref, RefSlot, Resolve, Resolved, Scope};
 pub use registry::{OpSpec, Registry};
 
 #[doc(hidden)]

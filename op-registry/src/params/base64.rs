@@ -35,7 +35,9 @@ fn sextet(c: u8) -> Option<u32> {
 pub fn decode(text: &str) -> Result<Vec<u8>, UsageError> {
     let bytes = text.as_bytes();
     if bytes.len() % 4 != 0 {
-        return Err(invalid("length is not a multiple of 4 (padding is required)"));
+        return Err(invalid(
+            "length is not a multiple of 4 (padding is required)",
+        ));
     }
     let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
     let groups = bytes.len() / 4;
@@ -46,7 +48,8 @@ pub fn decode(text: &str) -> Result<Vec<u8>, UsageError> {
         }
         let mut n = 0u32;
         for c in &chunk[..4 - pad] {
-            n = (n << 6) | sextet(*c).ok_or_else(|| invalid("character outside the base64 alphabet"))?;
+            n = (n << 6)
+                | sextet(*c).ok_or_else(|| invalid("character outside the base64 alphabet"))?;
         }
         n <<= 6 * pad as u32;
         out.extend_from_slice(&n.to_be_bytes()[1..4 - pad]);

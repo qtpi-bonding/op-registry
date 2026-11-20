@@ -54,8 +54,9 @@ pub fn require<T>(value: Option<T>, key: &str) -> Result<T> {
 
 /// A declared default, converted to the field type through its JSON form.
 pub fn default_of<T: DeserializeOwned>(rust_name: &str, value: impl serde::Serialize) -> T {
-    let json = serde_json::to_value(value)
-        .unwrap_or_else(|e| panic!("op-registry: default of `{rust_name}` is not serialisable: {e}"));
+    let json = serde_json::to_value(value).unwrap_or_else(|e| {
+        panic!("op-registry: default of `{rust_name}` is not serialisable: {e}")
+    });
     serde_json::from_value(json)
         .unwrap_or_else(|e| panic!("op-registry: default of `{rust_name}` has the wrong type: {e}"))
 }
@@ -223,11 +224,15 @@ impl SchemaBuilder {
             self.properties.extend(properties);
         }
         if let Some(Value::Array(required)) = schema.remove("required") {
-            self.required
-                .extend(required.into_iter().filter_map(|v| v.as_str().map(str::to_owned)));
+            self.required.extend(
+                required
+                    .into_iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned)),
+            );
         }
         if let Some(one_of) = schema.remove("oneOf") {
-            self.constraints.push(serde_json::json!({ "oneOf": one_of }));
+            self.constraints
+                .push(serde_json::json!({ "oneOf": one_of }));
         }
         if let Some(Value::Array(all)) = schema.remove("allOf") {
             self.constraints.extend(all);
@@ -275,7 +280,12 @@ pub fn check_one_of(group: &str, given: usize, optional: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn check_requires_if(present: bool, other_present: bool, field: &str, other: &str) -> Result<()> {
+pub fn check_requires_if(
+    present: bool,
+    other_present: bool,
+    field: &str,
+    other: &str,
+) -> Result<()> {
     if other_present && !present {
         return Err(usage(UsageError::RequiresIf {
             field: field.to_owned(),
@@ -321,4 +331,39 @@ pub fn input_arg(cx: &mut ParseCx, flag: &str, text: &str) -> Result<Input> {
         read_path(flag, text)?
     };
     Ok(Input(bytes))
+}
+
+/// A sibling value a subject's scope can name: its resolved id or raw text.
+pub trait ScopeValue {
+    fn scope_value(&self) -> Option<String>;
+}
+
+impl ScopeValue for String {
+    fn scope_value(&self) -> Option<String> {
+        Some(self.clone())
+    }
+}
+
+impl ScopeValue for crate::Ref {
+    fn scope_value(&self) -> Option<String> {
+        Some(match self.resolved_opt() {
+            Some(crate::Resolved::Id(s) | crate::Resolved::Raw(s)) => s.clone(),
+            _ => self.as_raw().to_owned(),
+        })
+    }
+}
+
+impl<T: ScopeValue> ScopeValue for Option<T> {
+    fn scope_value(&self) -> Option<String> {
+        self.as_ref().and_then(ScopeValue::scope_value)
+    }
+}
+
+/// The scope of a subject: the named siblings that were given.
+pub fn scope(pairs: Vec<(&str, Option<String>)>) -> crate::Scope {
+    crate::Scope::from_pairs(
+        pairs
+            .into_iter()
+            .filter_map(|(name, value)| Some((name.to_owned(), value?))),
+    )
 }

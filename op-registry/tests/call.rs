@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 struct Ctx;
+impl op_registry::Resolve for Ctx {}
 
 #[derive(Clone, Debug, PartialEq, OpParams)]
 struct Pick {
@@ -161,7 +162,9 @@ async fn hook_sees_every_path_with_path_label() {
     )
     .await
     .unwrap();
-    r.call("probe", json!({"id": "a"}), &Ctx, opts).await.unwrap();
+    r.call("probe", json!({"id": "a"}), &Ctx, opts)
+        .await
+        .unwrap();
     let infos = rec.infos.lock().unwrap();
     assert_eq!(infos.len(), 3);
     assert_eq!(infos[0].path, CallPath::Typed);
@@ -197,9 +200,13 @@ async fn trace_parent_passed_through_untouched() {
         tracestate: Some("k=v".into()),
         baggage: Some("b=1".into()),
     };
-    r.call_typed::<Probe>(&Ctx, pick(), CallOptions::default().with_trace(trace.clone()))
-        .await
-        .unwrap();
+    r.call_typed::<Probe>(
+        &Ctx,
+        pick(),
+        CallOptions::default().with_trace(trace.clone()),
+    )
+    .await
+    .unwrap();
     assert_eq!(rec.infos.lock().unwrap()[0].trace, trace);
 }
 
@@ -330,7 +337,9 @@ async fn notices_reach_sink() {
     let r = registry();
     let sink = Arc::new(VecSink::default());
     let opts = CallOptions::default().with_notices(Notices::new(sink.clone()));
-    r.call("notify", json!({"id": "a"}), &Ctx, opts).await.unwrap();
+    r.call("notify", json!({"id": "a"}), &Ctx, opts)
+        .await
+        .unwrap();
     assert_eq!(
         *sink.0.lock().unwrap(),
         vec![
@@ -352,7 +361,13 @@ async fn notices_reach_sink() {
 async fn stream_open_goes_through_hook() {
     let (r, rec) = hooked();
     let items: Vec<_> = r
-        .call_stream("flow", json!({"id": "a"}), &Ctx, CallOptions::default(), None)
+        .call_stream(
+            "flow",
+            json!({"id": "a"}),
+            &Ctx,
+            CallOptions::default(),
+            None,
+        )
         .await
         .unwrap()
         .collect()
@@ -378,6 +393,31 @@ async fn wrong_shape_call_on_stream() {
         .call("flow", json!({"id": "a"}), &Ctx, CallOptions::default())
         .await
         .unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(&err).code,
+        "op_registry.call.wrong_shape"
+    );
+}
+
+#[tokio::test]
+async fn wrong_shape_is_checked_before_decoding() {
+    let r = registry();
+    // `flow` is a stream and `probe` is unary; the malformed args (both
+    // `id` and `name` break the one_of group) must not hide the shape error.
+    let bad = json!({"id": "a", "name": "b"});
+    let err = r
+        .call("flow", bad.clone(), &Ctx, CallOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(&err).code,
+        "op_registry.call.wrong_shape"
+    );
+    let err = r
+        .call_stream("probe", bad, &Ctx, CallOptions::default(), None)
+        .await
+        .err()
+        .unwrap();
     assert_eq!(
         coded_error::facts_anyhow(&err).code,
         "op_registry.call.wrong_shape"

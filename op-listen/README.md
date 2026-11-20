@@ -228,6 +228,7 @@ use op_registry::{Caller, Descriptor, OpParams, Registry};
 use std::sync::Arc;
 
 struct Ctx;
+impl op_registry::Resolve for Ctx {}
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, OpParams)]
 struct TopicParams {

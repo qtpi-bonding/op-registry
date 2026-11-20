@@ -4,6 +4,7 @@
 mod attrs;
 mod clap_gen;
 mod json_gen;
+mod ref_gen;
 mod schema;
 mod types;
 
@@ -37,6 +38,7 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let from_matches = clap_gen::from_matches_fn(&fields);
     let from_json = json_gen::from_json_fn(&fields);
     let validate = schema::validate_fn(&fields);
+    let ref_slots = ref_gen::ref_slots_fn(&fields);
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     Ok(quote! {
         impl #impl_generics ::op_registry::OpParams for #name #ty_generics #where_clause {
@@ -46,6 +48,7 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             #from_matches
             #from_json
             #validate
+            #ref_slots
         }
     })
 }
@@ -66,6 +69,7 @@ fn check_relations(fields: &[Field]) -> syn::Result<()> {
             ));
         }
     }
+    check_refs(fields)?;
     for f in fields {
         if let Some(other) = &f.requires_if {
             let target = fields.iter().find(|o| &o.rust_name == other);
@@ -75,6 +79,35 @@ fn check_relations(fields: &[Field]) -> syn::Result<()> {
                     format!(
                         "requires_if names `{other}`, which must be an optional field of this struct"
                     ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One subject at most, and every scope name is a sibling field.
+fn check_refs(fields: &[Field]) -> syn::Result<()> {
+    let mut subjects = fields
+        .iter()
+        .filter(|f| f.reference.as_ref().is_some_and(|r| r.subject));
+    subjects.next();
+    if let Some(second) = subjects.next() {
+        return Err(syn::Error::new(
+            second.ident.span(),
+            "an op has one subject: only one field takes `#[op(subject = ..)]`",
+        ));
+    }
+    for f in fields {
+        let Some(r) = &f.reference else { continue };
+        for name in &r.scope {
+            let sibling = fields
+                .iter()
+                .find(|o| &o.rust_name == name && o.rust_name != f.rust_name);
+            if sibling.is_none_or(|o| matches!(o.shape, types::Shape::Flatten(_))) {
+                return Err(syn::Error::new(
+                    f.ident.span(),
+                    format!("scope names `{name}`, which is not another field of this struct"),
                 ));
             }
         }

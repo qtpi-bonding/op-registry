@@ -16,6 +16,8 @@ struct ToySource {
     last_max: AtomicUsize,
 }
 
+impl op_registry::Resolve for ToySource {}
+
 impl ToySource {
     fn new(components: Vec<Component>) -> Self {
         Self {

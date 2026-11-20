@@ -13,7 +13,9 @@ struct Params {
 fn parse(args: &[&str], cx: &mut ParseCx) -> anyhow::Result<Params> {
     let mut argv = vec!["t"];
     argv.extend_from_slice(args);
-    let m = Params::add_args(Command::new("t")).try_get_matches_from(argv).unwrap();
+    let m = Params::add_args(Command::new("t"))
+        .try_get_matches_from(argv)
+        .unwrap();
     Params::from_matches(&m, cx)
 }
 
@@ -22,7 +24,8 @@ fn code(err: &anyhow::Error) -> &'static str {
 }
 
 fn temp_file(name: &str, contents: &[u8]) -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!("op-registry-inputs-{}-{name}", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("op-registry-inputs-{}-{name}", std::process::id()));
     std::fs::write(&path, contents).unwrap();
     path
 }
@@ -73,7 +76,11 @@ fn input_path_reads_file() {
 
 #[test]
 fn input_json_is_base64() {
-    let p = Params::from_json(json!({"file": "aGk=", "body": {"k": [1]}}), &mut ParseCx::default()).unwrap();
+    let p = Params::from_json(
+        json!({"file": "aGk=", "body": {"k": [1]}}),
+        &mut ParseCx::default(),
+    )
+    .unwrap();
     assert_eq!(p.file, Some(Input(b"hi".to_vec())));
     assert_eq!(p.body, Some(Json(json!({"k": [1]}))));
     let err = Params::from_json(json!({"file": "aGk"}), &mut ParseCx::default()).unwrap_err();
@@ -87,9 +94,15 @@ fn input_schema_has_content_encoding() {
         schema["properties"]["file"],
         json!({"type": "string", "contentEncoding": "base64"})
     );
-    assert_eq!(schema["properties"]["body"]["description"], "The request body.");
+    assert_eq!(
+        schema["properties"]["body"]["description"],
+        "The request body."
+    );
     assert!(schema["properties"]["body"].get("type").is_none());
-    let kinds: Vec<_> = Params::fields().iter().map(|f| (f.rust_name, f.kind)).collect();
+    let kinds: Vec<_> = Params::fields()
+        .iter()
+        .map(|f| (f.rust_name, f.kind))
+        .collect();
     assert!(kinds.contains(&("body", FieldKind::Json)));
     assert!(kinds.contains(&("file", FieldKind::Input)));
 }
@@ -105,7 +118,14 @@ fn two_stdin_readers_is_stdin_twice() {
 
 #[test]
 fn base64_roundtrip_and_bad_padding() {
-    for s in [&b""[..], b"f", b"fo", b"foo", b"foob", &[0xff, 0xfe, 0x00, 0x3e, 0x3f]] {
+    for s in [
+        &b""[..],
+        b"f",
+        b"fo",
+        b"foo",
+        b"foob",
+        &[0xff, 0xfe, 0x00, 0x3e, 0x3f],
+    ] {
         assert_eq!(base64::decode(&base64::encode(s)).unwrap(), s);
     }
     assert_eq!(base64::encode(b"fo"), "Zm8=");
@@ -121,8 +141,16 @@ fn vec_json_is_array_of_any() {
         Params::input_schema()["properties"]["items"],
         json!({"type": "array", "items": {}})
     );
-    let p = parse(&["--items", "1", "--items", r#"{"a":null}"#], &mut ParseCx::default()).unwrap();
+    let p = parse(
+        &["--items", "1", "--items", r#"{"a":null}"#],
+        &mut ParseCx::default(),
+    )
+    .unwrap();
     assert_eq!(p.items, vec![Json(json!(1)), Json(json!({"a": null}))]);
-    let p = Params::from_json(json!({"items": [1, "x", {"a": 2}]}), &mut ParseCx::default()).unwrap();
+    let p = Params::from_json(
+        json!({"items": [1, "x", {"a": 2}]}),
+        &mut ParseCx::default(),
+    )
+    .unwrap();
     assert_eq!(p.items.len(), 3);
 }

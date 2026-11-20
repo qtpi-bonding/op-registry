@@ -86,16 +86,27 @@ fn one_of_exactly_one_cli_and_json() {
     );
     assert_eq!(
         json_of::<Target>(json!({"id":"a"})).unwrap(),
-        Target { id: Some("a".into()), name: None }
+        Target {
+            id: Some("a".into()),
+            name: None
+        }
     );
-    assert_eq!(cli::<Target>(&[]).unwrap_err().kind(), ErrorKind::MissingRequiredArgument);
     assert_eq!(
-        cli::<Target>(&["--id", "a", "--name", "b"]).unwrap_err().kind(),
+        cli::<Target>(&[]).unwrap_err().kind(),
+        ErrorKind::MissingRequiredArgument
+    );
+    assert_eq!(
+        cli::<Target>(&["--id", "a", "--name", "b"])
+            .unwrap_err()
+            .kind(),
         ErrorKind::ArgumentConflict
     );
     assert_eq!(
         cli::<Target>(&["--name", "b"]).unwrap().unwrap(),
-        Target { id: None, name: Some("b".into()) }
+        Target {
+            id: None,
+            name: Some("b".into())
+        }
     );
 }
 
@@ -103,11 +114,22 @@ fn one_of_exactly_one_cli_and_json() {
 fn one_of_optional_allows_none() {
     assert_eq!(
         cli::<Maybe>(&[]).unwrap().unwrap(),
-        Maybe { id: None, name: None }
+        Maybe {
+            id: None,
+            name: None
+        }
     );
-    assert_eq!(json_of::<Maybe>(json!({})).unwrap(), Maybe { id: None, name: None });
     assert_eq!(
-        cli::<Maybe>(&["--id", "a", "--name", "b"]).unwrap_err().kind(),
+        json_of::<Maybe>(json!({})).unwrap(),
+        Maybe {
+            id: None,
+            name: None
+        }
+    );
+    assert_eq!(
+        cli::<Maybe>(&["--id", "a", "--name", "b"])
+            .unwrap_err()
+            .kind(),
         ErrorKind::ArgumentConflict
     );
     assert_eq!(
@@ -146,7 +168,9 @@ fn requires_if_missing_is_usage_error() {
         code(cli::<Lookup>(&["--uri", "x"]).unwrap()),
         "op_registry.usage.requires_if"
     );
-    assert!(cli::<Lookup>(&["--uri", "x", "--collection", "c"]).unwrap().is_ok());
+    assert!(cli::<Lookup>(&["--uri", "x", "--collection", "c"])
+        .unwrap()
+        .is_ok());
 }
 
 #[test]
@@ -185,7 +209,9 @@ fn clearable_json_null_is_clear_absent_is_keep() {
 
 #[test]
 fn flatten_adds_group_flags_and_keys() {
-    let parsed = cli::<Wrapped>(&["--name", "n", "--gcode-store", "s"]).unwrap().unwrap();
+    let parsed = cli::<Wrapped>(&["--name", "n", "--gcode-store", "s"])
+        .unwrap()
+        .unwrap();
     assert_eq!(parsed.project.gcode_store.as_deref(), Some("s"));
     let parsed = json_of::<Wrapped>(json!({"name":"n","gcodeStore":"s","root":"/r"})).unwrap();
     assert_eq!(parsed.project.gcode_store.as_deref(), Some("s"));
@@ -225,7 +251,10 @@ fn flatten_carries_group_relations() {
         #[op(requires_if = "x")]
         y: Option<String>,
     }
-    assert_eq!(code(json_of::<Outer>(json!({}))), "op_registry.usage.one_of");
+    assert_eq!(
+        code(json_of::<Outer>(json!({}))),
+        "op_registry.usage.one_of"
+    );
     assert_eq!(
         code(json_of::<Outer>(json!({"a":"1","x":"v"}))),
         "op_registry.usage.requires_if"

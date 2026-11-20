@@ -1,13 +1,16 @@
 //! The one call pipeline every path runs through.
 //!
-//! Steps: look up the op, check the path and shape, decode, validate, (resolve
-//! refs, from a later task), build the `CallInfo`, run inside the hook, and
+//! Steps: look up the op, check the path and shape, decode, validate, resolve
+//! refs (non-subject refs first, then the subject), build the `CallInfo`, run inside the hook, and
 //! report a failure to the hook. Errors before the `CallInfo` exists (unknown
 //! op, wrong path or shape, decode, validate) are returned without the hook:
 //! there is no info to hand it.
 
 use crate::registry::{Entry, Run, TypedStream, TypedUnary};
-use crate::{CallError, CallInfo, CallOptions, CallPath, Cursor, Op, ParseCx, Paths, Registry};
+use crate::{
+    CallError, CallInfo, CallOptions, CallPath, Cursor, Op, OpParams, ParseCx, Paths, RefSlot,
+    Registry, Resolve, Resolved,
+};
 use anyhow::Result;
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
@@ -21,13 +24,13 @@ fn wrong_shape(name: &str) -> anyhow::Error {
     })
 }
 
-impl<C: Sync> Registry<C> {
+impl<C: Resolve> Registry<C> {
     /// Calls a unary operation by name with JSON arguments.
     ///
     /// The path label is `Transport(opts.transport)`, or `Transport("json")`.
     pub async fn call(&self, name: &str, args: Value, ctx: &C, opts: CallOptions) -> Result<Value> {
         let path = json_path(&opts);
-        let params = self.decode_json(name, args, &path)?;
+        let params = self.decode_json(name, args, &path, false)?;
         self.call_decoded(name, params, ctx, opts, path).await
     }
 
@@ -42,7 +45,7 @@ impl<C: Sync> Registry<C> {
         cursor: Option<Cursor>,
     ) -> Result<BoxStream<'a, Result<Value>>> {
         let path = json_path(&opts);
-        let params = self.decode_json(name, args, &path)?;
+        let params = self.decode_json(name, args, &path, true)?;
         self.call_stream_decoded(name, params, ctx, opts, cursor, path)
             .await
     }
@@ -52,9 +55,13 @@ impl<C: Sync> Registry<C> {
         name: &str,
         args: Value,
         path: &CallPath,
+        stream: bool,
     ) -> Result<Box<dyn Any + Send>> {
         let entry = self.entry(name)?;
         check_path(entry, name, path)?;
+        if matches!(entry.run, Run::Stream(_)) != stream {
+            return Err(wrong_shape(name));
+        }
         (entry.decode_json)(args, &mut ParseCx::default())
     }
 
@@ -62,7 +69,7 @@ impl<C: Sync> Registry<C> {
     pub(crate) async fn call_decoded(
         &self,
         name: &str,
-        params: Box<dyn Any + Send>,
+        mut params: Box<dyn Any + Send>,
         ctx: &C,
         opts: CallOptions,
         path: CallPath,
@@ -72,7 +79,7 @@ impl<C: Sync> Registry<C> {
         let Run::Unary(run) = &entry.run else {
             return Err(wrong_shape(name));
         };
-        // Step 4, resolving refs, joins here.
+        (entry.resolve_refs)(self, ctx, &mut *params).await?;
         let info = self.info(entry, &*params, path, &opts);
         self.pipeline(info, move || run(ctx, params, opts)).await
     }
@@ -81,7 +88,7 @@ impl<C: Sync> Registry<C> {
     pub(crate) async fn call_stream_decoded<'a>(
         &'a self,
         name: &str,
-        params: Box<dyn Any + Send>,
+        mut params: Box<dyn Any + Send>,
         ctx: &'a C,
         opts: CallOptions,
         cursor: Option<Cursor>,
@@ -92,9 +99,43 @@ impl<C: Sync> Registry<C> {
         let Run::Stream(run) = &entry.run else {
             return Err(wrong_shape(name));
         };
+        (entry.resolve_refs)(self, ctx, &mut *params).await?;
         let info = self.info(entry, &*params, path, &opts);
         self.pipeline(info, move || run(ctx, params, opts, cursor))
             .await
+    }
+
+    /// Resolves the refs of `params` in place: non-subject refs first, then
+    /// the subject (whose scope reads the siblings' resolved ids).
+    pub(crate) async fn resolve_refs<P: OpParams>(&self, ctx: &C, params: &mut P) -> Result<()> {
+        for subject in [false, true] {
+            for slot in params.ref_slots() {
+                if slot.subject == subject {
+                    self.resolve_slot(ctx, slot).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn resolve_slot(&self, ctx: &C, slot: RefSlot<'_>) -> Result<()> {
+        let RefSlot {
+            kind,
+            id_only,
+            scope,
+            slot,
+            ..
+        } = slot;
+        let raw = slot.as_raw().to_owned();
+        let resolved = if id_only {
+            Resolved::Id(raw)
+        } else if self.server_kinds.contains(kind) {
+            Resolved::Raw(raw)
+        } else {
+            ctx.resolve(kind, &*slot, &scope).await?
+        };
+        slot.set_resolved(resolved);
+        Ok(())
     }
 
     fn info(
@@ -139,12 +180,12 @@ impl<C: Sync> Registry<C> {
     }
 }
 
-impl<C: Sync + 'static> Registry<C> {
+impl<C: Resolve + 'static> Registry<C> {
     /// Calls the operation `O::NAME` with typed parameters and output.
     pub async fn call_typed<O: Op<Ctx = C>>(
         &self,
         ctx: &C,
-        params: O::Params,
+        mut params: O::Params,
         opts: CallOptions,
     ) -> Result<O::Output> {
         let entry = self.entry(O::NAME)?;
@@ -153,6 +194,7 @@ impl<C: Sync + 'static> Registry<C> {
             .downcast_ref::<TypedUnary<C, O::Params, O::Output>>()
             .ok_or_else(|| wrong_shape(O::NAME))?;
         crate::OpParams::validate(&params)?;
+        self.resolve_refs(ctx, &mut params).await?;
         let info = self.info(entry, &params, CallPath::Typed, &opts);
         self.pipeline(info, move || f(ctx, params, opts)).await
     }
@@ -162,7 +204,7 @@ impl<C: Sync + 'static> Registry<C> {
     pub async fn call_stream_typed<'a, O: Op<Ctx = C>>(
         &'a self,
         ctx: &'a C,
-        params: O::Params,
+        mut params: O::Params,
         opts: CallOptions,
         cursor: Option<Cursor>,
     ) -> Result<BoxStream<'a, Result<O::Output>>> {
@@ -172,6 +214,7 @@ impl<C: Sync + 'static> Registry<C> {
             .downcast_ref::<TypedStream<C, O::Params, O::Output>>()
             .ok_or_else(|| wrong_shape(O::NAME))?;
         crate::OpParams::validate(&params)?;
+        self.resolve_refs(ctx, &mut params).await?;
         let info = self.info(entry, &params, CallPath::Typed, &opts);
         self.pipeline(info, move || f(ctx, params, cursor, opts))
             .await

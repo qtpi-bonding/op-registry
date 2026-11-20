@@ -17,6 +17,8 @@ pub enum Base {
     Json,
     /// `op_registry::Input`: bytes from a path or stdin.
     Input,
+    /// `op_registry::Ref`: a reference resolved before the op runs.
+    Ref,
 }
 
 impl Base {
@@ -30,6 +32,7 @@ impl Base {
             Base::Bool => quote!(bool),
             Base::Json => quote!(::op_registry::Json),
             Base::Input => quote!(::op_registry::Input),
+            Base::Ref => quote!(::op_registry::Ref),
         }
     }
 
@@ -37,7 +40,7 @@ impl Base {
     /// resolved (file, stdin) at decode time.
     pub fn clap_ty(&self) -> proc_macro2::TokenStream {
         match self {
-            Base::Json | Base::Input => quote::quote!(::std::string::String),
+            Base::Json | Base::Input | Base::Ref => quote::quote!(::std::string::String),
             b => b.ty(),
         }
     }
@@ -99,6 +102,7 @@ fn base(ty: &Type, value_enum: bool) -> Option<Base> {
         "f64" => Base::Float,
         "Json" => Base::Json,
         "Input" => Base::Input,
+        "Ref" => Base::Ref,
         "i32" | "i64" => Base::Int {
             ty: ty.clone(),
             signed: true,
@@ -130,7 +134,7 @@ pub fn classify(ty: &Type, value_enum: bool) -> Option<Shape> {
             }
             "Patch" => {
                 return match base(inner, value_enum)? {
-                    Base::Bool | Base::Json | Base::Input => None,
+                    Base::Bool | Base::Json | Base::Input | Base::Ref => None,
                     b => Some(Shape::Patch(b)),
                 }
             }

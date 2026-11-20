@@ -21,7 +21,7 @@ pub fn listen_entry<C, L>(
     listener: Arc<L>,
     spec: OpSpec<L::Params, ListenFrame<L::Snapshot, L::Item>>,
 ) where
-    C: Sync + Send + 'static,
+    C: op_registry::Resolve + 'static,
     L: Listener<C>,
 {
     let leaked: &'static Arc<L> = Box::leak(Box::new(listener));

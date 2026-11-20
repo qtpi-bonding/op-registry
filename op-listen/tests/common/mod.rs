@@ -14,6 +14,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 pub struct Ctx;
+impl op_registry::Resolve for Ctx {}
 
 #[derive(Debug, thiserror::Error, coded_error::CodedError)]
 #[coded(namespace = "test.app")]

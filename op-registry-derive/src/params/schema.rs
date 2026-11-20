@@ -13,7 +13,7 @@ fn json_path() -> TokenStream {
 fn base_schema(base: &Base) -> TokenStream {
     let json = json_path();
     match base {
-        Base::String | Base::Path => quote!(#json::json!({"type": "string"})),
+        Base::String | Base::Path | Base::Ref => quote!(#json::json!({"type": "string"})),
         Base::Int { signed: true, .. } => quote!(#json::json!({"type": "integer"})),
         Base::Int { signed: false, .. } => {
             quote!(#json::json!({"type": "integer", "minimum": 0}))
@@ -165,6 +165,7 @@ pub fn fields_fn(fields: &[Field]) -> TokenStream {
         }
         let (rust_name, flag, key, help) = (&f.rust_name, &f.flag, &f.key, &f.help);
         let kind = match &f.shape {
+            _ if f.reference.is_some() => quote!(Ref),
             Shape::Plain(Base::Json) | Shape::Optional(Base::Json) => quote!(Json),
             Shape::Plain(Base::Input) | Shape::Optional(Base::Input) => quote!(Input),
             Shape::Plain(_) | Shape::Optional(_) | Shape::Patch(_) => quote!(Scalar),

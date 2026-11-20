@@ -128,6 +128,7 @@ impl<const W: bool> Default for ToyW<W> {
     }
 }
 
+impl<const W: bool> op_registry::Resolve for ToyW<W> {}
 impl<const W: bool> StatusSource for ToyW<W> {
     fn service(&self) -> ServiceInfo {
         self.service.lock().unwrap().clone()

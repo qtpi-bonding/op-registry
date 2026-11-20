@@ -22,6 +22,16 @@ pub struct Field {
     pub one_of: Option<(String, bool)>,
     /// The Rust name of the field this one is required with.
     pub requires_if: Option<String>,
+    /// Set on a `Ref` field.
+    pub reference: Option<RefInfo>,
+}
+
+/// What `subject`, `kind`, `id_only` and `scope` say about a `Ref` field.
+pub struct RefInfo {
+    pub kind: String,
+    pub subject: bool,
+    pub id_only: bool,
+    pub scope: Vec<String>,
 }
 
 impl Field {
@@ -40,6 +50,10 @@ impl Field {
         let mut requires_if = None;
         let mut clearable = false;
         let mut flatten = false;
+        let mut subject: Option<String> = None;
+        let mut kind: Option<String> = None;
+        let mut id_only = false;
+        let mut scope: Option<Vec<String>> = None;
         for attr in f.attrs.iter().filter(|a| a.path().is_ident("op")) {
             attr.parse_nested_meta(|m| {
                 let key = m.path.get_ident().map(Ident::to_string).unwrap_or_default();
@@ -49,6 +63,27 @@ impl Field {
                     "secret" => secret = true,
                     "clearable" => clearable = true,
                     "flatten" => flatten = true,
+                    "id_only" => id_only = true,
+                    "subject" => subject = Some(m.value()?.parse::<syn::LitStr>()?.value()),
+                    "kind" => kind = Some(m.value()?.parse::<syn::LitStr>()?.value()),
+                    "scope" => {
+                        let array: ExprArray = m.value()?.parse()?;
+                        let mut names = Vec::new();
+                        for e in &array.elems {
+                            match e {
+                                Expr::Lit(ExprLit {
+                                    lit: Lit::Str(s), ..
+                                }) => names.push(s.value()),
+                                _ => {
+                                    return Err(syn::Error::new_spanned(
+                                        e,
+                                        "scope takes string literals",
+                                    ))
+                                }
+                            }
+                        }
+                        scope = Some(names);
+                    }
                     "one_of" | "one_of_optional" => {
                         let group: syn::LitStr = m.value()?.parse()?;
                         if one_of.is_some() {
@@ -91,7 +126,8 @@ impl Field {
 
         if flatten {
             return Self::flatten(f, ident, rust_name, secret || default.is_some() || value_enum
-                || keys.is_some() || clearable || one_of.is_some() || requires_if.is_some());
+                || keys.is_some() || clearable || one_of.is_some() || requires_if.is_some()
+                || subject.is_some() || kind.is_some() || id_only || scope.is_some());
         }
         let shape = classify(&f.ty, value_enum).ok_or_else(|| {
             let ty = &f.ty;
@@ -111,6 +147,7 @@ impl Field {
                 ),
             ));
         }
+        let reference = ref_info(&f.ty, &rust_name, &shape, subject, kind, id_only, scope, default.is_some())?;
         if one_of.is_some() && !matches!(shape, Shape::Optional(_)) {
             return Err(syn::Error::new_spanned(
                 &f.ty,
@@ -144,9 +181,13 @@ impl Field {
             ));
         }
 
+        let (key, flag) = match &reference {
+            Some(r) if r.subject => ("id".to_owned(), "id".to_owned()),
+            _ => (camel(&rust_name), rust_name.replace('_', "-")),
+        };
         Ok(Field {
-            key: camel(&rust_name),
-            flag: rust_name.replace('_', "-"),
+            key,
+            flag,
             help: doc(f),
             ident,
             rust_name,
@@ -156,6 +197,7 @@ impl Field {
             secret,
             one_of,
             requires_if,
+            reference,
         })
     }
 
@@ -189,6 +231,7 @@ impl Field {
             secret: false,
             one_of: None,
             requires_if: None,
+            reference: None,
         })
     }
 
@@ -209,6 +252,51 @@ impl Field {
 
     pub fn required(&self) -> bool {
         matches!(self.shape, Shape::Plain(_)) && self.default.is_none()
+    }
+}
+
+/// Checks the ref attributes against the field's type.
+#[allow(clippy::too_many_arguments)]
+fn ref_info(
+    ty: &syn::Type,
+    rust_name: &str,
+    shape: &Shape,
+    subject: Option<String>,
+    kind: Option<String>,
+    id_only: bool,
+    scope: Option<Vec<String>>,
+    has_default: bool,
+) -> syn::Result<Option<RefInfo>> {
+    use super::types::Base;
+    let is_ref = matches!(
+        shape,
+        Shape::Plain(Base::Ref) | Shape::Optional(Base::Ref) | Shape::Repeated(Base::Ref)
+    );
+    let err = |msg: String| Err(syn::Error::new_spanned(ty, format!("field `{rust_name}`: {msg}")));
+    if !is_ref {
+        if subject.is_some() || kind.is_some() || id_only || scope.is_some() {
+            return err("subject, kind, id_only and scope apply only to a `Ref` field".into());
+        }
+        return Ok(None);
+    }
+    if has_default {
+        return err("a `Ref` field takes no default".into());
+    }
+    match (subject, kind) {
+        (Some(_), Some(_)) => err("subject and kind are exclusive".into()),
+        (None, None) => err("a `Ref` field needs `#[op(subject = \"..\")]` or `#[op(kind = \"..\")]`".into()),
+        (Some(kind), None) => {
+            if !matches!(shape, Shape::Plain(_)) {
+                return err("the subject is a plain `Ref`".into());
+            }
+            Ok(Some(RefInfo { kind, subject: true, id_only, scope: scope.unwrap_or_default() }))
+        }
+        (None, Some(kind)) => {
+            if id_only || scope.is_some() {
+                return err("id_only and scope belong to the subject".into());
+            }
+            Ok(Some(RefInfo { kind, subject: false, id_only: false, scope: Vec::new() }))
+        }
     }
 }
 

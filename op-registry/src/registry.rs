@@ -1,15 +1,15 @@
 //! The registry: typed operations behind erased entries, with build-time checks.
 
 use crate::{
-    derive_name, Access, Audience, CallHook, CallOptions, NoHook, Cursor, Descriptor, ErrorCodeEntry, Exit, OpKind,
-    OpParams, OutputSchema, ParseCx, Paths,
+    derive_name, Access, Audience, CallHook, CallOptions, Cursor, Descriptor, ErrorCodeEntry, Exit,
+    NoHook, OpKind, OpParams, OutputSchema, ParseCx, Paths, Resolve,
 };
 use anyhow::Result;
 use futures_util::{future::BoxFuture, stream::BoxStream};
 use serde::Serialize;
 use serde_json::Value;
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// The declaration of one operation: its path, help text and options.
@@ -100,6 +100,8 @@ pub(crate) type TypedStream<C, P, O> = Arc<
         + Send
         + Sync,
 >;
+pub(crate) type ResolveRefs<C> =
+    for<'a> fn(&'a Registry<C>, &'a C, &'a mut (dyn Any + Send)) -> BoxFuture<'a, Result<()>>;
 type ErasedFields = Box<dyn Fn(&(dyn Any + Send)) -> Vec<(&'static str, String)> + Send + Sync>;
 
 type UnaryRun<C> = Box<
@@ -144,6 +146,8 @@ pub(crate) struct Entry<C> {
     pub decode_json: fn(Value, &mut ParseCx) -> Result<Box<dyn Any + Send>>,
     pub augment: fn(clap::Command) -> clap::Command,
     pub decode_matches: fn(&clap::ArgMatches, &mut ParseCx) -> Result<Box<dyn Any + Send>>,
+    /// Resolves the refs of erased parameters in place.
+    pub resolve_refs: ResolveRefs<C>,
     pub run: Run<C>,
 }
 
@@ -159,6 +163,8 @@ pub struct Registry<C> {
     by_name: HashMap<String, usize>,
     groups: Vec<Group>,
     pillar: &'static str,
+    /// Kinds the server resolves: the library passes their refs through raw.
+    pub(crate) server_kinds: HashSet<&'static str>,
     pub(crate) hook: Arc<dyn CallHook>,
 }
 
@@ -184,6 +190,7 @@ impl<C: Sync> Registry<C> {
             by_name: HashMap::new(),
             groups: Vec::new(),
             pillar: "",
+            server_kinds: HashSet::new(),
             hook: Arc::new(NoHook),
         }
     }
@@ -202,6 +209,12 @@ impl<C: Sync> Registry<C> {
     /// Returns the pillar name set by [`Registry::set_pillar`].
     pub fn pillar(&self) -> &'static str {
         self.pillar
+    }
+
+    /// Declares that the server resolves refs of `kind`: the library skips
+    /// the context's resolver for it and hands the op `Resolved::Raw`.
+    pub fn resolve_server(&mut self, kind: &'static str) {
+        self.server_kinds.insert(kind);
     }
 
     /// Declares a command group. Declare a group before the ops under it.
@@ -269,6 +282,7 @@ impl<C: Sync> Registry<C> {
                 self.group(&group.path.join(" "), &group.summary);
             }
         }
+        self.server_kinds.extend(other.server_kinds);
         for entry in other.entries {
             self.insert_entry(entry);
         }
@@ -370,7 +384,7 @@ impl<C: Sync> Registry<C> {
     }
 }
 
-impl<C: Sync + 'static> Registry<C> {
+impl<C: Resolve + 'static> Registry<C> {
     fn describe<P, O>(spec: &OpSpec<P, O>, kind: OpKind) -> Descriptor
     where
         P: OpParams,
@@ -435,6 +449,12 @@ impl<C: Sync + 'static> Registry<C> {
             decode_json: |value, cx| Ok(Box::new(P::from_json(value, cx)?)),
             augment: P::add_args,
             decode_matches: |matches, cx| Ok(Box::new(P::from_matches(matches, cx)?)),
+            resolve_refs: |registry, ctx, params| {
+                let params = params
+                    .downcast_mut::<P>()
+                    .expect("the entry's decoder and resolver share one parameter type");
+                Box::pin(registry.resolve_refs(ctx, params))
+            },
             run: Run::Unary(run),
         });
     }
@@ -517,6 +537,12 @@ impl<C: Sync + 'static> Registry<C> {
             decode_json: |value, cx| Ok(Box::new(P::from_json(value, cx)?)),
             augment: P::add_args,
             decode_matches: |matches, cx| Ok(Box::new(P::from_matches(matches, cx)?)),
+            resolve_refs: |registry, ctx, params| {
+                let params = params
+                    .downcast_mut::<P>()
+                    .expect("the entry's decoder and resolver share one parameter type");
+                Box::pin(registry.resolve_refs(ctx, params))
+            },
             run: Run::Stream(run),
         });
     }

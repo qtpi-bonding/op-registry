@@ -82,15 +82,24 @@ fn doc_comment_is_help_and_description() {
         want
     );
     let fields = Params::fields();
-    assert_eq!(fields.iter().find(|f| f.key == "agentId").unwrap().help, want);
+    assert_eq!(
+        fields.iter().find(|f| f.key == "agentId").unwrap().help,
+        want
+    );
     let cmd = command();
-    let arg = cmd.get_arguments().find(|a| a.get_id() == "agent_id").unwrap();
+    let arg = cmd
+        .get_arguments()
+        .find(|a| a.get_id() == "agent_id")
+        .unwrap();
     assert_eq!(arg.get_help().unwrap().to_string(), want);
 }
 
 #[test]
 fn repeated_flag_collects_vec() {
-    assert_eq!(parse(&["--tags", "a", "--tags", "b"]).unwrap().tags, ["a", "b"]);
+    assert_eq!(
+        parse(&["--tags", "a", "--tags", "b"]).unwrap().tags,
+        ["a", "b"]
+    );
 }
 
 #[test]
@@ -127,12 +136,18 @@ fn open_map_accepts_any_key() {
 
 #[test]
 fn closed_map_rejects_unknown_key() {
-    assert_eq!(cli_err_code(&["--labels", "nope=1"]), "op_registry.usage.unknown_key");
+    assert_eq!(
+        cli_err_code(&["--labels", "nope=1"]),
+        "op_registry.usage.unknown_key"
+    );
     assert_eq!(
         json_err_code(json!({"agentId":"a","mode":"fast","labels":{"nope":"1"}})),
         "op_registry.usage.unknown_key"
     );
-    assert_eq!(parse(&["--labels", "env=prod"]).unwrap().labels["env"], "prod");
+    assert_eq!(
+        parse(&["--labels", "env=prod"]).unwrap().labels["env"],
+        "prod"
+    );
     let labels = &Params::input_schema()["properties"]["labels"];
     assert_eq!(labels["additionalProperties"], false);
     assert!(labels["properties"]["team"].is_object());
@@ -157,9 +172,22 @@ fn json_rejects_snake_key() {
 #[test]
 fn json_and_cli_decode_equal() {
     let cli = parse(&[
-        "--limit", "7", "--tags", "a", "--tags", "b", "--portable", "--dry-run",
-        "--metadata", "k=v", "--labels", "team=x", "--count=-3", "--note=n",
-        "--out", "/x/y",
+        "--limit",
+        "7",
+        "--tags",
+        "a",
+        "--tags",
+        "b",
+        "--portable",
+        "--dry-run",
+        "--metadata",
+        "k=v",
+        "--labels",
+        "team=x",
+        "--count=-3",
+        "--note=n",
+        "--out",
+        "/x/y",
     ])
     .unwrap();
     let json = Params::from_json(
@@ -176,7 +204,10 @@ fn json_and_cli_decode_equal() {
 fn defaults_and_required() {
     assert_eq!(parse(&[]).unwrap().limit, 50);
     assert_eq!(Params::input_schema()["properties"]["limit"]["default"], 50);
-    assert_eq!(json_err_code(json!({"mode":"fast"})), "op_registry.usage.missing");
+    assert_eq!(
+        json_err_code(json!({"mode":"fast"})),
+        "op_registry.usage.missing"
+    );
     let required = Params::input_schema()["required"].clone();
     assert_eq!(required, json!(["agentId", "mode"]));
 }

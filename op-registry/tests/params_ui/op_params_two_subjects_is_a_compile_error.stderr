@@ -1,0 +1,5 @@
+error: an op has one subject: only one field takes `#[op(subject = ..)]`
+ --> tests/params_ui/op_params_two_subjects_is_a_compile_error.rs:8:5
+  |
+8 |     other: Ref,
+  |     ^^^^^

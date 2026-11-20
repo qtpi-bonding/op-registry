@@ -1,6 +1,6 @@
 //! Plain-data MCP-shaped adapters for a registry.
 
-use crate::{Audience, CallError, CallOptions, OpKind, Registry};
+use crate::{Audience, CallError, CallOptions, OpKind, Registry, Resolve};
 
 /// The tool contract exposed for an operation.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -49,7 +49,7 @@ impl ToolError {
 }
 
 /// Calls a unary operation exposed as a tool.
-pub async fn call_tool<C: Sync>(
+pub async fn call_tool<C: Resolve>(
     registry: &Registry<C>,
     ctx: &C,
     audience: Audience,

@@ -23,7 +23,7 @@ pub fn detached_connect<C>(
     caller: op_registry::Caller,
 ) -> impl FnMut(Option<ListenCursor>) -> BoxFuture<'static, Result<BoxStream<'static, Result<Value>>>>
 where
-    C: Send + Sync + 'static,
+    C: op_registry::Resolve + 'static,
 {
     move |cursor| {
         let registry = registry.clone();

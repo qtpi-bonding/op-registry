@@ -121,6 +121,10 @@ pub trait OpParams: Sized + Send + 'static {
     fn validate(&self) -> anyhow::Result<()> {
         Ok(())
     }
+    /// The refs of this struct: non-subject refs first, then the subject.
+    fn ref_slots(&mut self) -> Vec<crate::RefSlot<'_>> {
+        Vec::new()
+    }
     fn secrets(&self) -> Vec<Vec<u8>> {
         Vec::new()
     }

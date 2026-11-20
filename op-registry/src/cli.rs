@@ -1,6 +1,6 @@
 //! Command-line command construction and dispatch for a registry.
 
-use crate::{derive_name, CallOptions, CallPath, Cursor, OpKind, ParseCx, Registry};
+use crate::{derive_name, CallOptions, CallPath, Cursor, OpKind, ParseCx, Registry, Resolve};
 use anyhow::Result;
 use clap::{Arg, ArgMatches, Command};
 use futures_util::stream::BoxStream;
@@ -163,7 +163,7 @@ fn command_chain(matches: &ArgMatches) -> Vec<String> {
 }
 
 /// Parses and invokes the operation selected by clap matches.
-pub async fn dispatch<'a, C: Sync>(
+pub async fn dispatch<'a, C: Resolve>(
     registry: &'a Registry<C>,
     ctx: &'a C,
     matches: &ArgMatches,

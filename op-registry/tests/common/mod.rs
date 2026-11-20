@@ -7,6 +7,7 @@ use serde::Serialize;
 
 /// The registry context used by the tests.
 pub struct Ctx;
+impl op_registry::Resolve for Ctx {}
 
 /// A small parameter fixture.
 #[derive(Clone, Debug, PartialEq, OpParams)]
