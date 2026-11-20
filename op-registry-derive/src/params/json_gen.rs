@@ -92,6 +92,7 @@ pub fn from_json_fn(fields: &[Field]) -> TokenStream {
             // serde quotes the value it rejects: say nothing of a secret one.
             let key = &f.key;
             quote! {
+                #[allow(clippy::needless_question_mark)]
                 let #ident = ::op_registry::__private::rt::hide_value(
                     #key,
                     (|| -> ::op_registry::__private::anyhow::Result<_> {
