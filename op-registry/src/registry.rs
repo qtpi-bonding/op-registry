@@ -531,7 +531,13 @@ impl<C: Resolve + 'static> Registry<C> {
             paths: spec.paths,
             cursor: spec.cursor,
             input_schema: P::input_schema(),
-            output_schema: <O as OutputSchema>::output_schema(),
+            output_schema: <O as OutputSchema>::output_schema().map(|schema| {
+                if kind == OpKind::Stream {
+                    schema
+                } else {
+                    crate::shape::wrap_array_schema(schema)
+                }
+            }),
             list_pair: None,
             unpaged: spec.unpaged,
         }
@@ -568,7 +574,7 @@ impl<C: Resolve + 'static> Registry<C> {
                 Ok(Ran {
                     exit: ok_exit.map_or(0, |f| f(&out)),
                     text: render_text.filter(|_| want_text).map(|f| f(&out)),
-                    value: serde_json::to_value(out)?,
+                    value: crate::shape::wrap_items(serde_json::to_value(out)?),
                 })
             })
         });

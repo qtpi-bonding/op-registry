@@ -432,7 +432,7 @@ fn help_unpaged_silences_warning() {
 }
 
 #[test]
-fn help_warns_item_differs_from_get() {
+fn list_get_warning_fires_when_items_differ() {
     let mut r = fixture();
     r.group("thing", "Things.");
     r.push_op(
@@ -444,15 +444,22 @@ fn help_warns_item_differs_from_get() {
         OpSpec::<Filter, Other>::new("thing list", "List things."),
         page_other,
     );
+    let list = r.get("thing_list").unwrap();
+    let schema = list.output_schema.as_ref().unwrap();
+    assert_eq!(schema["type"], "object", "{schema}");
+    assert!(schema.pointer("/properties/items/items").is_some(), "{schema}");
     let warnings = assert_help_complete(&r, &rules());
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(warnings[0].contains("thing_list items differ from the output of thing_get"));
 }
 
 #[test]
-fn help_matching_item_and_get_has_no_warning() {
+fn list_get_warning_quiet_when_items_match() {
     // The fixture's `concept get` and `concept list` share `Item`.
-    assert!(assert_help_complete(&fixture(), &rules()).is_empty());
+    let r = fixture();
+    let schema = r.get("concept_list").unwrap().output_schema.clone().unwrap();
+    assert!(schema.pointer("/properties/items/items").is_some(), "{schema}");
+    assert!(assert_help_complete(&r, &rules()).is_empty());
 }
 
 /// An output type for ops that need a second shape.

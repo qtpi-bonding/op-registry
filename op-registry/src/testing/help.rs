@@ -164,10 +164,10 @@ fn warnings<C: Sync>(registry: &Registry<C>) -> Vec<String> {
     warnings
 }
 
-/// The item schema of a list op's array output, with references inlined.
+/// The item schema of a list op's wrapped array output, with references inlined.
 fn item_schema(d: &Descriptor) -> Option<Value> {
     let root = d.output_schema.as_ref()?;
-    Some(inline(root.get("items")?, root, 0))
+    Some(inline(root.pointer("/properties/items/items")?, root, 0))
 }
 
 /// Replaces every `$ref` with its target in `root`, and drops the keys that

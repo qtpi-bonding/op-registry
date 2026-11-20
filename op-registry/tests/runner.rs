@@ -397,12 +397,12 @@ fn stream_mid_error_ends_with_error_line_and_class_exit() {
 }
 
 #[test]
-fn follow_all_list_prints_bare_array() {
+fn follow_all_list_prints_items_object() {
     let r = run(&["concept", "list"]);
     assert_eq!(r.code, 0);
     assert_eq!(
         r.out_json(),
-        json!([{"n": 0}, {"n": 1}, {"n": 2}, {"n": 3}, {"n": 4}])
+        json!({"items": [{"n": 0}, {"n": 1}, {"n": 2}, {"n": 3}, {"n": 4}]})
     );
 }
 

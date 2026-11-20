@@ -19,6 +19,7 @@ mod output;
 mod params;
 mod refs;
 mod registry;
+mod shape;
 #[cfg(feature = "testing")]
 pub mod testing;
 

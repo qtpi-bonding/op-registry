@@ -231,6 +231,43 @@ fn list_pair_both_tools() {
     }
 }
 
+#[tokio::test]
+async fn call_tool_returns_items_object() {
+    let mut r: Registry<Ctx> = Registry::new();
+    r.set_pillar("fix");
+    r.group("thing", "Things.");
+    r.push_list(
+        OpSpec::<Lst, Out>::new("thing list", "List things."),
+        |_c: &Ctx, _p: Lst, _req: PageRequest| -> BoxFuture<'_, anyhow::Result<Page<Out>>> {
+            Box::pin(async {
+                Ok(Page {
+                    items: vec![Out { ok: true }],
+                    next_cursor: None,
+                })
+            })
+        },
+    );
+    let out = call_tool(
+        &r,
+        &Ctx,
+        Audience::Agent,
+        "thing_list",
+        json!({}),
+        CallOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out, json!({"items": [{"ok": true}]}));
+    #[cfg(feature = "schema")]
+    {
+        let specs = tool_list(&r, Audience::Agent);
+        let spec = specs.iter().find(|s| s.name == "thing_list").unwrap();
+        let schema = spec.output_schema.as_ref().expect("an output schema");
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["required"], json!(["items"]));
+    }
+}
+
 #[derive(Default)]
 struct Recorder(Mutex<Vec<CallPath>>);
 impl CallHook for Recorder {

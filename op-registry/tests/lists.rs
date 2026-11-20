@@ -97,13 +97,13 @@ async fn call(
 }
 
 #[tokio::test]
-async fn follow_all_returns_bare_array_across_pages() {
+async fn follow_all_returns_items_object_across_pages() {
     let r = registry(|s| s.page_size = 2);
     let c = ctx(&[&["a", "b"], &["c", "d"], &["e"]]);
     let out = call(&r, &c, "concept_list", json!({})).await.unwrap();
     assert_eq!(
         out,
-        json!([{"id":"a"},{"id":"b"},{"id":"c"},{"id":"d"},{"id":"e"}])
+        json!({"items": [{"id":"a"},{"id":"b"},{"id":"c"},{"id":"d"},{"id":"e"}]})
     );
     let seen = c.seen.lock().unwrap();
     assert_eq!(seen.len(), 3);
@@ -130,7 +130,7 @@ async fn follow_all_never_truncates() {
     let r = registry(|s| s.cap = 6);
     let c = ctx(&[&["a", "b", "c"], &["d", "e", "f"]]);
     let out = call(&r, &c, "concept_list", json!({})).await.unwrap();
-    assert_eq!(out.as_array().unwrap().len(), 6);
+    assert_eq!(out["items"].as_array().unwrap().len(), 6);
     let c = ctx(&[&["a", "b", "c"], &["d", "e", "f"], &["g"]]);
     assert!(call(&r, &c, "concept_list", json!({})).await.is_err());
 }
@@ -166,7 +166,7 @@ async fn empty_list_is_empty_array_and_empty_page() {
     let c = ctx(&[]);
     assert_eq!(
         call(&r, &c, "concept_list", json!({})).await.unwrap(),
-        json!([])
+        json!({"items": []})
     );
     assert_eq!(
         call(&r, &c, "concept_list_page", json!({"limit": 5}))
@@ -273,7 +273,9 @@ fn pair_names_and_list_pair_links() {
     assert_eq!(all.path, page.path);
     #[cfg(feature = "schema")]
     {
-        assert_eq!(all.output_schema.as_ref().unwrap()["type"], "array");
+        let all_schema = all.output_schema.as_ref().unwrap();
+        assert_eq!(all_schema["type"], "object");
+        assert_eq!(all_schema["properties"]["items"]["type"], "array");
         let page_schema = page.output_schema.as_ref().unwrap();
         assert!(page_schema["properties"]["nextCursor"].is_object());
     }
@@ -359,4 +361,91 @@ fn list_pair_halves_carry_no_text_or_exits() {
         assert!(!d.text, "{name}");
         assert!(d.exits.is_empty(), "{name}");
     }
+}
+
+// --- OUT-1: arrays are `{"items": [...]}` on every JSON surface ---
+
+#[derive(op_registry::OpGlobals)]
+struct NoGlobals {}
+
+impl op_registry::CliContext for Ctx {
+    type Globals = NoGlobals;
+    fn from_globals(_globals: &NoGlobals) -> anyhow::Result<Self> {
+        Ok(Ctx {
+            pages: vec![vec!["a", "b"], vec!["c"]],
+            ..Ctx::default()
+        })
+    }
+}
+
+fn run_cli(args: &[&str]) -> serde_json::Value {
+    let argv = std::iter::once("app")
+        .chain(args.iter().copied())
+        .map(std::ffi::OsString::from)
+        .collect();
+    let (io, cap) = op_registry::cli::Io::memory(b"", false, false);
+    let code = futures_executor::block_on(op_registry::cli::run_with_io(
+        &registry(|s| s.page_size = 2),
+        argv,
+        &op_registry::cli::NoHooks,
+        io,
+    ));
+    assert_eq!(code, 0, "{}", cap.stderr());
+    serde_json::from_str(&cap.stdout()).unwrap()
+}
+
+#[test]
+fn cli_follow_all_prints_items_object() {
+    assert_eq!(
+        run_cli(&["concept", "list"]),
+        json!({"items": [{"id":"a"},{"id":"b"},{"id":"c"}]})
+    );
+}
+
+#[test]
+fn page_half_prints_items_and_next_cursor() {
+    assert_eq!(
+        run_cli(&["concept", "list", "--limit", "2"]),
+        json!({"items": [{"id":"a"},{"id":"b"}], "nextCursor": "c1"})
+    );
+}
+
+#[tokio::test]
+async fn call_returns_items_object() {
+    let r = registry(|_| {});
+    let c = ctx(&[&["a"]]);
+    let out = call(&r, &c, "concept_list", json!({})).await.unwrap();
+    assert_eq!(out, json!({"items": [{"id":"a"}]}));
+}
+
+struct ListAll;
+impl op_registry::Op for ListAll {
+    type Ctx = Ctx;
+    type Params = ListConcepts;
+    type Output = Vec<Concept>;
+    const NAME: &'static str = "concept_list";
+}
+
+#[tokio::test]
+async fn call_typed_returns_vec() {
+    let r = registry(|_| {});
+    let c = ctx(&[&["a"], &["b"]]);
+    let out: Vec<Concept> = r
+        .call_typed::<ListAll>(&c, ListConcepts { tag: None }, CallOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(out, vec![Concept { id: "a".into() }, Concept { id: "b".into() }]);
+}
+
+#[tokio::test]
+async fn value_output_array_is_wrapped() {
+    let mut r: Registry<Ctx> = Registry::new();
+    r.push_op(
+        OpSpec::<ListConcepts, serde_json::Value>::new("dump", "Dump."),
+        |_c: &Ctx, _p: ListConcepts, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<serde_json::Value>> {
+            Box::pin(async { Ok(json!([1, 2])) })
+        },
+    );
+    let out = call(&r, &Ctx::default(), "dump", json!({})).await.unwrap();
+    assert_eq!(out, json!({"items": [1, 2]}));
 }

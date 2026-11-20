@@ -234,7 +234,7 @@ where
 
 impl<C: Resolve + 'static> Registry<C> {
     /// Adds a list pair from one page function: `<name>` follows every page
-    /// and returns a bare array (failing with `<pillar>.<noun>.too_many` past
+    /// and returns `{"items": [...]}` (failing with `<pillar>.<noun>.too_many` past
     /// `spec.cap` items), and `<name>_page` returns one `Page<T>`. Both
     /// share the spec's metadata and name each other in `list_pair`.
     ///
