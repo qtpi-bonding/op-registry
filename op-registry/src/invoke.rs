@@ -318,7 +318,7 @@ impl<C: Resolve> Registry<C> {
         CallInfo {
             name: entry.descriptor.name.clone(),
             access: entry.descriptor.access,
-            audience: entry.descriptor.audience,
+            audience: opts.serving.unwrap_or(entry.descriptor.audience),
             path,
             caller: opts.caller.clone(),
             fields: entry.fields.as_ref().map(|f| f(params)).unwrap_or_default(),

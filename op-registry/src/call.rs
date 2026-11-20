@@ -1,4 +1,4 @@
-use crate::{CallPath, Notices, OpParams, Redactor};
+use crate::{Audience, CallPath, Notices, OpParams, Redactor};
 
 /// Per-call options.
 #[non_exhaustive]
@@ -17,6 +17,8 @@ pub struct CallOptions {
     pub max_retries: Option<u32>,
     /// The path the call took; the library sets it before the op runs.
     pub(crate) path: Option<CallPath>,
+    /// The audience of the server making the call, set by `mcp::call_tool`.
+    pub(crate) serving: Option<Audience>,
 }
 
 /// Identifies the caller of an operation.

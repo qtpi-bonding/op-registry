@@ -250,6 +250,8 @@ pub struct Descriptor {
     pub access: Access,
     /// The intended audience.
     pub audience: Audience,
+    /// Every audience the operation belongs to, the primary first, no duplicates.
+    pub audiences: Vec<Audience>,
     /// The shape of the operation.
     pub kind: OpKind,
     /// Whether the operation is hidden from listings.

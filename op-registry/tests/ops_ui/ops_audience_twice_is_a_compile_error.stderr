@@ -1,0 +1,5 @@
+error: audience `owner` is given twice
+  --> tests/ops_ui/ops_audience_twice_is_a_compile_error.rs:23:71
+   |
+23 |     "a b" => { params: P, output: O, access: reads, audience: [owner, owner], op: f },
+   |                                                                       ^^^^^

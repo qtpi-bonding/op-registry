@@ -241,3 +241,97 @@ async fn progress_notice_reaches_client() {
     let logs = client.logs.lock().unwrap();
     assert_eq!(logs[0].data, json!("hello"));
 }
+
+// DEC-6: a context per call, and server instructions.
+
+struct Numbered(usize);
+impl op_registry::Resolve for Numbered {}
+
+fn whoami(c: &Numbered, _p: Echo, _o: CallOptions) -> BoxFuture<'_, anyhow::Result<Out>> {
+    Box::pin(async move {
+        // Yield so two concurrent calls overlap.
+        tokio::task::yield_now().await;
+        Ok(Out {
+            greeted_host: c.0.to_string(),
+        })
+    })
+}
+
+fn numbered_registry() -> Registry<Numbered> {
+    let mut r: Registry<Numbered> = Registry::new();
+    r.push_op(OpSpec::<Echo, Out>::new("whoami", "Who."), whoami);
+    r
+}
+
+async fn connect_server(server: RegistryServer<Numbered>) -> RunningService<RoleClient, Client> {
+    let (a, b) = tokio::io::duplex(64 * 1024);
+    tokio::spawn(async move {
+        let running = server.serve(a).await.unwrap();
+        let _ = running.waiting().await;
+    });
+    Client::default().serve(b).await.unwrap()
+}
+
+#[tokio::test]
+async fn ctx_factory_runs_per_call() {
+    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let made = counter.clone();
+    let server = RegistryServer::with_ctx_factory(
+        Arc::new(numbered_registry()),
+        Arc::new(move || {
+            Arc::new(Numbered(
+                made.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            ))
+        }),
+        Audience::Agent,
+        Implementation::new("test-server", "0.0.1"),
+    );
+    let c = connect_server(server).await;
+    assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let (one, two) = tokio::join!(
+        call(&c, "whoami", json!({}), None),
+        call(&c, "whoami", json!({}), None)
+    );
+    assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 2);
+    let mut seen: Vec<String> = [one, two]
+        .iter()
+        .map(|r| {
+            r.structured_content.clone().unwrap()["greetedHost"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    seen.sort();
+    assert_eq!(seen, vec!["0", "1"]);
+}
+
+#[tokio::test]
+async fn instructions_in_get_info() {
+    let server = RegistryServer::new(
+        Arc::new(numbered_registry()),
+        Arc::new(Numbered(7)),
+        Audience::Agent,
+        Implementation::new("test-server", "0.0.1"),
+    )
+    .with_instructions("Use whoami first.");
+    let c = connect_server(server).await;
+    let info = c.peer_info().unwrap();
+    assert_eq!(info.instructions.as_deref(), Some("Use whoami first."));
+}
+
+#[tokio::test]
+async fn new_server_unchanged() {
+    let server = RegistryServer::new(
+        Arc::new(numbered_registry()),
+        Arc::new(Numbered(7)),
+        Audience::Agent,
+        Implementation::new("test-server", "0.0.1"),
+    );
+    let c = connect_server(server).await;
+    assert_eq!(c.peer_info().unwrap().instructions, None);
+    for _ in 0..2 {
+        let r = call(&c, "whoami", json!({}), None).await;
+        assert_eq!(r.structured_content, Some(json!({"greetedHost": "7"})));
+    }
+}

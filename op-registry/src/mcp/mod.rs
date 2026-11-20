@@ -29,15 +29,16 @@ pub struct ToolAnnotations {
     pub destructive_hint: bool,
 }
 
-/// Lists the tools of an audience, in registry order: every op of that
-/// audience that is not hidden, not a stream and whose paths contain `mcp`. Both halves
-/// of a list pair are tools.
+/// Lists the tools of an audience, in registry order: every op that
+/// belongs to that audience (its primary or an extra one), is not hidden, is
+/// not a stream and whose paths contain `mcp`. Both halves of a list pair are
+/// tools.
 pub fn tool_list<C: Sync>(registry: &Registry<C>, audience: Audience) -> Vec<ToolSpec> {
     registry
         .descriptors()
         .into_iter()
         .filter(|d| {
-            d.audience == audience
+            d.audiences.contains(&audience)
                 && !d.hidden
                 && d.kind != OpKind::Stream
                 && d.paths.contains(Surface::Mcp)
@@ -67,7 +68,7 @@ pub async fn call_tool<C: Resolve>(
     audience: Audience,
     name: &str,
     args: Value,
-    opts: CallOptions,
+    mut opts: CallOptions,
 ) -> Result<Value, CallFailure> {
     let plain = |error: CallError| CallFailure::plain(coded_error::into_anyhow(error));
     let descriptor = registry.get(name).ok_or_else(|| {
@@ -75,11 +76,12 @@ pub async fn call_tool<C: Resolve>(
             name: name.to_owned(),
         })
     })?;
-    if descriptor.audience != audience {
+    if !descriptor.audiences.contains(&audience) {
         return Err(plain(CallError::OutsideAudience {
             name: name.to_owned(),
         }));
     }
+    opts.serving = Some(audience);
     let invocation = registry
         .call_json(name, args, ctx, opts, CallPath::Mcp, false)
         .await;

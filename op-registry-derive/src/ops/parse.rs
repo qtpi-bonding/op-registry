@@ -41,7 +41,8 @@ pub struct Entry {
     /// The output type, or the item type of a list.
     pub output: Type,
     pub access: Vec<Ident>,
-    pub audience: Ident,
+    /// The audiences, primary first; validated, no duplicates.
+    pub audience: Vec<Ident>,
     pub errors: Vec<Type>,
     pub fields: Option<Path>,
     pub exits: Vec<(LitInt, LitStr)>,
@@ -227,7 +228,7 @@ impl Parse for Entry {
         let mut item: Option<(Ident, Type)> = None;
         let mut kinds: Vec<(Ident, Kind, Path)> = Vec::new();
         let mut access: Option<Vec<Ident>> = None;
-        let mut audience: Option<Ident> = None;
+        let mut audience: Option<Vec<Ident>> = None;
         let mut errors = Vec::new();
         let mut fields = None;
         let mut exits = Vec::new();
@@ -286,14 +287,37 @@ impl Parse for Entry {
                     access = Some(words);
                 }
                 "audience" => {
-                    let word: Ident = body.parse()?;
-                    if !AUDIENCES.contains(&word.to_string().as_str()) {
+                    let mut words: Vec<Ident> = Vec::new();
+                    let mut empty_at = None;
+                    if body.peek(syn::token::Bracket) {
+                        let inner;
+                        let bracket = bracketed!(inner in body);
+                        words.extend(inner.parse_terminated(Ident::parse, Token![,])?);
+                        empty_at = Some(bracket.span.join());
+                    } else {
+                        words.push(body.parse::<Ident>()?);
+                    }
+                    for (i, word) in words.iter().enumerate() {
+                        if !AUDIENCES.contains(&word.to_string().as_str()) {
+                            return Err(syn::Error::new(
+                                word.span(),
+                                format!("unknown audience `{word}`: expected agent, owner or dev"),
+                            ));
+                        }
+                        if words[..i].iter().any(|w| w == word) {
+                            return Err(syn::Error::new(
+                                word.span(),
+                                format!("audience `{word}` is given twice"),
+                            ));
+                        }
+                    }
+                    if let (true, Some(span)) = (words.is_empty(), empty_at) {
                         return Err(syn::Error::new(
-                            word.span(),
-                            format!("unknown audience `{word}`: expected agent, owner or dev"),
+                            span,
+                            "audience needs at least one of agent, owner, dev",
                         ));
                     }
-                    audience = Some(word);
+                    audience = Some(words);
                 }
                 "errors" => {
                     let inner;

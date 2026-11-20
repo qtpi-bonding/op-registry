@@ -495,3 +495,20 @@ fn out_is_refused_off_the_command_line() {
     );
     assert!(!dir.exists(), "nothing is written off the command line");
 }
+
+#[test]
+fn manual_json_has_audiences() {
+    let mut r = fixture();
+    let mut spec = OpSpec::<Filter, Item>::new("concept shared", "Shared.");
+    spec.more_audiences = vec![Audience::Owner];
+    r.push_op(spec, nothing::<Filter>);
+    let json = render_json(&r);
+    let op = json["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["name"] == "concept_shared")
+        .unwrap();
+    assert_eq!(op["audiences"], serde_json::json!(["agent", "owner"]));
+    assert_eq!(op["audience"], "agent");
+}

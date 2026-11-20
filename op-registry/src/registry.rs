@@ -30,6 +30,8 @@ pub struct OpSpec<P, O> {
     pub access: Access,
     /// The intended audience.
     pub audience: Audience,
+    /// Further audiences the operation also belongs to.
+    pub more_audiences: Vec<Audience>,
     /// Whether the operation is hidden from listings.
     pub hidden: bool,
     /// Whether the command runs when its group is named without a verb.
@@ -68,6 +70,7 @@ impl<P, O> OpSpec<P, O> {
             long_help: "",
             access: Access::default(),
             audience: Audience::default(),
+            more_audiences: Vec::new(),
             hidden: false,
             group_default: false,
             exits: Vec::new(),
@@ -98,6 +101,7 @@ impl<P, O> OpSpec<P, O> {
             long_help: self.long_help,
             access: self.access,
             audience: self.audience,
+            more_audiences: self.more_audiences.clone(),
             hidden: self.hidden,
             group_default: self.group_default,
             exits: Vec::new(),
@@ -516,6 +520,14 @@ impl<C: Resolve + 'static> Registry<C> {
             long_help: spec.long_help.to_owned(),
             access: spec.access,
             audience: spec.audience,
+            audiences: std::iter::once(spec.audience)
+                .chain(spec.more_audiences.iter().copied())
+                .fold(Vec::new(), |mut all, a| {
+                    if !all.contains(&a) {
+                        all.push(a);
+                    }
+                    all
+                }),
             kind,
             hidden: spec.hidden,
             group_default: spec.group_default,

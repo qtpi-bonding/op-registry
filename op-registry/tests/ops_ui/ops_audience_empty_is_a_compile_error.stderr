@@ -1,0 +1,5 @@
+error: audience needs at least one of agent, owner, dev
+  --> tests/ops_ui/ops_audience_empty_is_a_compile_error.rs:23:63
+   |
+23 |     "a b" => { params: P, output: O, access: reads, audience: [], op: f },
+   |                                                               ^^

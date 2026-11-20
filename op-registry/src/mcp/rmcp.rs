@@ -21,9 +21,26 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 /// caller stays `None`: who is calling is the application's concern.
 pub struct RegistryServer<C> {
     registry: Arc<Registry<C>>,
-    ctx: Arc<C>,
+    ctx: CtxSource<C>,
     audience: Audience,
     info: Implementation,
+    instructions: Option<String>,
+}
+
+/// Where a call's context comes from: one shared context, or a factory run
+/// once per `tools/call`.
+enum CtxSource<C> {
+    Shared(Arc<C>),
+    Factory(Arc<dyn Fn() -> Arc<C> + Send + Sync>),
+}
+
+impl<C> CtxSource<C> {
+    fn get(&self) -> Arc<C> {
+        match self {
+            CtxSource::Shared(ctx) => ctx.clone(),
+            CtxSource::Factory(factory) => factory(),
+        }
+    }
 }
 
 impl<C: Resolve + Send + Sync + 'static> RegistryServer<C> {
@@ -36,10 +53,34 @@ impl<C: Resolve + Send + Sync + 'static> RegistryServer<C> {
     ) -> Self {
         Self {
             registry,
-            ctx,
+            ctx: CtxSource::Shared(ctx),
             audience,
             info,
+            instructions: None,
         }
+    }
+
+    /// Creates a server that builds a fresh context for every `tools/call`
+    /// by running `factory`.
+    pub fn with_ctx_factory(
+        registry: Arc<Registry<C>>,
+        factory: Arc<dyn Fn() -> Arc<C> + Send + Sync>,
+        audience: Audience,
+        info: Implementation,
+    ) -> Self {
+        Self {
+            registry,
+            ctx: CtxSource::Factory(factory),
+            audience,
+            info,
+            instructions: None,
+        }
+    }
+
+    /// Returns this server with `text` as the instructions `get_info` sends.
+    pub fn with_instructions(mut self, text: impl Into<String>) -> Self {
+        self.instructions = Some(text.into());
+        self
     }
 }
 
@@ -114,13 +155,17 @@ async fn forward(
 #[allow(deprecated)] // enable_logging, see `forward`
 impl<C: Resolve + Send + Sync + 'static> ServerHandler for RegistryServer<C> {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+        let info = ServerInfo::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_logging()
                 .build(),
         )
-        .with_server_info(self.info.clone())
+        .with_server_info(self.info.clone());
+        match &self.instructions {
+            Some(text) => info.with_instructions(text.clone()),
+            None => info,
+        }
     }
 
     async fn list_tools(
@@ -149,9 +194,10 @@ impl<C: Resolve + Send + Sync + 'static> ServerHandler for RegistryServer<C> {
             .with_notices(Notices::new(Arc::new(ChannelSink(sender))));
         let args = Value::Object(request.arguments.unwrap_or_default());
 
+        let ctx = self.ctx.get();
         let call = call_tool(
             &self.registry,
-            &self.ctx,
+            &ctx,
             self.audience,
             &request.name,
             args,

@@ -19,4 +19,6 @@ fn ops_compile_failures() {
     tests.compile_fail("tests/ops_ui/ops_paths_empty_is_a_compile_error.rs");
     tests.compile_fail("tests/ops_ui/ops_paths_duplicate_is_a_compile_error.rs");
     tests.compile_fail("tests/ops_ui/ops_reason_key_is_a_compile_error.rs");
+    tests.compile_fail("tests/ops_ui/ops_audience_empty_is_a_compile_error.rs");
+    tests.compile_fail("tests/ops_ui/ops_audience_twice_is_a_compile_error.rs");
 }

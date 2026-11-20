@@ -85,11 +85,13 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
         &e.long_help,
     );
     let (params, output, func) = (&e.params, &e.output, &e.func);
-    let audience = match e.audience.to_string().as_str() {
+    let audience_of = |word: &syn::Ident| match word.to_string().as_str() {
         "agent" => quote!(Agent),
         "owner" => quote!(Owner),
         _ => quote!(Dev),
     };
+    let audience = audience_of(&e.audience[0]);
+    let more_audiences: Vec<_> = e.audience[1..].iter().map(audience_of).collect();
     let words = e
         .access
         .iter()
@@ -98,6 +100,7 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
         quote!(__spec.long_help = #long_help;),
         quote!(__spec.access = ::op_registry::Access::from_words(&[#(#words),*]);),
         quote!(__spec.audience = ::op_registry::Audience::#audience;),
+        quote!(__spec.more_audiences = vec![#(::op_registry::Audience::#more_audiences),*];),
     ];
     let mut set = |field: &str, value: &Option<syn::LitBool>| {
         if let Some(v) = value {

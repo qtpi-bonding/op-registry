@@ -362,3 +362,150 @@ fn output_schema_none_without_schema_feature() {
         .get("outputSchema")
         .is_none());
 }
+
+// DEC-1: one op in several audiences.
+
+struct SeenAudiences(Mutex<Vec<(CallPath, Audience)>>);
+impl CallHook for SeenAudiences {
+    fn around<'a>(&'a self, info: &CallInfo, call: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((info.path.clone(), info.audience));
+        call
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, OpParams)]
+struct NoArgs {
+    tag: Option<String>,
+}
+
+fn shared_registry() -> Registry<Ctx> {
+    let mut r: Registry<Ctx> = Registry::new();
+    let mut shared = OpSpec::<NoArgs, Out>::new("shared_op", "Agent and owner.");
+    shared.audience = Audience::Agent;
+    shared.more_audiences = vec![Audience::Owner];
+    r.push_op(shared, ok_op::<NoArgs>);
+    let mut agent = OpSpec::<NoArgs, Out>::new("agent_op", "Agent only.");
+    agent.audience = Audience::Agent;
+    r.push_op(agent, ok_op::<NoArgs>);
+    r
+}
+
+#[tokio::test]
+async fn multi_audience_op_in_both_tool_lists_and_callable() {
+    let r = shared_registry();
+    assert!(names(&r, Audience::Agent).contains(&"shared_op".to_owned()));
+    assert!(names(&r, Audience::Owner).contains(&"shared_op".to_owned()));
+    assert!(!names(&r, Audience::Dev).contains(&"shared_op".to_owned()));
+    let descriptor = r.get("shared_op").unwrap();
+    assert_eq!(descriptor.audience, Audience::Agent);
+    assert_eq!(descriptor.audiences, vec![Audience::Agent, Audience::Owner]);
+    for audience in [Audience::Agent, Audience::Owner] {
+        let out = call_tool(
+            &r,
+            &Ctx,
+            audience,
+            "shared_op",
+            json!({}),
+            CallOptions::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, json!({"ok": true}));
+    }
+}
+
+#[tokio::test]
+async fn agent_only_op_outside_owner_server() {
+    let r = shared_registry();
+    assert!(!names(&r, Audience::Owner).contains(&"agent_op".to_owned()));
+    let err = call_tool(
+        &r,
+        &Ctx,
+        Audience::Owner,
+        "agent_op",
+        json!({}),
+        CallOptions::default(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        tool_error(&err, "t", "fallback").code,
+        "op_registry.call.outside_audience"
+    );
+}
+
+#[tokio::test]
+async fn call_info_audience_is_server_on_mcp_primary_elsewhere() {
+    let mut r = shared_registry();
+    let seen = Arc::new(SeenAudiences(Mutex::new(Vec::new())));
+    r.set_call_hook(seen.clone());
+    call_tool(
+        &r,
+        &Ctx,
+        Audience::Owner,
+        "shared_op",
+        json!({}),
+        CallOptions::default(),
+    )
+    .await
+    .unwrap();
+    call_tool(
+        &r,
+        &Ctx,
+        Audience::Agent,
+        "shared_op",
+        json!({}),
+        CallOptions::default(),
+    )
+    .await
+    .unwrap();
+    r.call("shared_op", json!({}), &Ctx, CallOptions::default())
+        .await
+        .unwrap();
+    struct Shared;
+    impl op_registry::Op for Shared {
+        type Ctx = Ctx;
+        type Params = NoArgs;
+        type Output = Out;
+        const NAME: &'static str = "shared_op";
+    }
+    r.call_typed::<Shared>(&Ctx, NoArgs { tag: None }, CallOptions::default())
+        .await
+        .unwrap();
+    let seen = seen.0.lock().unwrap();
+    assert_eq!(seen.len(), 4);
+    assert_eq!(seen[0], (CallPath::Mcp, Audience::Owner));
+    assert_eq!(seen[1], (CallPath::Mcp, Audience::Agent));
+    assert_eq!(seen[2].1, Audience::Agent);
+    assert_eq!(seen[3], (CallPath::Typed, Audience::Agent));
+}
+
+#[test]
+fn list_halves_share_audiences() {
+    let mut r: Registry<Ctx> = Registry::new();
+    r.set_pillar("fix");
+    r.group("thing", "Things.");
+    let mut spec = OpSpec::<Lst, Out>::new("thing list", "List things.");
+    spec.audience = Audience::Agent;
+    spec.more_audiences = vec![Audience::Owner];
+    r.push_list(
+        spec,
+        |_c: &Ctx, _p: Lst, _req: PageRequest| -> BoxFuture<'_, anyhow::Result<Page<Out>>> {
+            Box::pin(async {
+                Ok(Page {
+                    items: vec![],
+                    next_cursor: None,
+                })
+            })
+        },
+    );
+    let owner = names(&r, Audience::Owner);
+    assert_eq!(owner.len(), 2, "{owner:?}");
+    for d in r.descriptors() {
+        assert_eq!(d.audiences, vec![Audience::Agent, Audience::Owner]);
+        assert!(owner.contains(&d.name));
+    }
+}
