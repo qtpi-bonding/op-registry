@@ -1,9 +1,9 @@
 //! `assert_exit_table`, `strict_codes` and `assert_error_codes`: every code
 //! an op returns is one it declared (spec 6.3), and the manual lists them.
 
-use super::{fail_on, kit_options, KIT_STREAM_TIMEOUT};
+use super::{fail_on, fail_on_noting, kit_options, kit_path, typed_only_line, KIT_STREAM_TIMEOUT};
 use crate::manual::{render, Manual};
-use crate::{CliContext, Descriptor, OpKind, Registry, Resolve};
+use crate::{CallPath, CliContext, Descriptor, OpKind, Registry, Resolve};
 use futures_util::StreamExt;
 use serde_json::Value;
 
@@ -29,6 +29,10 @@ fn offence<C: Sync>(registry: &Registry<C>, d: &Descriptor, err: &anyhow::Error)
     let code = coded_error::facts_anyhow(err).code;
     if code == coded_error::UNKNOWN_CODE {
         return Some(format!("an uncoded error: {err:#}"));
+    }
+    // A call that could not reach the op is the kit's own mistake.
+    if code == "op_registry.call.wrong_path" || code == "op_registry.call.wrong_shape" {
+        return Some(format!("a call the kit should not have made: {err:#}"));
     }
     if code.starts_with("op_registry.") || declared_codes(registry, d).iter().any(|c| c == code) {
         return None;
@@ -89,14 +93,15 @@ fn in_tokio_runtime() -> bool {
     std::panic::catch_unwind(|| drop(tokio::time::sleep(std::time::Duration::ZERO))).is_ok()
 }
 
-/// The errors one call of `d` produced: the call's own, and for a stream the
-/// error of its first item. A stream is read to its first item (`Ok` or
-/// `Err`) or its end, under a 10 s timeout that covers opening it.
+/// The errors one call of `d` on `path` produced: the call's own, and for a
+/// stream the error of its first item. A stream is read to its first item
+/// (`Ok` or `Err`) or its end, under a 10 s timeout that covers opening it.
 pub(crate) async fn call_errors<C: Resolve>(
     registry: &Registry<C>,
     ctx: &C,
     d: &Descriptor,
     args: Value,
+    path: CallPath,
 ) -> Called {
     if d.kind == OpKind::Stream {
         if !in_tokio_runtime() {
@@ -104,8 +109,9 @@ pub(crate) async fn call_errors<C: Resolve>(
         }
         let call = async {
             match registry
-                .call_stream(&d.name, args, ctx, kit_options(), None)
+                .call_stream_json(&d.name, args, ctx, kit_options(), None, path)
                 .await
+                .result
             {
                 Err(err) => vec![err],
                 Ok(mut items) => match items.next().await {
@@ -121,21 +127,23 @@ pub(crate) async fn call_errors<C: Resolve>(
     } else {
         Called::Errors(
             registry
-                .call(&d.name, args, ctx, kit_options())
+                .call_json(&d.name, args, ctx, kit_options(), path, false)
                 .await
+                .result
                 .err()
-                .map(crate::CallFailure::into_inner)
                 .into_iter()
                 .collect(),
         )
     }
 }
 
-/// Runs each fixture through `Registry::call` and reports every error whose
+/// Runs each fixture on the first surface its op declares (json, mcp, cli) and
+/// reports every error whose
 /// code the op did not declare, and every uncoded error.
 ///
-/// Do not combine it with [`strict_codes`]: a strict panic stops the report
-/// at the first offender.
+/// An op declared on typed only is not run; the report names it. Do not
+/// combine it with [`strict_codes`]: a strict panic stops the report at the
+/// first offender.
 ///
 /// # Panics
 ///
@@ -146,6 +154,7 @@ pub async fn assert_error_codes<C: Resolve>(
     fixtures: &[Fixture<'_>],
 ) {
     let mut problems = Vec::new();
+    let mut skipped = Vec::new();
     for fixture in fixtures {
         let Some(d) = registry.get(fixture.op) else {
             problems.push(format!(
@@ -154,7 +163,11 @@ pub async fn assert_error_codes<C: Resolve>(
             ));
             continue;
         };
-        match call_errors(registry, ctx, d, fixture.args.clone())
+        let Some(path) = kit_path(d) else {
+            skipped.push(typed_only_line("assert_error_codes", d));
+            continue;
+        };
+        match call_errors(registry, ctx, d, fixture.args.clone(), path)
             .await
             .errors_or_problem(&d.name)
         {
@@ -168,7 +181,7 @@ pub async fn assert_error_codes<C: Resolve>(
             Err(problem) => problems.push(problem),
         }
     }
-    fail_on("assert_error_codes", &problems);
+    fail_on_noting("assert_error_codes", &problems, &skipped);
 }
 
 /// The text of the manual section of `heading`, up to the next heading.
@@ -243,4 +256,49 @@ pub fn assert_exit_table<C: CliContext>(registry: &Registry<C>, manual: &Manual)
     let rendered = render(registry, manual)
         .unwrap_or_else(|err| panic!("assert_exit_table: the manual does not render: {err:#}"));
     fail_on("assert_exit_table", &check_exit_table(registry, &rendered));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CallError, CallOptions, OpParams, OpSpec};
+    use futures_util::future::BoxFuture;
+    use serde::Serialize;
+
+    struct Ctx;
+    impl Resolve for Ctx {}
+
+    #[derive(OpParams)]
+    struct P {}
+
+    #[derive(Serialize)]
+    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    struct Out {}
+
+    #[test]
+    fn wrong_path_is_an_offence() {
+        let mut r = Registry::<Ctx>::new();
+        r.set_pillar("fix");
+        r.group("tool", "Tools.");
+        r.push_op(
+            OpSpec::<P, Out>::new("tool op", "Runs."),
+            |_c: &Ctx, _p: P, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Out>> {
+                Box::pin(async { Ok(Out {}) })
+            },
+        );
+        let d = r.get("tool_op").unwrap();
+        for err in [
+            CallError::WrongPath {
+                name: "tool_op".into(),
+            },
+            CallError::WrongShape {
+                name: "tool_op".into(),
+            },
+        ] {
+            let err = coded_error::into_anyhow(err);
+            assert!(offence(&r, d, &err).is_some(), "{err:#}");
+        }
+        let other = coded_error::into_anyhow(CallError::UnknownOperation { name: "x".into() });
+        assert!(offence(&r, d, &other).is_none());
+    }
 }

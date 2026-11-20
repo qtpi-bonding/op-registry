@@ -123,6 +123,26 @@ impl<C: Resolve> Registry<C> {
             .result
     }
 
+    /// Decodes JSON arguments and opens a stream op on `path`, keeping the
+    /// call's redactor like [`Registry::call_json`].
+    pub(crate) async fn call_stream_json<'a>(
+        &'a self,
+        name: &str,
+        args: Value,
+        ctx: &'a C,
+        opts: CallOptions,
+        cursor: Option<Cursor>,
+        path: CallPath,
+    ) -> Invocation<BoxStream<'a, Result<Value>>> {
+        match self.decode_json(name, args, &path, true) {
+            Ok(params) => {
+                self.call_stream_decoded(name, params, ctx, opts, cursor, path, Redactor::default())
+                    .await
+            }
+            Err(err) => Invocation::failed(err),
+        }
+    }
+
     fn decode_json(
         &self,
         name: &str,

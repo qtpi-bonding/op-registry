@@ -2,8 +2,8 @@
 //! `*.not_found`, never a value (spec 6.4).
 
 use super::codes::call_errors;
-use super::{fail_on, sample_params, Fixture};
-use crate::{Descriptor, FieldKind, Registry, Resolve, Surface};
+use super::{fail_on_noting, kit_path, sample_params, typed_only_line, Fixture};
+use crate::{Descriptor, FieldKind, Registry, Resolve};
 use coded_error::ErrorClass;
 use serde_json::Value;
 
@@ -40,7 +40,7 @@ pub(crate) fn args_for(d: &Descriptor, overrides: &[Fixture<'_>]) -> Value {
         .map_or_else(|| sample_params(&d.input_schema), |f| f.args.clone())
 }
 
-/// Calls each op with a subject on the JSON path with `id` set to a random
+/// Calls each op with a subject, on the first surface it declares, with `id` set to a random
 /// 16-hex ref (the rest from `sample_params`, or the override for that op),
 /// and expects `Err` of class Logical with a code ending `.not_found`.
 ///
@@ -53,17 +53,22 @@ pub async fn assert_unknown_ref_not_found<C: Resolve>(
     overrides: &[Fixture<'_>],
 ) {
     let mut problems = Vec::new();
+    let mut skipped = Vec::new();
     for d in registry.descriptors() {
-        if !d.paths.contains(Surface::Json) || !has_subject(registry, d) {
+        if !has_subject(registry, d) {
             continue;
         }
+        let Some(path) = kit_path(d) else {
+            skipped.push(typed_only_line("assert_unknown_ref_not_found", d));
+            continue;
+        };
         let mut args = args_for(d, overrides);
         if !args.is_object() {
             args = Value::Object(Default::default());
         }
         let random = random_hex();
         args["id"] = Value::String(random.clone());
-        let errors = match call_errors(registry, ctx, d, args)
+        let errors = match call_errors(registry, ctx, d, args, path)
             .await
             .errors_or_problem(&d.name)
         {
@@ -90,5 +95,5 @@ pub async fn assert_unknown_ref_not_found<C: Resolve>(
             ));
         }
     }
-    fail_on("assert_unknown_ref_not_found", &problems);
+    fail_on_noting("assert_unknown_ref_not_found", &problems, &skipped);
 }

@@ -113,3 +113,27 @@ fn listen_entry_is_a_cli_only_streaming_op_and_absent_from_the_tool_list() {
         );
     });
 }
+
+#[tokio::test]
+async fn kit_listen_op_reaches_body() {
+    let listener = Arc::new(LogListener::new(vec![(1, "a")]));
+    let mut registry = Registry::new();
+    registry.set_bin("app", "0.0.0", "toy");
+    registry.group("log", "Log.");
+    listen_entry(
+        &mut registry,
+        listener.clone(),
+        OpSpec::new("log listen", "listens to the log"),
+    );
+    op_registry::testing::assert_error_codes(
+        &registry,
+        &Ctx,
+        &[op_registry::testing::Fixture {
+            op: "log_listen",
+            args: json!({"topic": "t"}),
+        }],
+    )
+    .await;
+    // The kit's caller let the call past `op_listen.no_caller` to the listener.
+    assert!(!listener.authorize_calls().is_empty());
+}

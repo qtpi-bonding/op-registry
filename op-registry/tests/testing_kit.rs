@@ -144,7 +144,7 @@ fn doctor(_g: &NoGlobals, _m: &clap::ArgMatches) -> BoxFuture<'static, u8> {
     Box::pin(async { 0 })
 }
 
-/// A registry with a get, a list pair, a stream, a hidden op, a typed-only op
+/// A registry with a get, a list pair, a stream, a hidden op, an op declared on typed only
 /// and one extra.
 fn fixture() -> Registry<Ctx> {
     let mut r = Registry::<Ctx>::new();
@@ -467,7 +467,7 @@ fn sample_params_satisfies_from_json() {
     let r = fixture();
     let ctx = Ctx;
     for d in r.descriptors() {
-        // `TypedOnly` ops refuse the JSON path and streams are not unary.
+        // Ops that do not declare `json` refuse the JSON path and streams are not unary.
         if !d.paths.contains(Surface::Json) || d.kind == op_registry::OpKind::Stream {
             continue;
         }
@@ -1314,4 +1314,169 @@ fn local_offline_catches_connect() {
     assert!(text.contains("connector used"), "{text}");
     assert!(!text.contains("tool_remote"), "{text}");
     assert!(!text.contains("tool_clean"), "{text}");
+}
+
+// ---- KIT-1: the kit runs every op on a surface it declares ----
+
+mod kit_surfaces {
+    use super::*;
+    use op_registry::testing::{assert_unknown_ref_not_found, Fixture};
+    use op_registry::{CallHook, CallInfo, CallPath};
+    use std::sync::{Arc, Mutex};
+
+    /// Records the path and caller of every call.
+    #[derive(Default)]
+    struct Recorder(Mutex<Vec<(String, CallPath, Option<op_registry::Caller>)>>);
+
+    impl CallHook for Recorder {
+        fn around<'a>(&'a self, info: &CallInfo, call: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
+            self.0.lock().unwrap().push((
+                info.name.clone(),
+                info.path.clone(),
+                info.caller.clone(),
+            ));
+            call
+        }
+    }
+
+    fn ran(hook: &Recorder) -> Vec<(String, CallPath, Option<op_registry::Caller>)> {
+        hook.0.lock().unwrap().clone()
+    }
+
+    fn only(surface: Surface) -> Paths {
+        Paths::of(&[surface])
+    }
+
+    fn running(
+        body: fn() -> anyhow::Result<Item>,
+    ) -> impl for<'a> Fn(&'a Ctx, Get, CallOptions) -> BoxFuture<'a, anyhow::Result<Item>> {
+        move |_c, _p, _o| Box::pin(std::future::ready(body()))
+    }
+
+    /// One op named `tool op` on `paths` whose body runs `body`.
+    fn one_op(
+        paths: Paths,
+        local: bool,
+        body: fn() -> anyhow::Result<Item>,
+        hook: Arc<Recorder>,
+    ) -> Registry<Ctx> {
+        let mut r = Registry::<Ctx>::new();
+        r.set_pillar("fix");
+        r.group("tool", "Tools.");
+        r.set_call_hook(hook);
+        let mut spec = OpSpec::<Get, Item>::new("tool op", "Runs.");
+        spec.paths = paths;
+        if local {
+            r.push_local(spec, running(body));
+        } else {
+            r.push_op(spec, running(body));
+        }
+        r
+    }
+
+    fn rogue() -> anyhow::Result<Item> {
+        Err(coded_error::into_anyhow(super::ConceptError::Rogue))
+    }
+
+    fn not_a_value() -> anyhow::Result<Item> {
+        Ok(item())
+    }
+
+    fn args() -> [Fixture<'static>; 1] {
+        [Fixture {
+            op: "tool_op",
+            args: json!({"id": "x"}),
+        }]
+    }
+
+    #[test]
+    fn kit_runs_cli_only_op_in_error_codes() {
+        let hook = Arc::<Recorder>::default();
+        let r = one_op(only(Surface::Cli), false, rogue, hook.clone());
+        let text = panic_text(|| {
+            futures_executor::block_on(assert_error_codes(&r, &Ctx, &args()));
+        });
+        assert!(
+            text.contains("tool_op") && text.contains("fix.concept.rogue"),
+            "{text}"
+        );
+        assert!(!text.contains("wrong_path"), "{text}");
+        assert_eq!(ran(&hook)[0].1, CallPath::Cli);
+    }
+
+    #[test]
+    fn kit_runs_cli_only_op_offline() {
+        let hook = Arc::<Recorder>::default();
+        let r = one_op(only(Surface::Cli), true, not_a_value, hook.clone());
+        futures_executor::block_on(assert_local_ops_offline(&r, &Ctx, &args()));
+        let calls = ran(&hook);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, CallPath::Cli);
+    }
+
+    #[test]
+    fn kit_runs_cli_only_op_for_unknown_ref() {
+        let hook = Arc::<Recorder>::default();
+        let mut r = Registry::<RefCtx>::new();
+        r.set_pillar("fix");
+        r.group("tool", "Tools.");
+        let hook2 = hook.clone();
+        r.set_call_hook(hook2);
+        let mut spec = OpSpec::<GetBuild, Item>::new("tool op", "Runs.");
+        spec.paths = only(Surface::Cli);
+        r.push_op(
+            spec,
+            |_c: &RefCtx, _p: GetBuild, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Item>> {
+                Box::pin(async { Ok(item()) })
+            },
+        );
+        // The op answers a value, so the check fails; what matters here is
+        // that it ran, on the CLI.
+        let text = panic_text(|| {
+            futures_executor::block_on(assert_unknown_ref_not_found(&r, &RefCtx::new(false), &[]))
+        });
+        assert!(!text.contains("wrong_path"), "{text}");
+        let calls = ran(&hook);
+        assert!(!calls.is_empty(), "{text}");
+        assert!(calls.iter().all(|c| c.1 == CallPath::Cli));
+    }
+
+    #[test]
+    fn kit_runs_mcp_only_op_with_a_caller() {
+        let hook = Arc::<Recorder>::default();
+        let r = one_op(only(Surface::Mcp), false, not_a_value, hook.clone());
+        futures_executor::block_on(assert_error_codes(&r, &Ctx, &args()));
+        let calls = ran(&hook);
+        assert_eq!(calls[0].1, CallPath::Mcp);
+        assert_eq!(
+            calls[0].2,
+            Some(op_registry::Caller("op-registry-kit".to_owned()))
+        );
+    }
+
+    #[test]
+    fn kit_prefers_json_when_declared() {
+        let hook = Arc::<Recorder>::default();
+        let r = one_op(Paths::ALL, false, not_a_value, hook.clone());
+        futures_executor::block_on(assert_error_codes(&r, &Ctx, &args()));
+        assert_eq!(
+            ran(&hook)[0].1,
+            CallPath::Transport("op-registry-kit".to_owned())
+        );
+    }
+
+    #[test]
+    fn kit_skips_typed_only_op_and_names_it() {
+        let hook = Arc::<Recorder>::default();
+        let r = one_op(
+            only(Surface::Typed),
+            false,
+            || panic!("body ran"),
+            hook.clone(),
+        );
+        futures_executor::block_on(assert_error_codes(&r, &Ctx, &args()));
+        futures_executor::block_on(assert_local_ops_offline(&r, &Ctx, &args()));
+        futures_executor::block_on(assert_unknown_ref_not_found(&r, &Ctx, &[]));
+        assert!(ran(&hook).is_empty());
+    }
 }

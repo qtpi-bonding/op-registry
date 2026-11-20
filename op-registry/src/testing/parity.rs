@@ -76,7 +76,7 @@ fn hidden_problem<C: Sync>(registry: &Registry<C>, d: &Descriptor) -> Option<&'s
 }
 
 /// Every op on every surface, and the problems that are not one op on one
-/// surface (extras, unknown mount names, typed-only ops that leaked).
+/// surface (extras, unknown mount names, ops declared on a surface they are not on).
 fn analyse<C: CliContext>(
     registry: &Registry<C>,
     mounts: &[Mount<'_>],
