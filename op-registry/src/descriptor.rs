@@ -119,7 +119,7 @@ pub enum OpKind {
     /// One request, one result.
     #[default]
     Unary,
-    /// Like `Unary`, but runs in the calling process and is not offered to tools.
+    /// Like `Unary`, but runs in the calling process.
     Local,
     /// A stream of results.
     Stream,

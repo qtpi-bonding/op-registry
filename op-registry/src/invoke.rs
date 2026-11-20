@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 
 /// The outcome of a call together with the redactor built from its
 /// parameters, so an adapter can redact the error message it renders.
-// The CLI and MCP adapters read `redactor` (Tasks 11 and 14).
+// The MCP adapter reads `redactor`; the CLI adapter will too (Task 14).
 #[allow(dead_code)]
 pub(crate) struct Invocation<T> {
     pub result: Result<T>,
@@ -58,8 +58,23 @@ impl<C: Resolve> Registry<C> {
     /// The path label is `Transport(opts.transport)`, or `Transport("json")`.
     pub async fn call(&self, name: &str, args: Value, ctx: &C, opts: CallOptions) -> Result<Value> {
         let path = json_path(&opts);
-        let params = self.decode_json(name, args, &path, false)?;
-        self.call_decoded(name, params, ctx, opts, path).await.result
+        self.call_json(name, args, ctx, opts, path).await.result
+    }
+
+    /// Decodes JSON arguments and runs a unary op on `path`, keeping the
+    /// call's redactor for the adapter that renders its error.
+    pub(crate) async fn call_json(
+        &self,
+        name: &str,
+        args: Value,
+        ctx: &C,
+        opts: CallOptions,
+        path: CallPath,
+    ) -> Invocation<Value> {
+        match self.decode_json(name, args, &path, false) {
+            Ok(params) => self.call_decoded(name, params, ctx, opts, path).await,
+            Err(err) => Invocation::failed(err),
+        }
     }
 
     /// Calls a streaming operation by name with JSON arguments. The hook
