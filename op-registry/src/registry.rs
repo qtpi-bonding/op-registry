@@ -82,6 +82,37 @@ impl<P, O> OpSpec<P, O> {
     }
 }
 
+impl<P, O> OpSpec<P, O> {
+    /// The same metadata over other parameter and output types: what a list
+    /// pair's two ops share. The output hooks (`ok_exit`, `render_text`) are
+    /// typed by `O` and do not carry over.
+    pub(crate) fn respec<P2, O2>(
+        &self,
+        fields: Option<fn(&P2) -> Vec<(&'static str, String)>>,
+    ) -> OpSpec<P2, O2> {
+        OpSpec {
+            path: self.path,
+            summary: self.summary,
+            long_help: self.long_help,
+            access: self.access,
+            audience: self.audience,
+            hidden: self.hidden,
+            group_default: self.group_default,
+            text: self.text,
+            exits: self.exits.clone(),
+            errors: self.errors.clone(),
+            paths: self.paths,
+            cursor: self.cursor,
+            cap: self.cap,
+            page_size: self.page_size,
+            unpaged: self.unpaged,
+            fields,
+            ok_exit: None,
+            render_text: None,
+        }
+    }
+}
+
 impl<P, O> Default for OpSpec<P, O> {
     fn default() -> Self {
         Self::new("", "")
@@ -102,7 +133,8 @@ pub(crate) type TypedStream<C, P, O> = Arc<
 >;
 pub(crate) type ResolveRefs<C> =
     for<'a> fn(&'a Registry<C>, &'a C, &'a mut (dyn Any + Send)) -> BoxFuture<'a, Result<()>>;
-type ErasedFields = Box<dyn Fn(&(dyn Any + Send)) -> Vec<(&'static str, String)> + Send + Sync>;
+pub(crate) type ErasedFields =
+    Box<dyn Fn(&(dyn Any + Send)) -> Vec<(&'static str, String)> + Send + Sync>;
 
 type UnaryRun<C> = Box<
     dyn for<'a> Fn(&'a C, Box<dyn Any + Send>, CallOptions) -> BoxFuture<'a, Result<Value>>
@@ -170,7 +202,7 @@ pub struct Registry<C> {
     pub(crate) hook: Arc<dyn CallHook>,
 }
 
-fn words(path: &str) -> Vec<String> {
+pub(crate) fn words(path: &str) -> Vec<String> {
     path.split_whitespace().map(str::to_owned).collect()
 }
 
@@ -387,7 +419,7 @@ impl<C: Sync> Registry<C> {
 }
 
 impl<C: Resolve + 'static> Registry<C> {
-    fn describe<P, O>(spec: &OpSpec<P, O>, kind: OpKind) -> Descriptor
+    pub(crate) fn describe<P, O>(spec: &OpSpec<P, O>, kind: OpKind) -> Descriptor
     where
         P: OpParams,
         O: OutputSchema,
@@ -429,7 +461,21 @@ impl<C: Resolve + 'static> Registry<C> {
         O: Serialize + OutputSchema + Send + 'static,
         F: for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync + 'static,
     {
-        let descriptor = Self::describe(&spec, kind);
+        let entry = Self::unary_entry(&spec, kind, Arc::new(f));
+        self.insert_entry(entry);
+    }
+
+    /// The erased entry of a unary-shaped operation over a typed function.
+    pub(crate) fn unary_entry<P, O>(
+        spec: &OpSpec<P, O>,
+        kind: OpKind,
+        f: TypedUnary<C, P, O>,
+    ) -> Entry<C>
+    where
+        P: OpParams + Send + 'static,
+        O: Serialize + OutputSchema + Send + 'static,
+    {
+        let descriptor = Self::describe(spec, kind);
         check_param_clashes::<P>(&descriptor.name);
         let extras = Extras {
             cap: spec.cap,
@@ -437,13 +483,12 @@ impl<C: Resolve + 'static> Registry<C> {
             ok_exit: spec.ok_exit,
             render_text: spec.render_text,
         };
-        let f: TypedUnary<C, P, O> = Arc::new(f);
         let runner = f.clone();
         let run: UnaryRun<C> = Box::new(move |ctx, params, opts| {
             let fut = runner(ctx, downcast::<P>(params), opts);
             Box::pin(async move { serde_json::to_value(fut.await?).map_err(Into::into) })
         });
-        self.insert_entry(Entry {
+        Entry {
             descriptor,
             typed: Box::new(f),
             fields: erase_fields(spec.fields),
@@ -464,7 +509,12 @@ impl<C: Resolve + 'static> Registry<C> {
                     .secrets()
             },
             run: Run::Unary(run),
-        });
+        }
+    }
+
+    /// Inserts an entry built by [`crate::list`].
+    pub(crate) fn push_entry(&mut self, entry: Entry<C>) {
+        self.insert_entry(entry);
     }
 
     /// Adds a unary operation.
@@ -562,7 +612,7 @@ impl<C: Resolve + 'static> Registry<C> {
     }
 }
 
-fn erase_fields<P: 'static>(
+pub(crate) fn erase_fields<P: 'static>(
     fields: Option<fn(&P) -> Vec<(&'static str, String)>>,
 ) -> Option<ErasedFields> {
     fields.map(|f| {
@@ -576,7 +626,7 @@ fn erase_fields<P: 'static>(
 
 /// Flattened groups are opaque to the derive, so a name used by two fields
 /// of one op is found here.
-fn check_param_clashes<P: OpParams>(op: &str) {
+pub(crate) fn check_param_clashes<P: OpParams>(op: &str) {
     let fields = P::fields();
     if let Some((a, b)) = crate::__private::rt::find_clash(&fields) {
         let origin = |f: &crate::FieldMeta| match f.from_group {
