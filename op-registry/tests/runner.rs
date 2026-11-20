@@ -610,3 +610,54 @@ fn help_exits_0() {
 fn caller_from_context_reaches_op() {
     assert_eq!(run(&["ping"]).out_json()["who"], "runner-test");
 }
+
+/// A writer that keeps each `write` call apart, to see whether a line was
+/// written in one piece.
+#[derive(Clone, Default)]
+struct Writes(Arc<Mutex<Vec<Vec<u8>>>>);
+
+impl std::io::Write for Writes {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().push(buf.to_vec());
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn each_stderr_and_stdout_line_is_one_write() {
+    for (args, out_tty, err_tty) in [
+        (&["task", "note"][..], false, false),
+        (&["task", "fail"][..], false, false),
+        (&["task", "fail"][..], false, true),
+        (&["feed", "broken"][..], false, false),
+    ] {
+        let (stdout, stderr) = (Writes::default(), Writes::default());
+        let io = Io {
+            stdout: Box::new(stdout.clone()),
+            stderr: cli::SharedWriter::new(Box::new(stderr.clone())),
+            stdin: None,
+            stdout_tty: out_tty,
+            stderr_tty: err_tty,
+        };
+        futures_executor::block_on(cli::run_with_io(
+            &notice_registry(),
+            argv(args),
+            &NoHooks,
+            io,
+        ));
+        for (stream, writes) in [("stdout", &stdout), ("stderr", &stderr)] {
+            let writes = writes.0.lock().unwrap();
+            assert!(!writes.is_empty() || stream == "stdout", "{args:?}: no {stream}");
+            for write in writes.iter() {
+                let text = String::from_utf8_lossy(write);
+                assert!(
+                    text.ends_with('\n') && text.len() > 1,
+                    "{args:?}: {stream} got a partial line {text:?}"
+                );
+            }
+        }
+    }
+}

@@ -47,9 +47,10 @@ pub fn render(value: &Value, style: Style) -> String {
     .expect("JSON values are serializable")
 }
 
-/// Writes a JSON value followed by a newline.
+/// Writes a JSON value followed by a newline, in one write so a writer
+/// shared under a lock never splits the line.
 pub fn print_json(out: &mut dyn Write, value: &Value, style: Style) -> io::Result<()> {
-    writeln!(out, "{}", render(value, style))
+    out.write_all(format!("{}\n", render(value, style)).as_bytes())
 }
 
 /// The error line: `{"error": {"code", "class", "message"}}`, the message

@@ -212,7 +212,8 @@ impl NoticeSink for StderrSink {
         } else {
             render(&notice_line(&notice), Style::Compact)
         };
-        let _ = writeln!(self.out.clone(), "{line}");
+        // One write per line, so a concurrent writer cannot split it.
+        let _ = self.out.clone().write_all(format!("{line}\n").as_bytes());
     }
 }
 
@@ -225,9 +226,9 @@ fn trace_from_env() -> TraceParent {
     }
 }
 
-/// Writes one line to stdout and flushes it.
+/// Writes one line to stdout in one write and flushes it.
 fn write_line(io: &mut Io, line: &str) -> std::io::Result<()> {
-    writeln!(io.stdout, "{line}")?;
+    io.stdout.write_all(format!("{line}\n").as_bytes())?;
     io.stdout.flush()
 }
 
