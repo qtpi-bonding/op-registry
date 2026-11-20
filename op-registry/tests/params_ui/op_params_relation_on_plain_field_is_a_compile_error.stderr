@@ -1,0 +1,5 @@
+error: field `x`: relations need a field that can be absent (Option, Vec, BTreeMap, bool, Patch); `x` is a plain `T`
+ --> tests/params_ui/op_params_relation_on_plain_field_is_a_compile_error.rs:8:8
+  |
+8 |     x: String,
+  |        ^^^^^^

@@ -82,6 +82,18 @@ pub(crate) fn args(f: &Field) -> Vec<TokenStream> {
     }
 }
 
+/// The clap arg ids of a relation member: a tri-state also has `no_x`, a
+/// `Patch` also `clear_x`.
+fn group_ids(f: &Field) -> Vec<String> {
+    let mut ids = vec![f.rust_name.clone()];
+    match f.shape {
+        Shape::TriState => ids.push(format!("no_{}", f.rust_name)),
+        Shape::Patch(_) => ids.push(format!("clear_{}", f.rust_name)),
+        _ => {}
+    }
+    ids
+}
+
 pub fn add_args_fn(fields: &[Field]) -> TokenStream {
     let clap = clap();
     let steps = fields.iter().map(|f| match &f.shape {
@@ -92,7 +104,7 @@ pub fn add_args_fn(fields: &[Field]) -> TokenStream {
         }
     });
     let groups = super::schema::one_of_groups(fields).into_iter().map(|(name, optional, members)| {
-        let ids = members.iter().map(|f| &f.rust_name);
+        let ids = members.iter().flat_map(|f| group_ids(f));
         let required = !optional;
         quote! {
             cmd = cmd.group(

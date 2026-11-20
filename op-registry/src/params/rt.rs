@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 use super::{usage, Input, Json, ParseCx, Patch, UsageError};
-use crate::FieldMeta;
+use crate::{FieldKind, FieldMeta};
 
 type Result<T> = anyhow::Result<T>;
 
@@ -170,14 +170,76 @@ pub fn nullable(mut schema: Value) -> Value {
     schema
 }
 
+/// Whether a field is given, in the one sense every surface shares: an
+/// absent `Option`, an empty `Vec` or map, a `false` switch and a `Patch::Keep`
+/// are all "not present".
+pub trait Presence {
+    fn present(&self) -> bool;
+}
+
+impl Presence for bool {
+    fn present(&self) -> bool {
+        *self
+    }
+}
+
+impl<T> Presence for Option<T> {
+    fn present(&self) -> bool {
+        self.is_some()
+    }
+}
+
+impl<T> Presence for Vec<T> {
+    fn present(&self) -> bool {
+        !self.is_empty()
+    }
+}
+
+impl<K, V> Presence for BTreeMap<K, V> {
+    fn present(&self) -> bool {
+        !self.is_empty()
+    }
+}
+
+impl<T> Presence for Patch<T> {
+    fn present(&self) -> bool {
+        !matches!(self, Patch::Keep)
+    }
+}
+
+/// The schema fragment "`key` is present", agreeing with [`Presence`] for a
+/// field of `kind`. A `Vec` or map fragment also pins the `type`: `minItems`
+/// alone is vacuously true for the `null` that `from_json` reads as absent.
+pub fn present_schema(key: &str, kind: FieldKind) -> Value {
+    use serde_json::json;
+    match kind {
+        FieldKind::Switch => json!({"required": [key], "properties": {key: {"const": true}}}),
+        FieldKind::Repeated => {
+            json!({"required": [key], "properties": {key: {"type": "array", "minItems": 1}}})
+        }
+        FieldKind::Map => {
+            json!({"required": [key], "properties": {key: {"type": "object", "minProperties": 1}}})
+        }
+        FieldKind::Patch => json!({"required": [key]}),
+        _ => json!({"required": [key], "properties": {key: {"not": {"type": "null"}}}}),
+    }
+}
+
+/// The fragment "any of `members` is present".
+fn any_present(members: &[(&str, FieldKind)]) -> Vec<Value> {
+    members
+        .iter()
+        .map(|(key, kind)| present_schema(key, *kind))
+        .collect()
+}
+
 /// Collects an input schema from fields, relations and flattened groups.
 #[derive(Default)]
 pub struct SchemaBuilder {
     properties: Map<String, Value>,
     required: Vec<String>,
-    /// Each entry is an object holding one `oneOf`.
+    /// Each entry is a whole object: one `oneOf`, `anyOf`, `not` or `if`/`then`.
     constraints: Vec<Value>,
-    dependent: Map<String, Value>,
 }
 
 impl SchemaBuilder {
@@ -189,30 +251,33 @@ impl SchemaBuilder {
         self.required.push(key.to_owned());
     }
 
-    /// Exactly one (or, when `optional`, at most one) of `keys` is given.
-    pub fn one_of(&mut self, keys: &[&str], optional: bool) {
-        let mut alternatives: Vec<Value> = keys
-            .iter()
-            .map(|k| serde_json::json!({ "required": [k] }))
-            .collect();
-        if optional {
-            alternatives.push(serde_json::json!({
-                "not": { "anyOf": alternatives.clone() }
-            }));
-        }
-        self.constraints
-            .push(serde_json::json!({ "oneOf": alternatives }));
+    /// One whole constraint object (`oneOf`, `anyOf`, `not`, `if`/`then`).
+    pub fn constraint(&mut self, c: Value) {
+        self.constraints.push(c);
     }
 
-    /// `key` is required whenever `other` is present.
-    pub fn depends(&mut self, other: &str, key: &str) {
-        let entry = self
-            .dependent
-            .entry(other.to_owned())
-            .or_insert_with(|| Value::Array(Vec::new()));
-        if let Value::Array(keys) = entry {
-            keys.push(Value::String(key.to_owned()));
+    /// Exactly one (or, when `optional`, at most one) of `members` is present.
+    pub fn one_of(&mut self, members: &[(&str, FieldKind)], optional: bool) {
+        let mut alternatives = any_present(members);
+        if optional {
+            let none = serde_json::json!({ "not": { "anyOf": alternatives.clone() } });
+            alternatives.push(none);
         }
+        self.constraint(serde_json::json!({ "oneOf": alternatives }));
+    }
+
+    /// `field` is present whenever any of `others` is.
+    pub fn requires_if(&mut self, field: (&str, FieldKind), others: &[(&str, FieldKind)]) {
+        let mut when = any_present(others);
+        let when = if when.len() == 1 {
+            when.remove(0)
+        } else {
+            serde_json::json!({ "anyOf": when })
+        };
+        self.constraint(serde_json::json!({
+            "if": when,
+            "then": present_schema(field.0, field.1),
+        }));
     }
 
     /// Merges the schema of a flattened group.
@@ -230,21 +295,23 @@ impl SchemaBuilder {
                     .filter_map(|v| v.as_str().map(str::to_owned)),
             );
         }
-        if let Some(one_of) = schema.remove("oneOf") {
-            self.constraints
-                .push(serde_json::json!({ "oneOf": one_of }));
+        for key in ["oneOf", "anyOf", "not"] {
+            if let Some(value) = schema.remove(key) {
+                self.constraint(serde_json::json!({ key: value }));
+            }
+        }
+        if let Some(when) = schema.remove("if") {
+            let mut c = Map::new();
+            c.insert("if".to_owned(), when);
+            for key in ["then", "else"] {
+                if let Some(value) = schema.remove(key) {
+                    c.insert(key.to_owned(), value);
+                }
+            }
+            self.constraint(Value::Object(c));
         }
         if let Some(Value::Array(all)) = schema.remove("allOf") {
             self.constraints.extend(all);
-        }
-        if let Some(Value::Object(dependent)) = schema.remove("dependentRequired") {
-            for (other, keys) in dependent {
-                if let Value::Array(keys) = keys {
-                    for key in keys.iter().filter_map(Value::as_str) {
-                        self.depends(&other, key);
-                    }
-                }
-            }
         }
     }
 
@@ -257,13 +324,16 @@ impl SchemaBuilder {
         if !self.required.is_empty() {
             schema["required"] = serde_json::json!(self.required);
         }
-        if !self.dependent.is_empty() {
-            schema["dependentRequired"] = Value::Object(self.dependent);
-        }
         let mut constraints = self.constraints;
         match constraints.len() {
             0 => {}
-            1 => schema["oneOf"] = constraints.remove(0)["oneOf"].take(),
+            1 => {
+                if let (Value::Object(root), Value::Object(only)) =
+                    (&mut schema, constraints.remove(0))
+                {
+                    root.extend(only);
+                }
+            }
             _ => schema["allOf"] = Value::Array(constraints),
         }
         schema

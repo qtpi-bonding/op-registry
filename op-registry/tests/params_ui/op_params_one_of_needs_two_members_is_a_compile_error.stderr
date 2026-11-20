@@ -1,0 +1,5 @@
+error: one_of group `g` needs two members
+ --> tests/params_ui/op_params_one_of_needs_two_members_is_a_compile_error.rs:6:5
+  |
+6 |     id: Option<String>,
+  |     ^^

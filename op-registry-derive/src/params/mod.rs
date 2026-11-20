@@ -76,7 +76,7 @@ fn check_relations(fields: &[Field]) -> syn::Result<()> {
         if members.len() < 2 {
             return Err(syn::Error::new(
                 members[0].ident.span(),
-                format!("one_of group `{name}` needs at least two `Option` fields"),
+                format!("one_of group `{name}` needs two members"),
             ));
         }
         if members
@@ -91,14 +91,18 @@ fn check_relations(fields: &[Field]) -> syn::Result<()> {
     }
     check_refs(fields)?;
     for f in fields {
-        if let Some(other) = &f.requires_if {
+        for other in &f.requires_if {
             let target = fields.iter().find(|o| &o.rust_name == other);
-            if target.and_then(|t| t.present()).is_none() {
+            let Some(target) = target else {
                 return Err(syn::Error::new(
                     f.ident.span(),
-                    format!(
-                        "requires_if names `{other}`, which must be an optional field of this struct"
-                    ),
+                    format!("requires_if names `{other}`, which must be a field of this struct"),
+                ));
+            };
+            if target.present().is_none() {
+                return Err(syn::Error::new(
+                    f.ident.span(),
+                    attrs::plain_in_relation(other),
                 ));
             }
         }

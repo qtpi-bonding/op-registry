@@ -4,8 +4,7 @@ use serde_json::{json, Map, Value};
 
 /// Builds the smallest JSON value that satisfies `schema`: every required
 /// property is filled (string `"x"`, integer 1, number 1.0, boolean false,
-/// the first enum value, `[]`, `{}`), the first branch of a `oneOf` is taken,
-/// and `dependentRequired` is honoured.
+/// the first enum value, `[]`, `{}`) and the first branch of a `oneOf` is taken.
 pub fn sample_params(schema: &Value) -> Value {
     sample(schema, schema, 0)
 }
@@ -104,19 +103,6 @@ fn sample_object(object: &Map<String, Value>, root: &Value, depth: usize) -> Val
         if let Some(first) = one_of.as_array().and_then(|a| a.first()) {
             keys.extend(string_list(first.get("required")));
         }
-    }
-    // Dependents of every key that is present, until nothing new appears.
-    let dependent = object.get("dependentRequired").and_then(Value::as_object);
-    let mut at = 0;
-    while at < keys.len() {
-        if let Some(more) = dependent.and_then(|d| d.get(&keys[at])) {
-            for key in string_list(Some(more)) {
-                if !keys.contains(&key) {
-                    keys.push(key);
-                }
-            }
-        }
-        at += 1;
     }
     let mut out = Map::new();
     for key in keys {

@@ -99,7 +99,7 @@ fn check(f: &Field, raw: &syn::Field) -> syn::Result<()> {
         }
         _ => {}
     }
-    if f.one_of.is_some() || f.requires_if.is_some() {
+    if f.one_of.is_some() || !f.requires_if.is_empty() {
         return err("a global takes no one_of or requires_if");
     }
     if f.env.is_some()

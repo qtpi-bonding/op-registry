@@ -98,6 +98,11 @@ pub fn input_schema_fn(fields: &[Field]) -> TokenStream {
         }
         let key = &f.key;
         let schema = shape_schema(f);
+        let schema = if in_relation(fields, f) && !matches!(f.shape, Shape::Patch(_)) {
+            quote!(::op_registry::__private::rt::nullable(#schema))
+        } else {
+            schema
+        };
         let description = if f.help.is_empty() {
             quote!()
         } else {
@@ -133,20 +138,23 @@ pub fn input_schema_fn(fields: &[Field]) -> TokenStream {
     let groups = one_of_groups(fields)
         .into_iter()
         .map(|(_, optional, members)| {
-            let keys = members.iter().map(|f| &f.key);
-            quote!(builder.one_of(&[#(#keys),*], #optional);)
+            let members = members.iter().map(|f| member(f));
+            quote!(builder.one_of(&[#(#members),*], #optional);)
         });
-    let depends = fields.iter().filter_map(|f| {
-        let other = other_of(fields, f)?;
-        let (other, key) = (&other.key, &f.key);
-        Some(quote!(builder.depends(#other, #key);))
-    });
+    let requires = fields
+        .iter()
+        .filter(|f| !f.requires_if.is_empty())
+        .map(|f| {
+            let field = member(f);
+            let others = others_of(fields, f).into_iter().map(member);
+            quote!(builder.requires_if(#field, &[#(#others),*]);)
+        });
     quote! {
         fn input_schema() -> #json::Value {
             let mut builder = ::op_registry::__private::rt::SchemaBuilder::default();
             #(#steps)*
             #(#groups)*
-            #(#depends)*
+            #(#requires)*
             builder.build()
         }
     }
@@ -167,10 +175,44 @@ pub fn one_of_groups(fields: &[Field]) -> Vec<(String, bool, Vec<&Field>)> {
     groups
 }
 
-/// The field a `requires_if` field depends on.
-pub fn other_of<'a>(fields: &'a [Field], f: &Field) -> Option<&'a Field> {
-    let name = f.requires_if.as_ref()?;
-    fields.iter().find(|o| &o.rust_name == name)
+/// The fields a `requires_if` field depends on.
+pub fn others_of<'a>(fields: &'a [Field], f: &Field) -> Vec<&'a Field> {
+    f.requires_if
+        .iter()
+        .filter_map(|name| fields.iter().find(|o| &o.rust_name == name))
+        .collect()
+}
+
+/// The `FieldKind` variant name of a field (never a flattened group).
+fn kind_name(f: &Field) -> TokenStream {
+    match &f.shape {
+        Shape::Plain(Base::Json) | Shape::Optional(Base::Json) => quote!(Json),
+        Shape::Plain(Base::Input) | Shape::Optional(Base::Input) => quote!(Input),
+        Shape::Plain(Base::SecretFile) | Shape::Optional(Base::SecretFile) => quote!(SecretFile),
+        Shape::Plain(Base::Ref) | Shape::Optional(Base::Ref) => quote!(Ref),
+        Shape::Plain(Base::Path) | Shape::Optional(Base::Path) => quote!(Path),
+        Shape::Plain(_) | Shape::Optional(_) => quote!(Scalar),
+        Shape::Patch(_) => quote!(Patch),
+        Shape::Switch => quote!(Switch),
+        Shape::TriState => quote!(TriState),
+        Shape::Repeated(_) => quote!(Repeated),
+        Shape::Map => quote!(Map),
+        Shape::Flatten(_) => unreachable!("flattened groups have no kind"),
+    }
+}
+
+/// `(key, kind)` of a relation member, for the schema builder.
+fn member(f: &Field) -> TokenStream {
+    let (key, kind) = (&f.key, kind_name(f));
+    quote!((#key, ::op_registry::FieldKind::#kind))
+}
+
+/// Whether a relation names the field, so its property must admit `null`
+/// (which `from_json` reads as absent).
+fn in_relation(fields: &[Field], f: &Field) -> bool {
+    f.one_of.is_some()
+        || !f.requires_if.is_empty()
+        || fields.iter().any(|o| o.requires_if.contains(&f.rust_name))
 }
 
 pub fn fields_fn(fields: &[Field]) -> TokenStream {
@@ -193,22 +235,7 @@ pub fn fields_fn(fields: &[Field]) -> TokenStream {
             };
         }
         let (rust_name, flag, key, help) = (&f.rust_name, &f.flag, &f.key, &f.help);
-        let kind = match &f.shape {
-            Shape::Plain(Base::Json) | Shape::Optional(Base::Json) => quote!(Json),
-            Shape::Plain(Base::Input) | Shape::Optional(Base::Input) => quote!(Input),
-            Shape::Plain(Base::SecretFile) | Shape::Optional(Base::SecretFile) => {
-                quote!(SecretFile)
-            }
-            Shape::Plain(Base::Ref) | Shape::Optional(Base::Ref) => quote!(Ref),
-            Shape::Plain(Base::Path) | Shape::Optional(Base::Path) => quote!(Path),
-            Shape::Plain(_) | Shape::Optional(_) => quote!(Scalar),
-            Shape::Patch(_) => quote!(Patch),
-            Shape::Switch => quote!(Switch),
-            Shape::TriState => quote!(TriState),
-            Shape::Repeated(_) => quote!(Repeated),
-            Shape::Map => quote!(Map),
-            Shape::Flatten(_) => unreachable!(),
-        };
+        let kind = kind_name(f);
         let (required, secret) = (f.required(), f.secret);
         let subject = f.reference.as_ref().filter(|r| r.subject).map(|r| {
             let (kind, id_only) = (&r.kind, r.id_only);
@@ -252,12 +279,17 @@ pub fn validate_fn(fields: &[Field]) -> TokenStream {
                 )?;
             }
         });
-    let requires = fields.iter().filter_map(|f| {
-        let other = other_of(fields, f)?;
-        let (present, other_present) = (f.present()?, other.present()?);
-        let (key, other_key) = (&f.key, &other.key);
-        Some(quote!(#rt::check_requires_if(#present, #other_present, #key, #other_key)?;))
-    });
+    let mut requires = Vec::new();
+    for f in fields {
+        for other in others_of(fields, f) {
+            let (Some(present), Some(other_present)) = (f.present(), other.present()) else {
+                continue;
+            };
+            let (key, other_key) = (&f.key, &other.key);
+            requires
+                .push(quote!(#rt::check_requires_if(#present, #other_present, #key, #other_key)?;));
+        }
+    }
     let nested = fields.iter().filter_map(|f| match &f.shape {
         Shape::Flatten(_) => {
             let ident = &f.ident;

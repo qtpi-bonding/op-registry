@@ -33,6 +33,8 @@ trybuild = { workspace = true }
 futures-executor = { workspace = true }
 tokio = { workspace = true, features = ["rt", "time", "macros", "io-util", "test-util"] }
 rmcp = { workspace = true, features = ["server", "client"] }
+# MIT; resolvers and TLS off: the tests only call `is_valid` on in-memory schemas.
+jsonschema = { version = "0.61.2", default-features = false }
 
 [[test]]
 name = "testing_kit"

@@ -9,7 +9,8 @@ fn op_params_compile_failures() {
     tests.compile_fail("tests/params_ui/op_params_positional_attribute_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_params_env_on_params_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_globals_json_field_is_a_compile_error.rs");
-    tests.compile_fail("tests/params_ui/op_params_one_of_needs_two_options_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_one_of_needs_two_members_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_relation_on_plain_field_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_params_clearable_needs_option_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_params_two_subjects_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_params_scope_names_unknown_field_is_a_compile_error.rs");

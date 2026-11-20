@@ -22,8 +22,9 @@ pub struct Field {
     pub secret_inline: bool,
     /// `(group, optional)` from `one_of` / `one_of_optional`.
     pub one_of: Option<(String, bool)>,
-    /// The Rust name of the field this one is required with.
-    pub requires_if: Option<String>,
+    /// The Rust names of the fields that make this one required: it is
+    /// required when any of them is present.
+    pub requires_if: Vec<String>,
     /// Set on a `Ref` field.
     pub reference: Option<RefInfo>,
     /// The environment variable a global falls back to (`OpGlobals` only).
@@ -84,7 +85,7 @@ impl Field {
         let mut secret = false;
         let mut secret_inline = false;
         let mut one_of: Option<(String, bool)> = None;
-        let mut requires_if = None;
+        let mut requires_if: Vec<String> = Vec::new();
         let mut clearable = false;
         let mut flatten = false;
         let mut subject: Option<String> = None;
@@ -134,8 +135,24 @@ impl Field {
                         one_of = Some((group.value(), key == "one_of_optional"));
                     }
                     "requires_if" => {
-                        let other: syn::LitStr = m.value()?.parse()?;
-                        requires_if = Some(other.value());
+                        let value: Expr = m.value()?.parse()?;
+                        let names = match &value {
+                            Expr::Array(array) => array.elems.iter().collect(),
+                            single => vec![single],
+                        };
+                        for e in names {
+                            match e {
+                                Expr::Lit(ExprLit {
+                                    lit: Lit::Str(s), ..
+                                }) => requires_if.push(s.value()),
+                                _ => {
+                                    return Err(syn::Error::new_spanned(
+                                        e,
+                                        "requires_if takes a string or a list of strings",
+                                    ))
+                                }
+                            }
+                        }
                     }
                     "keys" => {
                         let array: ExprArray = m.value()?.parse()?;
@@ -179,7 +196,7 @@ impl Field {
                     || keys.is_some()
                     || clearable
                     || one_of.is_some()
-                    || requires_if.is_some()
+                    || !requires_if.is_empty()
                     || subject.is_some()
                     || kind.is_some()
                     || id_only,
@@ -230,16 +247,10 @@ impl Field {
             scope,
             default.is_some(),
         )?;
-        if one_of.is_some() && !matches!(shape, Shape::Optional(_)) {
+        if (one_of.is_some() || !requires_if.is_empty()) && matches!(shape, Shape::Plain(_)) {
             return Err(syn::Error::new_spanned(
                 &f.ty,
-                format!("field `{rust_name}`: one_of applies only to an `Option<T>` field"),
-            ));
-        }
-        if requires_if.is_some() && !matches!(shape, Shape::Optional(_)) {
-            return Err(syn::Error::new_spanned(
-                &f.ty,
-                format!("field `{rust_name}`: requires_if applies only to an `Option<T>` field"),
+                plain_in_relation(&rust_name),
             ));
         }
         if let Some(d) = &default {
@@ -317,7 +328,7 @@ impl Field {
             secret: false,
             secret_inline: false,
             one_of: None,
-            requires_if: None,
+            requires_if: Vec::new(),
             reference: None,
             env: None,
             group_scope,
@@ -329,19 +340,21 @@ impl Field {
         use quote::quote;
         let ident = &self.ident;
         Some(match &self.shape {
-            Shape::Optional(_) | Shape::TriState => quote!(self.#ident.is_some()),
-            Shape::Repeated(_) | Shape::Map => quote!(!self.#ident.is_empty()),
-            Shape::Switch => quote!(self.#ident),
-            Shape::Patch(_) => {
-                quote!(!::std::matches!(self.#ident, ::op_registry::Patch::Keep))
-            }
             Shape::Plain(_) | Shape::Flatten(_) => return None,
+            _ => quote!(::op_registry::__private::rt::Presence::present(&self.#ident)),
         })
     }
 
     pub fn required(&self) -> bool {
         matches!(self.shape, Shape::Plain(_)) && self.default.is_none()
     }
+}
+
+/// The derive error for a relation on a field that cannot be absent.
+pub fn plain_in_relation(name: &str) -> String {
+    format!(
+        "field `{name}`: relations need a field that can be absent (Option, Vec, BTreeMap, bool, Patch); `{name}` is a plain `T`"
+    )
 }
 
 /// Checks the ref attributes against the field's type.

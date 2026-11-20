@@ -518,27 +518,24 @@ fn sample_params_fills_required_by_type() {
 }
 
 #[test]
-fn sample_params_handles_enum_one_of_and_dependents() {
+fn sample_params_handles_enum_and_one_of() {
     let schema = serde_json::json!({
         "type": "object",
         "properties": {
             "mode": {"type": "string", "enum": ["fast", "slow"]},
             "a": {"type": "string"},
             "b": {"type": "string"},
-            "c": {"type": "integer"},
-            "d": {"type": "boolean"},
             "m": {"type": "object", "additionalProperties": {"type": "string"}},
             "list": {"type": "array", "items": {"type": "string"}},
             "n": {"type": "number"},
         },
         "required": ["mode", "m", "list", "n"],
         "oneOf": [{"required": ["a"]}, {"required": ["b"]}],
-        "dependentRequired": {"a": ["c"], "c": ["d"]},
     });
     let sample = sample_params(&schema);
     assert_eq!(
         sample,
-        serde_json::json!({"mode": "fast", "m": {}, "list": [], "n": 1.0, "a": "x", "c": 1, "d": false})
+        serde_json::json!({"mode": "fast", "m": {}, "list": [], "n": 1.0, "a": "x"})
     );
 }
 
