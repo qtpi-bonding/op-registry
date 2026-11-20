@@ -1,52 +1,102 @@
-use crate::{CallOptions, Cursor, Descriptor, OpParams};
+//! The registry: typed operations behind erased entries, with build-time checks.
+
+use crate::{
+    derive_name, Access, Audience, CallOptions, Cursor, Descriptor, ErrorCodeEntry, Exit, OpKind,
+    OpParams, OutputSchema, ParseCx, Paths,
+};
 use anyhow::Result;
 use futures_util::{future::BoxFuture, stream::BoxStream};
+use serde::Serialize;
 use serde_json::Value;
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Command-line adapters for an operation's parameter type.
-#[derive(Clone, Copy)]
-pub struct CliHooks {
-    pub add_args: fn(clap::Command) -> clap::Command,
-    pub parse: fn(&clap::ArgMatches) -> anyhow::Result<Value>,
+/// The declaration of one operation: its path, help text and options.
+///
+/// `P` is the parameter type. `O` is the op's output: the item type for
+/// streams, and `T` for list pairs.
+pub struct OpSpec<P, O> {
+    /// Space-separated command words, outermost group first and the verb last.
+    pub path: &'static str,
+    /// A one-line summary.
+    pub summary: &'static str,
+    /// Longer help text.
+    pub long_help: &'static str,
+    /// The access the operation needs.
+    pub access: Access,
+    /// The intended audience.
+    pub audience: Audience,
+    /// Whether the operation is hidden from listings.
+    pub hidden: bool,
+    /// Whether the command runs when its group is named without a verb.
+    pub group_default: bool,
+    /// Whether the operation has a text rendering.
+    pub text: bool,
+    /// Documented exit codes.
+    pub exits: Vec<(u8, &'static str)>,
+    /// Error codes the operation may return.
+    pub errors: Vec<coded_error::CodeEntry>,
+    /// Which call paths reach the operation.
+    pub paths: Paths,
+    /// Whether the operation accepts a cursor.
+    pub cursor: bool,
+    /// The most items a list returns.
+    pub cap: usize,
+    /// The default page size of a paged list.
+    pub page_size: u32,
+    /// Whether the op declares an unpaged form.
+    pub unpaged: bool,
+    /// Extra `key: value` lines for the text rendering of the parameters.
+    pub fields: Option<fn(&P) -> Vec<(&'static str, String)>>,
+    /// The exit code for a successful output (acted on from Task 12).
+    pub ok_exit: Option<fn(&O) -> u8>,
+    /// The text rendering of an output (acted on from Task 12).
+    pub render_text: Option<fn(&O) -> String>,
 }
 
-impl CliHooks {
-    /// Creates command-line adapters for `P`.
-    pub fn for_params<P>() -> Self
-    where
-        P: OpParams + serde::Serialize + 'static,
-    {
-        fn parse<P>(matches: &clap::ArgMatches) -> anyhow::Result<Value>
-        where
-            P: OpParams + serde::Serialize + 'static,
-        {
-            let params = P::from_matches(matches)?;
-            serde_json::to_value(params).map_err(anyhow::Error::from)
-        }
-
+impl<P, O> OpSpec<P, O> {
+    /// Creates a spec with the given path and summary; every other field has
+    /// its default.
+    pub fn new(path: &'static str, summary: &'static str) -> Self {
         Self {
-            add_args: P::clap_args,
-            parse: parse::<P>,
+            path,
+            summary,
+            long_help: "",
+            access: Access::default(),
+            audience: Audience::default(),
+            hidden: false,
+            group_default: false,
+            text: false,
+            exits: Vec::new(),
+            errors: Vec::new(),
+            paths: Paths::All,
+            cursor: false,
+            cap: 10_000,
+            page_size: 100,
+            unpaged: false,
+            fields: None,
+            ok_exit: None,
+            render_text: None,
         }
     }
 }
 
-/// A registered operation's typed contract. Only `registry!` implements it.
-pub trait Operation: crate::__private::Sealed {
-    type Ctx;
-    type Params: OpParams;
-    type Output: serde::Serialize + crate::OutputSchema;
-    fn descriptor() -> Descriptor;
+impl<P, O> Default for OpSpec<P, O> {
+    fn default() -> Self {
+        Self::new("", "")
+    }
 }
 
-type UnaryCall<C> =
-    Box<dyn for<'a> Fn(&'a C, Value, CallOptions) -> BoxFuture<'a, Result<Value>> + Send + Sync>;
-type StreamCall<C> = Box<
+type UnaryRun<C> = Box<
+    dyn for<'a> Fn(&'a C, Box<dyn Any + Send>, CallOptions) -> BoxFuture<'a, Result<Value>>
+        + Send
+        + Sync,
+>;
+type StreamRun<C> = Box<
     dyn for<'a> Fn(
             &'a C,
-            Value,
+            Box<dyn Any + Send>,
             CallOptions,
             Option<Cursor>,
         ) -> BoxFuture<'a, Result<BoxStream<'a, Result<Value>>>>
@@ -54,131 +104,154 @@ type StreamCall<C> = Box<
         + Sync,
 >;
 
-pub(crate) enum EntryCall<C> {
-    Unary(UnaryCall<C>),
-    Stream(StreamCall<C>),
+pub(crate) enum Run<C> {
+    Unary(UnaryRun<C>),
+    Stream(StreamRun<C>),
+}
+
+/// The spec fields the registry keeps for later tasks, typed by `P` and `O`.
+#[allow(dead_code)]
+pub(crate) struct Extras<P, O> {
+    pub cap: usize,
+    pub page_size: u32,
+    pub fields: Option<fn(&P) -> Vec<(&'static str, String)>>,
+    pub ok_exit: Option<fn(&O) -> u8>,
+    pub render_text: Option<fn(&O) -> String>,
 }
 
 pub(crate) struct Entry<C> {
     pub descriptor: Descriptor,
-    pub call: EntryCall<C>,
-    pub hooks: CliHooks,
+    /// The typed function (an `Arc<dyn Fn>` over `P` and `O`), for typed calls.
+    #[allow(dead_code)]
+    pub typed: Box<dyn Any + Send + Sync>,
+    /// The `Extras<P, O>` of the spec.
+    #[allow(dead_code)]
+    pub extras: Box<dyn Any + Send + Sync>,
+    pub decode_json: fn(Value, &mut ParseCx) -> Result<Box<dyn Any + Send>>,
+    pub augment: fn(clap::Command) -> clap::Command,
+    pub decode_matches: fn(&clap::ArgMatches, &mut ParseCx) -> Result<Box<dyn Any + Send>>,
+    pub run: Run<C>,
+}
+
+#[derive(Clone)]
+struct Group {
+    path: Vec<String>,
+    summary: String,
 }
 
 /// A declaration-ordered collection of operations.
 pub struct Registry<C> {
     pub(crate) entries: Vec<Entry<C>>,
     by_name: HashMap<String, usize>,
-    by_cli: HashMap<String, usize>,
+    groups: Vec<Group>,
+    pillar: &'static str,
 }
 
-fn map_stream_values<'a, O>(stream: BoxStream<'a, Result<O>>) -> BoxStream<'a, Result<Value>>
-where
-    O: serde::Serialize + 'static,
-{
-    Box::pin(futures_util::StreamExt::map(stream, |item| {
-        item.and_then(|v| serde_json::to_value(v).map_err(Into::into))
-    }))
+fn words(path: &str) -> Vec<String> {
+    path.split_whitespace().map(str::to_owned).collect()
 }
 
-/// The unary dispatch: parses the JSON arguments as `P`, calls `f`, and
-/// serialises the output.
-fn unary_dispatch<C, P, O, F>(f: F) -> UnaryCall<C>
-where
-    C: Sync,
-    P: OpParams + 'static,
-    O: serde::Serialize + 'static,
-    F: for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync + 'static,
-{
-    let f = Arc::new(f);
-    Box::new(move |ctx, args, opts| {
-        let parsed = match P::from_json(args) {
-            Ok(p) => p,
-            Err(e) => return Box::pin(async move { Err(e) }),
-        };
-        let fut = f(ctx, parsed, opts);
-        Box::pin(async move { serde_json::to_value(fut.await?).map_err(Into::into) })
-    })
+fn is_prefix(prefix: &[String], of: &[String]) -> bool {
+    of.len() >= prefix.len() && of[..prefix.len()] == *prefix
 }
 
-/// The single stream dispatch: parses the JSON arguments as `P`, calls `f`
-/// with the cursor, and serialises each stream item.
-fn stream_dispatch<C, P, O, F>(f: F) -> StreamCall<C>
-where
-    C: Sync,
-    P: OpParams + 'static,
-    O: serde::Serialize + 'static,
-    F: for<'a> Fn(
-            &'a C,
-            P,
-            Option<Cursor>,
-            CallOptions,
-        ) -> BoxFuture<'a, Result<BoxStream<'a, Result<O>>>>
-        + Send
-        + Sync
-        + 'static,
-{
-    let f = Arc::new(f);
-    Box::new(move |ctx, args, opts, cursor| {
-        let parsed = match P::from_json(args) {
-            Ok(p) => p,
-            Err(e) => return Box::pin(async move { Err(e) }),
-        };
-        let fut = f(ctx, parsed, cursor, opts);
-        Box::pin(async move { Ok(map_stream_values(fut.await?)) })
-    })
-}
-
-/// The words a descriptor occupies in the CLI tree: the noun words and verb for
-/// a derived name, or the explicit name as one word.
-fn cli_words(descriptor: &Descriptor) -> Vec<String> {
-    if descriptor.is_path() {
-        let mut words: Vec<String> = descriptor
-            .noun
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect();
-        words.push(descriptor.verb.clone());
-        words
-    } else {
-        vec![descriptor.name.clone()]
-    }
+fn downcast<P: 'static>(boxed: Box<dyn Any + Send>) -> P {
+    *boxed
+        .downcast::<P>()
+        .expect("the entry's decoder and runner share one parameter type")
 }
 
 impl<C: Sync> Registry<C> {
+    /// Creates an empty registry.
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
             by_name: HashMap::new(),
-            by_cli: HashMap::new(),
+            groups: Vec::new(),
+            pillar: "",
         }
     }
+
+    /// Names the pillar this registry belongs to.
+    pub fn set_pillar(&mut self, pillar: &'static str) {
+        self.pillar = pillar;
+    }
+
+    /// Returns the pillar name set by [`Registry::set_pillar`].
+    pub fn pillar(&self) -> &'static str {
+        self.pillar
+    }
+
+    /// Declares a command group. Declare a group before the ops under it.
+    ///
+    /// # Panics
+    ///
+    /// Panics when an op already has the group's path and is not its
+    /// `group_default`.
+    pub fn group(&mut self, path: &str, summary: &str) {
+        let path = words(path);
+        if let Some(existing) = self.groups.iter().find(|g| g.path == path) {
+            if existing.summary == summary {
+                return;
+            }
+            panic!(
+                "group {:?} is declared twice with different summaries",
+                path.join(" ")
+            );
+        }
+        if let Some(op) = self
+            .entries
+            .iter()
+            .map(|e| &e.descriptor)
+            .find(|d| d.path == path && !d.group_default)
+        {
+            panic!(
+                "{:?} is both an operation ({:?}) and a group",
+                path.join(" "),
+                op.name
+            );
+        }
+        self.groups.push(Group {
+            path,
+            summary: summary.to_owned(),
+        });
+    }
+
+    /// The descriptors in declaration order.
     pub fn descriptors(&self) -> Vec<&Descriptor> {
         self.entries.iter().map(|e| &e.descriptor).collect()
     }
+
+    /// The descriptor of the named operation.
     pub fn get(&self, name: &str) -> Option<&Descriptor> {
         self.by_name.get(name).map(|&i| &self.entries[i].descriptor)
     }
-    /// Finds the descriptor whose CLI name (`noun verb` or explicit name) matches.
-    pub fn find_cli(&self, cli_name: &str) -> Option<&Descriptor> {
-        self.by_cli
-            .get(cli_name)
-            .map(|&i| &self.entries[i].descriptor)
-    }
+
+    /// The operation names in declaration order.
     pub fn names(&self) -> Vec<&str> {
         self.entries
             .iter()
             .map(|e| e.descriptor.name.as_str())
             .collect()
     }
-    pub fn cli_hooks(&self, name: &str) -> Option<&CliHooks> {
-        self.by_name.get(name).map(|&i| &self.entries[i].hooks)
-    }
+
+    /// Appends every group and operation of `other`, applying the build-time
+    /// checks to each.
+    ///
+    /// # Panics
+    ///
+    /// Panics on any collision the checks reject.
     pub fn merge(&mut self, other: Registry<C>) {
+        for group in other.groups {
+            if !self.groups.iter().any(|g| g.path == group.path) {
+                self.group(&group.path.join(" "), &group.summary);
+            }
+        }
         for entry in other.entries {
             self.insert_entry(entry);
         }
     }
+
     pub(crate) fn entry(&self, name: &str) -> Result<&Entry<C>> {
         self.by_name
             .get(name)
@@ -190,106 +263,232 @@ impl<C: Sync> Registry<C> {
             })
     }
 
-    /// Checks an entry's name and CLI words against every registered entry,
-    /// then appends it. Panics on a duplicate name or a CLI collision.
-    fn insert_entry(&mut self, entry: Entry<C>) {
-        let name = entry.descriptor.name.clone();
-        if self.by_name.contains_key(&name) {
-            panic!("duplicate operation name {:?}", name);
+    /// The group an op belongs to: its own path when that is a declared group
+    /// (a `group_default` sharing the group word), else its noun path.
+    fn group_of(&self, descriptor: &Descriptor) -> Vec<String> {
+        if self.groups.iter().any(|g| g.path == descriptor.path) {
+            descriptor.path.clone()
+        } else {
+            descriptor.noun_path().to_vec()
         }
-        self.assert_unique_cli(&entry.descriptor, &name);
+    }
+
+    fn insert_entry(&mut self, entry: Entry<C>) {
+        let new = &entry.descriptor;
+        if let Some(&i) = self.by_name.get(&new.name) {
+            panic!(
+                "duplicate operation name {:?} (paths {:?} and {:?})",
+                new.name,
+                self.entries[i].descriptor.path.join(" "),
+                new.path.join(" ")
+            );
+        }
+        // A word that is both an operation and a group.
+        if !new.group_default {
+            if self.groups.iter().any(|g| g.path == new.path) {
+                let child = self
+                    .entries
+                    .iter()
+                    .map(|e| &e.descriptor)
+                    .find(|d| d.path.len() > new.path.len() && is_prefix(&new.path, &d.path));
+                panic!(
+                    "{:?} is both an operation ({:?}) and a group{}",
+                    new.path.join(" "),
+                    new.name,
+                    child
+                        .map(|d| format!(" (ops under it: {:?})", d.name))
+                        .unwrap_or_default()
+                );
+            }
+        }
+        for existing in self.entries.iter().map(|e| &e.descriptor) {
+            if !existing.group_default
+                && new.path.len() > existing.path.len()
+                && is_prefix(&existing.path, &new.path)
+            {
+                panic!(
+                    "{:?} is both an operation ({:?}) and a group (ops under it: {:?})",
+                    existing.path.join(" "),
+                    existing.name,
+                    new.name
+                );
+            }
+        }
+        // Every noun path needs a group with a summary.
+        for end in 1..new.path.len() {
+            let noun = &new.path[..end];
+            if !self.groups.iter().any(|g| g.path == noun) {
+                panic!(
+                    "group {:?} has no summary (op {:?}); declare it with `group` first",
+                    noun.join(" "),
+                    new.name
+                );
+            }
+        }
+        // At most one group_default per group.
+        if new.group_default {
+            let group = self.group_of(new);
+            if let Some(other) = self
+                .entries
+                .iter()
+                .map(|e| &e.descriptor)
+                .find(|d| d.group_default && self.group_of(d) == group)
+            {
+                panic!(
+                    "group {:?} has two group_default ops: {:?} and {:?}",
+                    group.join(" "),
+                    other.name,
+                    new.name
+                );
+            }
+        }
         let index = self.entries.len();
-        let cli = entry.descriptor.cli_name();
-        self.by_name.insert(name, index);
-        self.by_cli.insert(cli, index);
+        self.by_name.insert(new.name.clone(), index);
         self.entries.push(entry);
     }
 
-    /// Panics when the new descriptor's CLI name or CLI words equal, or are a
-    /// strict prefix of or extend, the words of an existing operation.
-    fn assert_unique_cli(&self, new: &Descriptor, new_name: &str) {
-        let new_words = cli_words(new);
-        let new_cli = new.cli_name();
-        for existing in &self.entries {
-            let existing_words = cli_words(&existing.descriptor);
-            if new_cli == existing.descriptor.cli_name() || new_words == existing_words {
-                panic!(
-                    "{:?} and {:?} both define the command {:?}",
-                    existing.descriptor.name, new_name, new_cli
-                );
-            }
-            let shared = new_words.len().min(existing_words.len());
-            if new_words[..shared] == existing_words[..shared] {
-                panic!(
-                    "{:?} collides with {:?}: a word cannot be both a leaf and a group",
-                    existing.descriptor.name, new_name
-                );
-            }
+    /// Runs the entry's unary pipeline on already decoded parameters.
+    pub(crate) async fn run_unary(
+        &self,
+        name: &str,
+        params: Box<dyn Any + Send>,
+        ctx: &C,
+        opts: CallOptions,
+    ) -> Result<Value> {
+        match &self.entry(name)?.run {
+            Run::Unary(run) => run(ctx, params, opts).await,
+            Run::Stream(_) => Err(coded_error::into_anyhow(crate::CallError::WrongShape {
+                name: name.to_owned(),
+            })),
         }
     }
 
-    /// Adds a unary operation to the registry.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the descriptor name is already registered, with the
-    /// duplicate name quoted in the panic message, or if its CLI words collide
-    /// with another operation's.
-    pub fn push_unary<P, O, F>(&mut self, descriptor: Descriptor, f: F, hooks: CliHooks)
+    /// Runs the entry's stream pipeline on already decoded parameters.
+    pub(crate) async fn run_stream<'a>(
+        &self,
+        name: &str,
+        params: Box<dyn Any + Send>,
+        ctx: &'a C,
+        opts: CallOptions,
+        cursor: Option<Cursor>,
+    ) -> Result<BoxStream<'a, Result<Value>>> {
+        match &self.entry(name)?.run {
+            Run::Stream(run) => run(ctx, params, opts, cursor).await,
+            Run::Unary(_) => Err(coded_error::into_anyhow(crate::CallError::WrongShape {
+                name: name.to_owned(),
+            })),
+        }
+    }
+}
+
+impl<C: Sync + 'static> Registry<C> {
+    fn describe<P, O>(spec: &OpSpec<P, O>, kind: OpKind) -> Descriptor
     where
-        P: OpParams + 'static,
-        O: serde::Serialize + 'static,
+        P: OpParams,
+        O: OutputSchema,
+    {
+        let path = words(spec.path);
+        assert!(!path.is_empty(), "an operation needs a path");
+        Descriptor {
+            name: derive_name(&path),
+            path,
+            summary: spec.summary.to_owned(),
+            long_help: spec.long_help.to_owned(),
+            access: spec.access,
+            audience: spec.audience,
+            kind,
+            hidden: spec.hidden,
+            group_default: spec.group_default,
+            text: spec.text,
+            exits: spec
+                .exits
+                .iter()
+                .map(|(code, meaning)| Exit {
+                    code: *code,
+                    meaning: (*meaning).to_owned(),
+                })
+                .collect(),
+            errors: spec.errors.iter().map(ErrorCodeEntry::from).collect(),
+            paths: spec.paths,
+            cursor: spec.cursor,
+            input_schema: P::schema(),
+            output_schema: <O as OutputSchema>::output_schema(),
+            list_pair: None,
+            unpaged: spec.unpaged,
+        }
+    }
+
+    fn push_unary_kind<P, O, F>(&mut self, spec: OpSpec<P, O>, f: F, kind: OpKind)
+    where
+        P: OpParams + Send + 'static,
+        O: Serialize + OutputSchema + Send + 'static,
         F: for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync + 'static,
     {
+        let descriptor = Self::describe(&spec, kind);
+        let extras = Extras {
+            cap: spec.cap,
+            page_size: spec.page_size,
+            fields: spec.fields,
+            ok_exit: spec.ok_exit,
+            render_text: spec.render_text,
+        };
+        let f: Arc<
+            dyn for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync,
+        > = Arc::new(f);
+        let runner = f.clone();
+        let run: UnaryRun<C> = Box::new(move |ctx, params, opts| {
+            let fut = runner(ctx, downcast::<P>(params), opts);
+            Box::pin(async move { serde_json::to_value(fut.await?).map_err(Into::into) })
+        });
         self.insert_entry(Entry {
             descriptor,
-            call: EntryCall::Unary(unary_dispatch::<C, P, O, F>(f)),
-            hooks,
+            typed: Box::new(f),
+            extras: Box::new(extras),
+            decode_json: |value, cx| Ok(Box::new(P::from_json(value, cx)?)),
+            augment: P::clap_args,
+            decode_matches: |matches, cx| Ok(Box::new(P::from_matches(matches, cx)?)),
+            run: Run::Unary(run),
         });
     }
 
-    /// Adds a streaming operation to the registry.
+    /// Adds a unary operation.
     ///
     /// # Panics
     ///
-    /// Panics if the descriptor name is already registered, with the
-    /// duplicate name quoted in the panic message, or if its CLI words collide
-    /// with another operation's.
-    pub fn push_stream<P, O, F, S>(&mut self, descriptor: Descriptor, f: F, hooks: CliHooks)
+    /// Panics on a duplicate name, a word that is both an op and a group, a
+    /// noun path without a group summary, or two `group_default` ops in one group.
+    pub fn push_op<P, O, F>(&mut self, spec: OpSpec<P, O>, f: F)
     where
-        P: OpParams + 'static,
-        O: serde::Serialize + 'static,
-        S: futures_util::Stream<Item = Result<O>> + Send + 'static,
-        F: for<'a> Fn(&'a C, P, Option<Cursor>, CallOptions) -> BoxFuture<'a, Result<S>>
-            + Send
-            + Sync
-            + 'static,
+        P: OpParams + Send + 'static,
+        O: Serialize + OutputSchema + Send + 'static,
+        F: for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync + 'static,
     {
-        let f = Arc::new(f);
-        self.push_stream_borrowed::<P, O, _>(
-            descriptor,
-            move |ctx, params, cursor, opts| {
-                let fut = f(ctx, params, cursor, opts);
-                Box::pin(async move {
-                    let stream = fut.await?;
-                    Ok(Box::pin(stream) as BoxStream<'_, Result<O>>)
-                })
-            },
-            hooks,
-        );
+        self.push_unary_kind(spec, f, OpKind::Unary);
+    }
+
+    /// Adds an operation that runs in the calling process (kind `Local`).
+    ///
+    /// # Panics
+    ///
+    /// Panics on the same build-time checks as [`Registry::push_op`].
+    pub fn push_local<P, O, F>(&mut self, spec: OpSpec<P, O>, f: F)
+    where
+        P: OpParams + Send + 'static,
+        O: Serialize + OutputSchema + Send + 'static,
+        F: for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync + 'static,
+    {
+        self.push_unary_kind(spec, f, OpKind::Local);
     }
 
     /// Adds a streaming operation whose stream may borrow the registry context.
     ///
     /// # Panics
     ///
-    /// Panics if the descriptor name is already registered, with the
-    /// duplicate name quoted in the panic message, or if its CLI words collide
-    /// with another operation's.
-    pub fn push_stream_borrowed<P, O, F>(&mut self, descriptor: Descriptor, f: F, hooks: CliHooks)
+    /// Panics on the same build-time checks as [`Registry::push_op`].
+    pub fn push_stream<P, O, F>(&mut self, spec: OpSpec<P, O>, f: F)
     where
-        P: OpParams + 'static,
-        O: serde::Serialize + 'static,
+        P: OpParams + Send + 'static,
+        O: Serialize + OutputSchema + Send + 'static,
         F: for<'a> Fn(
                 &'a C,
                 P,
@@ -300,95 +499,52 @@ impl<C: Sync> Registry<C> {
             + Sync
             + 'static,
     {
+        let mut descriptor = Self::describe(&spec, OpKind::Stream);
+        descriptor.cursor = true;
+        let extras = Extras {
+            cap: spec.cap,
+            page_size: spec.page_size,
+            fields: spec.fields,
+            ok_exit: spec.ok_exit,
+            render_text: spec.render_text,
+        };
+        type Typed<C, P, O> = Arc<
+            dyn for<'a> Fn(
+                    &'a C,
+                    P,
+                    Option<Cursor>,
+                    CallOptions,
+                ) -> BoxFuture<'a, Result<BoxStream<'a, Result<O>>>>
+                + Send
+                + Sync,
+        >;
+        let f: Typed<C, P, O> = Arc::new(f);
+        let runner = f.clone();
+        let run: StreamRun<C> = Box::new(move |ctx, params, opts, cursor| {
+            let fut = runner(ctx, downcast::<P>(params), cursor, opts);
+            Box::pin(async move {
+                let stream = fut.await?;
+                Ok(futures_util::StreamExt::boxed(
+                    futures_util::StreamExt::map(stream, |item| {
+                        item.and_then(|v| serde_json::to_value(v).map_err(Into::into))
+                    }),
+                ))
+            })
+        });
         self.insert_entry(Entry {
             descriptor,
-            call: EntryCall::Stream(stream_dispatch::<C, P, O, F>(f)),
-            hooks,
+            typed: Box::new(f),
+            extras: Box::new(extras),
+            decode_json: |value, cx| Ok(Box::new(P::from_json(value, cx)?)),
+            augment: P::clap_args,
+            decode_matches: |matches, cx| Ok(Box::new(P::from_matches(matches, cx)?)),
+            run: Run::Stream(run),
         });
     }
 }
+
 impl<C: Sync> Default for Registry<C> {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Declares a registry; each entry lists `params`, `output`, then its `op`,
-/// `op_with`, `stream_op` or `stream_op_with`, followed optionally by
-/// `output_schema` and the remaining descriptor fields. Parameter types must
-/// implement `serde::Serialize`. A duplicate operation name panics.
-///
-/// The entry kinds are:
-///
-/// - `op: path`, where `async fn path(ctx: &Ctx, params: P) -> Result<O>`.
-///   The caller's [`CallOptions`] are not passed to the function.
-/// - `op_with: path`, where
-///   `async fn path(ctx: &Ctx, params: P, opts: CallOptions) -> Result<O>`.
-///   The function receives the [`CallOptions`], including the caller.
-/// - `stream_op: path`, where
-///   `async fn path(ctx: &Ctx, params: P, cursor: Option<Cursor>) -> Result<S>`
-///   and `S` is a `Stream<Item = Result<O>>`. The descriptor is marked streaming.
-///   The caller's [`CallOptions`] are not passed to the function.
-/// - `stream_op_with: path`, where
-///   `async fn path(ctx: &Ctx, params: P, cursor: Option<Cursor>, opts: CallOptions) -> Result<S>`
-///   and `S` is a `Stream<Item = Result<O>>`. The descriptor is marked streaming.
-///   The function receives the [`CallOptions`], including the caller.
-#[macro_export]
-macro_rules! registry {
-    (Ctx = $ctx:ty; entries: [ $( {
-        $(name: $name:expr,)? noun: $noun:expr, verb: $verb:expr, description: $desc:expr,
-        access: $access:ident, audience: $aud:ident, params: $params:ty, output: $output:ty,
-        $kind:ident: $op:path, $(output_schema: $out_schema:expr,)?
-        $(renders_text: $renders:expr,)? $(exit_code_on_ok: $exit:expr,)?
-        $(requires: [$($req:expr),* $(,)?],)? $(hidden: $hidden:expr,)?
-        $(since: $since:expr,)? $(deprecated: $deprecated:expr,)? $(aliases: [$($alias:expr),* $(,)?],)?
-    } ),* $(,)? ] ) => {{
-        let mut registry = $crate::Registry::<$ctx>::new();
-        $({
-            struct __Op;
-            impl $crate::__private::Sealed for __Op {}
-            fn __descriptor() -> $crate::Descriptor {
-                $crate::Descriptor::new($noun, $verb)
-                    $(.name($name))?
-                    .description($desc)
-                    .access($crate::access!($access))
-                    .audience($crate::Audience::$aud)
-                    .streaming(matches!(stringify!($kind), "stream_op" | "stream_op_with"))
-                    .input_schema(<$params as $crate::OpParams>::schema())
-                    .output_schema(<$output as $crate::OutputSchema>::output_schema().unwrap_or_default())
-                    $(.output_schema($out_schema))?
-                    $(.renders_text($renders))? $(.exit_code_on_ok($exit))?
-                    $(.requires(vec![$($req.to_string()),*]))? $(.hidden($hidden))?
-                    $(.since($since))? $(.deprecated($deprecated))?
-                    $(.aliases(vec![$($alias.to_string()),*]))?
-            }
-            impl $crate::Operation for __Op {
-                type Ctx = $ctx; type Params = $params; type Output = $output;
-                fn descriptor() -> $crate::Descriptor { __descriptor() }
-            }
-            let descriptor = __descriptor();
-            $crate::registry!(@push registry, $kind, $params, $output, $op, $ctx, descriptor);
-        })*
-        registry
-    }};
-    (@push $registry:ident, op, $params:ty, $output:ty, $op:path, $ctx:ty, $descriptor:ident) => {
-        $registry.push_unary::<$params, $output, _>($descriptor, |ctx, params, opts| {
-            Box::pin(async move { let _ = opts; $op(ctx, params).await })
-        }, $crate::CliHooks::for_params::<$params>());
-    };
-    (@push $registry:ident, op_with, $params:ty, $output:ty, $op:path, $ctx:ty, $descriptor:ident) => {
-        $registry.push_unary::<$params, $output, _>($descriptor, |ctx, params, opts| {
-            Box::pin(async move { $op(ctx, params, opts).await })
-        }, $crate::CliHooks::for_params::<$params>());
-    };
-    (@push $registry:ident, stream_op, $params:ty, $output:ty, $op:path, $ctx:ty, $descriptor:ident) => {
-        $registry.push_stream::<$params, $output, _, _>($descriptor, |ctx, params, cursor, opts| {
-            Box::pin(async move { let _ = opts; $op(ctx, params, cursor).await })
-        }, $crate::CliHooks::for_params::<$params>());
-    };
-    (@push $registry:ident, stream_op_with, $params:ty, $output:ty, $op:path, $ctx:ty, $descriptor:ident) => {
-        $registry.push_stream::<$params, $output, _, _>($descriptor, |ctx, params, cursor, opts| {
-            Box::pin(async move { $op(ctx, params, cursor, opts).await })
-        }, $crate::CliHooks::for_params::<$params>());
-    };
 }

@@ -10,7 +10,7 @@ use op_listen::{
     detached_connect, follow, listen_entry, Backoff, FollowEnd, FollowOptions, Grant, ListenCursor,
     Listener, Opened,
 };
-use op_registry::{Caller, Descriptor, Registry};
+use op_registry::{Caller, OpSpec, Registry};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -25,10 +25,11 @@ fn args() -> Value {
 fn setup(listener: LogListener) -> (Arc<Registry<Ctx>>, Arc<Ctx>, Arc<LogListener>) {
     let l = Arc::new(listener);
     let mut registry: Registry<Ctx> = Registry::new();
+    registry.group("log", "Log.");
     listen_entry(
         &mut registry,
         l.clone(),
-        Descriptor::new("log", "listen").description("listens to the log"),
+        OpSpec::new("log listen", "listens to the log"),
     );
     (Arc::new(registry), Arc::new(Ctx), l)
 }
@@ -199,10 +200,11 @@ async fn follow_over_detached_connect_reconnects_with_the_last_cursor_after_a_tr
         opens: Mutex::new(Vec::new()),
     });
     let mut registry: Registry<Ctx> = Registry::new();
+    registry.group("log", "Log.");
     listen_entry(
         &mut registry,
         flaky.clone(),
-        Descriptor::new("log", "listen"),
+        OpSpec::new("log listen", "Listens to the log"),
     );
     let connect = connector(Arc::new(registry), Arc::new(Ctx));
 
@@ -308,7 +310,12 @@ async fn dropping_the_connect_future_before_the_first_outcome_aborts_the_task() 
         guard: Mutex::new(Some(DropSignal(Some(drop_tx)))),
     });
     let mut registry: Registry<Ctx> = Registry::new();
-    listen_entry(&mut registry, listener, Descriptor::new("log", "listen"));
+    registry.group("log", "Log.");
+    listen_entry(
+        &mut registry,
+        listener,
+        OpSpec::new("log listen", "Listens to the log"),
+    );
     let mut connect = detached_connect(
         Arc::new(registry),
         Arc::new(Ctx),

@@ -1,6 +1,6 @@
 //! Command-line command construction and dispatch for a registry.
 
-use crate::{CallOptions, Cursor, Registry};
+use crate::{derive_name, CallOptions, Cursor, OpKind, ParseCx, Registry};
 use anyhow::Result;
 use clap::{Arg, ArgMatches, Command};
 use futures_util::stream::BoxStream;
@@ -114,9 +114,8 @@ fn to_command(word: &str, node: Node) -> Command {
 
 /// Builds the clap command for a registry.
 ///
-/// A descriptor whose CLI name is `<noun words...> <verb>` becomes a leaf named
-/// by its verb, nested in one group per noun word. An explicit name becomes a
-/// top-level leaf.
+/// Each descriptor becomes a leaf named by its verb, nested in one group per
+/// noun word.
 pub fn command<C: Sync>(registry: &Registry<C>, name: &str, about: &str) -> Command {
     let mut root = Command::new(name.to_owned())
         .about(about.to_owned())
@@ -125,18 +124,10 @@ pub fn command<C: Sync>(registry: &Registry<C>, name: &str, about: &str) -> Comm
 
     for entry in &registry.entries {
         let descriptor = &entry.descriptor;
-        let hooks = &entry.hooks;
-        let is_path = descriptor.is_path();
-        let words: Vec<&str> = descriptor.noun.split_whitespace().collect();
-
-        let leaf_word = if is_path {
-            descriptor.verb.clone()
-        } else {
-            descriptor.cli_name()
-        };
-        let mut leaf = Command::new(leaf_word.clone()).about(descriptor.description.clone());
-        leaf = (hooks.add_args)(leaf);
-        if descriptor.streaming {
+        let leaf_word = descriptor.verb().to_owned();
+        let mut leaf = Command::new(leaf_word.clone()).about(descriptor.summary.clone());
+        leaf = (entry.augment)(leaf);
+        if descriptor.kind == OpKind::Stream {
             leaf = leaf.arg(
                 Arg::new("cursor")
                     .long("cursor")
@@ -145,8 +136,8 @@ pub fn command<C: Sync>(registry: &Registry<C>, name: &str, about: &str) -> Comm
             );
         }
 
-        let path: &[&str] = if is_path { &words } else { &[] };
-        insert(&mut top, path, &leaf_word, &descriptor.name, leaf);
+        let path: Vec<&str> = descriptor.noun_path().iter().map(String::as_str).collect();
+        insert(&mut top, &path, &leaf_word, &descriptor.name, leaf);
     }
 
     for (word, node) in top {
@@ -179,38 +170,41 @@ pub async fn dispatch<'a, C: Sync>(
     opts: CallOptions,
 ) -> Result<CliOutput<'a>> {
     let chain = command_chain(matches);
-    let name = chain.join(" ");
-    let descriptor = registry.find_cli(&name).ok_or_else(|| {
+    let unknown = |chain: &[String]| {
         coded_error::into_anyhow(CliError::UnknownCommand {
-            name: if name.is_empty() {
+            name: if chain.is_empty() {
                 "<missing>".to_owned()
             } else {
-                name.clone()
+                chain.join(" ")
             },
         })
-    })?;
-    let hooks = registry
-        .cli_hooks(&descriptor.name)
-        .ok_or_else(|| anyhow::anyhow!("missing CLI hooks for {}", descriptor.name))?;
+    };
+    let descriptor = registry
+        .get(&derive_name(&chain))
+        .filter(|descriptor| descriptor.path == chain)
+        .ok_or_else(|| unknown(&chain))?;
+    let entry = registry.entry(&descriptor.name)?;
 
     let mut leaf_matches = matches;
     while let Some((_, child)) = leaf_matches.subcommand() {
         leaf_matches = child;
     }
-    let args = (hooks.parse)(leaf_matches)?;
-    if descriptor.streaming {
+    let params = (entry.decode_matches)(leaf_matches, &mut ParseCx::default())?;
+    if descriptor.kind == OpKind::Stream {
         let cursor = leaf_matches
             .get_one::<String>("cursor")
             .cloned()
             .map(Cursor::new);
         Ok(CliOutput::Stream(
             registry
-                .call_stream(&descriptor.name, args, ctx, opts, cursor)
+                .run_stream(&descriptor.name, params, ctx, opts, cursor)
                 .await?,
         ))
     } else {
         Ok(CliOutput::Value(
-            registry.call(&descriptor.name, args, ctx, opts).await?,
+            registry
+                .run_unary(&descriptor.name, params, ctx, opts)
+                .await?,
         ))
     }
 }

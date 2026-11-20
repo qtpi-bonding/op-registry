@@ -4,7 +4,7 @@ mod common;
 use common::*;
 use futures_util::StreamExt;
 use op_listen::{listen_entry, listen_stream};
-use op_registry::{CallOptions, Caller, Descriptor, Registry};
+use op_registry::{CallOptions, Caller, OpSpec, Registry};
 use serde_json::json;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -55,7 +55,12 @@ fn call_options_carry_the_caller_to_the_gate() {
     futures_executor::block_on(async {
         let l = Arc::new(LogListener::new(vec![(1, "a")]));
         let mut registry: Registry<Ctx> = Registry::new();
-        listen_entry(&mut registry, l.clone(), Descriptor::new("log", "listen"));
+        registry.group("log", "Log.");
+        listen_entry(
+            &mut registry,
+            l.clone(),
+            OpSpec::new("log listen", "Listens to the log"),
+        );
 
         let with = CallOptions::default().with_caller(Caller("bob".to_owned()));
         let frames = registry
@@ -234,7 +239,12 @@ fn missing_caller_is_refused_before_authorize_is_called() {
     futures_executor::block_on(async {
         let l = Arc::new(LogListener::new(vec![(1, "a")]));
         let mut registry: Registry<Ctx> = Registry::new();
-        listen_entry(&mut registry, l.clone(), Descriptor::new("log", "listen"));
+        registry.group("log", "Log.");
+        listen_entry(
+            &mut registry,
+            l.clone(),
+            OpSpec::new("log listen", "Listens to the log"),
+        );
         let err = registry
             .call_stream(
                 "log_listen",

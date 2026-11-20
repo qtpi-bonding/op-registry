@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use futures_util::future::BoxFuture;
-use op_registry::{Access, Audience, CallOptions, CliHooks, Descriptor, OpParams, Registry};
+use op_registry::{Access, Audience, CallOptions, OpParams, OpSpec, Registry};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -105,29 +105,28 @@ pub fn status_registry<C: StatusSource + Sync + 'static>(opts: StatusOptions) ->
     let max = opts.max_components;
     let watch = opts.watch;
     let audience = opts.audience;
-    let descriptor = Descriptor::new("status", "get")
-        .description("Reads component status snapshots")
-        .access(Access::reads())
-        .audience(audience)
-        .streaming(false)
-        .input_schema(<GetParams as OpParams>::schema())
-        .output_schema(
-            <StatusSnapshot as op_registry::OutputSchema>::output_schema().unwrap_or_default(),
-        );
-    registry.push_unary::<GetParams, StatusSnapshot, _>(
-        descriptor,
+    registry.group("status", "Component status.");
+    registry.push_op(
+        OpSpec::<GetParams, StatusSnapshot> {
+            access: Access::reads(),
+            audience,
+            ..OpSpec::new("status get", "Reads component status snapshots")
+        },
         move |ctx: &C, params: GetParams, _opts: CallOptions| get_op(ctx, params, max),
-        CliHooks::for_params::<GetParams>(),
     );
     #[cfg(feature = "listen")]
     if watch && C::provides_watch() {
         op_listen::listen_entry(
             &mut registry,
             std::sync::Arc::new(crate::listen::StatusListener::new(max)),
-            Descriptor::new("status", "watch")
-                .description("Streams component status changes after a snapshot")
-                .access(Access::reads())
-                .audience(audience),
+            OpSpec {
+                access: Access::reads(),
+                audience,
+                ..OpSpec::new(
+                    "status watch",
+                    "Streams component status changes after a snapshot",
+                )
+            },
         );
     }
     #[cfg(not(feature = "listen"))]

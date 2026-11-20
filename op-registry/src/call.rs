@@ -1,4 +1,4 @@
-use crate::Registry;
+use crate::{ParseCx, Paths, Registry};
 use anyhow::Result;
 use futures_util::stream::BoxStream;
 use serde_json::Value;
@@ -61,23 +61,28 @@ pub enum CallError {
     #[error("operation {name} is not available to this audience")]
     #[coded(code = "outside_audience", class = Logical)]
     OutsideAudience { name: String },
+    #[error("operation {name} cannot be called on this path")]
+    #[coded(code = "wrong_path", class = Logical)]
+    WrongPath { name: String },
 }
 
 impl<C: Sync> Registry<C> {
-    /// Calls a unary operation by name.
+    /// Calls a unary operation by name with JSON arguments.
+    ///
+    /// A minimal v2 path (decode, run, serialise); Task 6 replaces it with the
+    /// full pipeline.
     pub async fn call(&self, name: &str, args: Value, ctx: &C, opts: CallOptions) -> Result<Value> {
         let entry = self.entry(name)?;
-        match &entry.call {
-            crate::registry::EntryCall::Unary(call) => call(ctx, args, opts).await,
-            crate::registry::EntryCall::Stream(_) => {
-                Err(coded_error::into_anyhow(CallError::WrongShape {
-                    name: name.to_owned(),
-                }))
-            }
+        if entry.descriptor.paths == Paths::TypedOnly {
+            return Err(coded_error::into_anyhow(CallError::WrongPath {
+                name: name.to_owned(),
+            }));
         }
+        let params = (entry.decode_json)(args, &mut ParseCx::default())?;
+        self.run_unary(name, params, ctx, opts).await
     }
 
-    /// Calls a streaming operation by name.
+    /// Calls a streaming operation by name with JSON arguments.
     pub async fn call_stream<'a>(
         &self,
         name: &str,
@@ -87,36 +92,12 @@ impl<C: Sync> Registry<C> {
         cursor: Option<Cursor>,
     ) -> Result<BoxStream<'a, Result<Value>>> {
         let entry = self.entry(name)?;
-        match &entry.call {
-            crate::registry::EntryCall::Stream(call) => call(ctx, args, opts, cursor).await,
-            crate::registry::EntryCall::Unary(_) => {
-                Err(coded_error::into_anyhow(CallError::WrongShape {
-                    name: name.to_owned(),
-                }))
-            }
+        if entry.descriptor.paths == Paths::TypedOnly {
+            return Err(coded_error::into_anyhow(CallError::WrongPath {
+                name: name.to_owned(),
+            }));
         }
+        let params = (entry.decode_json)(args, &mut ParseCx::default())?;
+        self.run_stream(name, params, ctx, opts, cursor).await
     }
-}
-
-/// Dispatches a unary operation.
-pub async fn call<C: Sync>(
-    registry: &Registry<C>,
-    name: &str,
-    args: Value,
-    ctx: &C,
-    opts: CallOptions,
-) -> Result<Value> {
-    registry.call(name, args, ctx, opts).await
-}
-
-/// Dispatches a streaming operation.
-pub async fn call_stream<'a, C: Sync>(
-    registry: &'a Registry<C>,
-    name: &str,
-    args: Value,
-    ctx: &'a C,
-    opts: CallOptions,
-    cursor: Option<Cursor>,
-) -> Result<BoxStream<'a, Result<Value>>> {
-    registry.call_stream(name, args, ctx, opts, cursor).await
 }

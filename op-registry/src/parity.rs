@@ -1,6 +1,6 @@
 //! Checks that the CLI and MCP surfaces agree with a registry.
 
-use crate::{mcp::ToolSpec, Audience, Registry};
+use crate::{mcp::ToolSpec, Audience, OpKind, Registry};
 use clap::Command;
 use std::collections::BTreeSet;
 
@@ -75,7 +75,7 @@ pub fn assert_parity<C: Sync>(
     let expected_mcp: BTreeSet<String> = registry
         .descriptors()
         .into_iter()
-        .filter(|descriptor| !descriptor.streaming && descriptor.audience == audience)
+        .filter(|descriptor| descriptor.kind != OpKind::Stream && descriptor.audience == audience)
         .map(|descriptor| descriptor.name.clone())
         .collect();
     let mcp_names: BTreeSet<String> = mcp.iter().map(|tool| tool.name.clone()).collect();
@@ -110,7 +110,7 @@ pub fn assert_parity<C: Sync>(
     for tool in mcp {
         let descriptor = registry.get(&tool.name);
         if let Some(descriptor) = descriptor {
-            if descriptor.streaming {
+            if descriptor.kind == OpKind::Stream {
                 problems.push(format!(
                     "MCP tool {} exposes a streaming operation and must be absent from MCP",
                     tool.name

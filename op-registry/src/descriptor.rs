@@ -1,5 +1,6 @@
 //! Data types used to describe registered operations.
 
+use coded_error::ErrorClass;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -70,6 +71,30 @@ impl Access {
         self.destructive = true;
         self
     }
+
+    /// Builds access from words: `reads`, `writes`, `network`, `spawns` and
+    /// `destructive` (which also sets `writes`).
+    ///
+    /// # Panics
+    ///
+    /// Panics on any other word.
+    pub fn from_words(words: &[&str]) -> Self {
+        let mut access = Self::default();
+        for word in words {
+            match *word {
+                "reads" => access.reads = true,
+                "writes" => access.writes = true,
+                "network" => access.network = true,
+                "spawns" => access.spawns = true,
+                "destructive" => {
+                    access.destructive = true;
+                    access.writes = true;
+                }
+                other => panic!("unknown access word {other:?}"),
+            }
+        }
+        access
+    }
 }
 
 /// The audience for an operation.
@@ -86,15 +111,60 @@ pub enum Audience {
     Dev,
 }
 
-/// The shape of an operation call.
+/// The shape of an operation.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub enum CallShape {
-    /// An operation that returns one result.
+#[serde(rename_all = "snake_case")]
+pub enum OpKind {
+    /// One request, one result.
     #[default]
     Unary,
-    /// An operation that returns a stream of results.
+    /// Like `Unary`, but runs in the calling process and is not offered to tools.
+    Local,
+    /// A stream of results.
     Stream,
+    /// A list that returns every item.
+    ListAll,
+    /// A list that returns one page.
+    ListPage,
+}
+
+/// Which call paths reach an operation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Paths {
+    /// The typed, JSON and command-line paths.
+    #[default]
+    All,
+    /// The typed path only.
+    TypedOnly,
+}
+
+/// A documented exit code.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Exit {
+    /// The process exit code.
+    pub code: u8,
+    /// What the code means.
+    pub meaning: String,
+}
+
+/// A serialisable copy of [`coded_error::CodeEntry`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ErrorCodeEntry {
+    /// The stable, namespaced error code.
+    pub code: String,
+    /// The class, or `None` when it is decided at runtime.
+    pub class: Option<ErrorClass>,
+}
+
+impl From<&coded_error::CodeEntry> for ErrorCodeEntry {
+    fn from(entry: &coded_error::CodeEntry) -> Self {
+        Self {
+            code: entry.code.to_owned(),
+            class: entry.class,
+        }
+    }
 }
 
 /// The serializable metadata describing an operation.
@@ -102,159 +172,61 @@ pub enum CallShape {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Descriptor {
-    /// The operation name, explicit or derived from noun and verb.
+    /// The operation name, derived from the path by [`derive_name`].
     pub name: String,
-    /// The operation's noun.
-    pub noun: String,
-    /// The operation's verb.
-    pub verb: String,
-    /// A description of the operation.
-    pub description: String,
+    /// The command words, outermost group first and the verb last.
+    pub path: Vec<String>,
+    /// A one-line summary.
+    pub summary: String,
+    /// Longer help text.
+    pub long_help: String,
     /// The operation's access requirements.
     pub access: Access,
     /// The intended audience.
     pub audience: Audience,
-    /// Whether the operation produces a stream.
-    pub streaming: bool,
+    /// The shape of the operation.
+    pub kind: OpKind,
+    /// Whether the operation is hidden from listings.
+    pub hidden: bool,
+    /// Whether the command runs when its group is named without a verb.
+    pub group_default: bool,
+    /// Whether the operation has a text rendering.
+    pub text: bool,
+    /// Documented exit codes.
+    pub exits: Vec<Exit>,
+    /// Error codes the operation may return.
+    pub errors: Vec<ErrorCodeEntry>,
+    /// Which call paths reach the operation.
+    pub paths: Paths,
+    /// Whether the operation accepts a cursor.
+    pub cursor: bool,
     /// The input schema.
     pub input_schema: Value,
-    /// The output schema.
-    pub output_schema: Value,
-    /// Whether the result renders as text.
-    pub renders_text: bool,
-    /// Whether a successful operation supplies an exit code.
-    pub exit_code_on_ok: bool,
-    /// Required capabilities.
-    /// Declared, not acted on yet.
-    pub requires: Vec<String>,
-    /// Whether the operation is hidden.
-    /// Declared, not acted on yet.
-    pub hidden: bool,
-    /// The version in which the operation was introduced.
-    /// Declared, not acted on yet.
-    pub since: Option<String>,
-    /// The deprecation notice for the operation.
-    /// Declared, not acted on yet.
-    pub deprecated: Option<String>,
-    /// Alternative names for the operation.
-    /// Declared, not acted on yet.
-    pub aliases: Vec<String>,
+    /// The output schema, when the `schema` feature is on.
+    pub output_schema: Option<Value>,
+    /// For a list pair, the name of the other operation.
+    pub list_pair: Option<String>,
+    /// Whether the op declares an unpaged form (list pairs, Task 9).
+    pub unpaged: bool,
 }
 
 impl Descriptor {
-    /// Creates a descriptor and derives its name from its noun and verb.
-    pub fn new(noun: impl Into<String>, verb: impl Into<String>) -> Self {
-        let noun = noun.into();
-        let verb = verb.into();
-        let name = derive_name(&noun, &verb);
-        Self {
-            name,
-            noun,
-            verb,
-            ..Self::default()
+    /// The last word of the path.
+    pub fn verb(&self) -> &str {
+        self.path.last().map(String::as_str).unwrap_or_default()
+    }
+
+    /// Every word of the path but the last.
+    pub fn noun_path(&self) -> &[String] {
+        match self.path.split_last() {
+            Some((_, noun)) => noun,
+            None => &[],
         }
-    }
-
-    /// Overrides the descriptor's derived name.
-    pub fn name(mut self, name: impl Into<String>) -> Self {
-        self.name = name.into();
-        self
-    }
-    /// Sets the operation description.
-    pub fn description(mut self, value: impl Into<String>) -> Self {
-        self.description = value.into();
-        self
-    }
-    /// Sets the operation access metadata.
-    pub fn access(mut self, value: Access) -> Self {
-        self.access = value;
-        self
-    }
-    /// Sets the operation audience.
-    pub fn audience(mut self, value: Audience) -> Self {
-        self.audience = value;
-        self
-    }
-    /// Sets whether the operation streams results.
-    pub fn streaming(mut self, value: bool) -> Self {
-        self.streaming = value;
-        self
-    }
-    /// Sets the input schema.
-    pub fn input_schema(mut self, value: Value) -> Self {
-        self.input_schema = value;
-        self
-    }
-    /// Sets the output schema.
-    pub fn output_schema(mut self, value: Value) -> Self {
-        self.output_schema = value;
-        self
-    }
-    /// Sets whether the result renders as text.
-    pub fn renders_text(mut self, value: bool) -> Self {
-        self.renders_text = value;
-        self
-    }
-    /// Sets whether success supplies an exit code.
-    pub fn exit_code_on_ok(mut self, value: bool) -> Self {
-        self.exit_code_on_ok = value;
-        self
-    }
-    /// Sets the required capabilities.
-    pub fn requires(mut self, value: Vec<String>) -> Self {
-        self.requires = value;
-        self
-    }
-    /// Sets whether the operation is hidden.
-    pub fn hidden(mut self, value: bool) -> Self {
-        self.hidden = value;
-        self
-    }
-    /// Sets the introduction version.
-    pub fn since(mut self, value: impl Into<String>) -> Self {
-        self.since = Some(value.into());
-        self
-    }
-    /// Sets the deprecation notice.
-    pub fn deprecated(mut self, value: impl Into<String>) -> Self {
-        self.deprecated = Some(value.into());
-        self
-    }
-    /// Sets alternative operation names.
-    pub fn aliases(mut self, value: Vec<String>) -> Self {
-        self.aliases = value;
-        self
-    }
-
-    /// Returns the name used by a command-line interface.
-    pub fn cli_name(&self) -> String {
-        if !self.is_path() {
-            self.name.clone()
-        } else {
-            let words: Vec<&str> = self.noun.split_whitespace().collect();
-            format!("{} {}", words.join(" "), self.verb)
-        }
-    }
-
-    /// Returns whether the CLI name is the noun path followed by the verb,
-    /// i.e. the name was derived from noun and verb rather than set explicitly.
-    pub fn is_path(&self) -> bool {
-        self.name == derive_name(&self.noun, &self.verb)
     }
 }
 
-/// Derives an operation name from a noun path and a verb.
-///
-/// The noun's whitespace-separated words are joined with `_`, every `-` becomes
-/// `_`, and the verb is appended after another `_` with its own `-` also turned
-/// into `_` (the CLI keeps the verb as written).
-fn derive_name(noun: &str, verb: &str) -> String {
-    let words: Vec<&str> = noun.split_whitespace().collect();
-    // A single-word noun is kept exactly as written; only paths are normalised.
-    let path = if words.len() == 1 {
-        words[0].to_owned()
-    } else {
-        words.join("_").replace('-', "_")
-    };
-    format!("{path}_{}", verb.replace('-', "_"))
+/// Derives an operation name from its path: the words joined with `_`, with
+/// every `-` turned into `_`.
+pub fn derive_name(path: &[String]) -> String {
+    path.join("_").replace('-', "_")
 }

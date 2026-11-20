@@ -1,10 +1,14 @@
 use serde_json::Value;
 
+/// Per-parse state shared by the parameter decoders (filled in by later tasks).
+#[derive(Debug, Default)]
+pub struct ParseCx {}
+
 pub trait OpParams: Sized {
     fn schema() -> Value;
-    fn from_json(value: Value) -> anyhow::Result<Self>;
+    fn from_json(value: Value, cx: &mut ParseCx) -> anyhow::Result<Self>;
     fn clap_args(cmd: clap::Command) -> clap::Command;
-    fn from_matches(matches: &clap::ArgMatches) -> anyhow::Result<Self>;
+    fn from_matches(matches: &clap::ArgMatches, cx: &mut ParseCx) -> anyhow::Result<Self>;
 }
 
 #[derive(Debug, thiserror::Error, coded_error::CodedError)]

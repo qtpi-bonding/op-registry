@@ -5,17 +5,18 @@ use common::*;
 use op_listen::listen_entry;
 use op_registry::mcp;
 use op_registry::parity::cli_surface;
-use op_registry::{cli, Audience, CallOptions, Caller, Cursor, Descriptor, Registry};
+use op_registry::{cli, Audience, CallOptions, Caller, Cursor, OpSpec, Registry};
 use serde_json::json;
 use std::sync::Arc;
 
 fn toy() -> Registry<Ctx> {
     let mut registry = Registry::new();
+    registry.group("log", "Log.");
     let l = LogListener::new(vec![(1, "a"), (2, "b"), (3, "c")]);
     listen_entry(
         &mut registry,
         Arc::new(l),
-        Descriptor::new("log", "listen").description("listens to the log"),
+        OpSpec::new("log listen", "listens to the log"),
     );
     registry
 }
@@ -26,7 +27,7 @@ fn listen_entry_output_schema_is_the_frame_schema() {
     let d = registry.get("log_listen").expect("registered");
     assert_eq!(
         d.output_schema,
-        <op_listen::ListenFrame<(), String> as op_registry::OutputSchema>::output_schema().unwrap()
+        <op_listen::ListenFrame<(), String> as op_registry::OutputSchema>::output_schema()
     );
 }
 
@@ -34,11 +35,15 @@ fn listen_entry_output_schema_is_the_frame_schema() {
 fn listen_entry_is_a_cli_only_streaming_op_and_absent_from_the_tool_list() {
     let registry = toy();
     let d = registry.get("log_listen").expect("registered");
-    assert!(d.streaming);
+    assert_eq!(d.kind, op_registry::OpKind::Stream);
     assert!(
-        d.output_schema.to_string().contains("frame"),
-        "output schema must describe the frames: {}",
         d.output_schema
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains("frame"),
+        "output schema must describe the frames: {}",
+        d.output_schema.as_ref().unwrap()
     );
 
     for audience in [Audience::Agent, Audience::Owner, Audience::Dev] {

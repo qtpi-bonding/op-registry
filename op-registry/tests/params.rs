@@ -109,20 +109,27 @@ fn op_params_one_declaration_gives_clap_serde_and_schema() {
         query: None,
         custom: "custom".into(),
     };
-    assert_eq!(Params::from_json(value).unwrap(), expected);
-    let missing =
-        Params::from_json(json!({"mode":"fast","suffix":"tail","custom":"x"})).unwrap_err();
+    assert_eq!(
+        Params::from_json(value, &mut op_registry::ParseCx::default()).unwrap(),
+        expected
+    );
+    let missing = Params::from_json(
+        json!({"mode":"fast","suffix":"tail","custom":"x"}),
+        &mut op_registry::ParseCx::default(),
+    )
+    .unwrap_err();
     assert_eq!(
         coded_error::facts_anyhow(&missing).code,
         "op_registry.usage.missing"
     );
     assert!(missing.to_string().contains("id"));
-    assert!(
-        Params::from_json(json!({"id":"a","suffix":"b","mode":"fast","custom":"x","bad":1}))
-            .unwrap_err()
-            .to_string()
-            .contains("bad")
-    );
+    assert!(Params::from_json(
+        json!({"id":"a","suffix":"b","mode":"fast","custom":"x","bad":1}),
+        &mut op_registry::ParseCx::default()
+    )
+    .unwrap_err()
+    .to_string()
+    .contains("bad"));
 
     let matches = Params::clap_args(clap::Command::new("t"))
         .try_get_matches_from([
@@ -144,16 +151,23 @@ fn op_params_one_declaration_gives_clap_serde_and_schema() {
             "custom",
         ])
         .unwrap();
-    assert_eq!(Params::from_matches(&matches).unwrap(), expected);
+    assert_eq!(
+        Params::from_matches(&matches, &mut op_registry::ParseCx::default()).unwrap(),
+        expected
+    );
     let matches = Params::clap_args(clap::Command::new("t"))
         .try_get_matches_from([
             "t", "abc", "tail", "--mode", "fast", "--query", "q", "--custom", "custom",
         ])
         .unwrap();
-    let result = Params::from_matches(&matches).unwrap();
+    let result = Params::from_matches(&matches, &mut op_registry::ParseCx::default()).unwrap();
     assert_eq!(result.role, "guest");
     assert_eq!(result.query.as_deref(), Some("q"));
-    assert!(Params::from_json(json!({"id":"a","suffix":"b","mode":"bad","custom":"x"})).is_err());
+    assert!(Params::from_json(
+        json!({"id":"a","suffix":"b","mode":"bad","custom":"x"}),
+        &mut op_registry::ParseCx::default()
+    )
+    .is_err());
 }
 
 #[test]
@@ -168,7 +182,8 @@ fn required_positional_is_reported_by_clap() {
 #[test]
 fn numeric_vectors_negative_defaults_and_hidden_enum_variants_work() {
     let json_value = json!({"ids": [1, 2]});
-    let from_json = NumericParams::from_json(json_value).unwrap();
+    let from_json =
+        NumericParams::from_json(json_value, &mut op_registry::ParseCx::default()).unwrap();
     assert_eq!(
         from_json,
         NumericParams {
@@ -180,7 +195,10 @@ fn numeric_vectors_negative_defaults_and_hidden_enum_variants_work() {
     let matches = NumericParams::clap_args(clap::Command::new("t"))
         .try_get_matches_from(["t", "--ids", "1,2"])
         .unwrap();
-    assert_eq!(NumericParams::from_matches(&matches).unwrap(), from_json);
+    assert_eq!(
+        NumericParams::from_matches(&matches, &mut op_registry::ParseCx::default()).unwrap(),
+        from_json
+    );
     assert!(NumericParams::clap_args(clap::Command::new("t"))
         .try_get_matches_from(["t", "--ids", "bad"])
         .is_err());
@@ -200,12 +218,18 @@ fn numeric_vectors_negative_defaults_and_hidden_enum_variants_work() {
 
 #[test]
 fn conditional_target_missing_agrees_between_json_and_clap() {
-    let json_error = ConditionalParams::from_json(json!({"other": "present"})).unwrap_err();
+    let json_error = ConditionalParams::from_json(
+        json!({"other": "present"}),
+        &mut op_registry::ParseCx::default(),
+    )
+    .unwrap_err();
     assert!(json_error.to_string().contains("target"));
     let matches = ConditionalParams::clap_args(clap::Command::new("t"))
         .try_get_matches_from(["t", "--other", "present"])
         .unwrap();
-    let clap_error = ConditionalParams::from_matches(&matches).unwrap_err();
+    let clap_error =
+        ConditionalParams::from_matches(&matches, &mut op_registry::ParseCx::default())
+            .unwrap_err();
     assert!(clap_error.to_string().contains("target"));
 }
 
@@ -217,22 +241,26 @@ struct PlainBoolParams {
 #[test]
 fn plain_bool_field_absent_is_false_in_both_json_and_clap() {
     // JSON: absent plain bool should default to false (not MissingField)
-    let result = PlainBoolParams::from_json(json!({})).unwrap();
+    let result =
+        PlainBoolParams::from_json(json!({}), &mut op_registry::ParseCx::default()).unwrap();
     assert!(!result.flag);
 
     // Clap: absent bool should be false
     let matches = PlainBoolParams::clap_args(clap::Command::new("t"))
         .try_get_matches_from(["t"])
         .unwrap();
-    let result = PlainBoolParams::from_matches(&matches).unwrap();
+    let result =
+        PlainBoolParams::from_matches(&matches, &mut op_registry::ParseCx::default()).unwrap();
     assert!(!result.flag);
 
     // Both paths should agree
-    let json_result = PlainBoolParams::from_json(json!({})).unwrap();
+    let json_result =
+        PlainBoolParams::from_json(json!({}), &mut op_registry::ParseCx::default()).unwrap();
     let clap_result = PlainBoolParams::from_matches(
         &PlainBoolParams::clap_args(clap::Command::new("t"))
             .try_get_matches_from(["t"])
             .unwrap(),
+        &mut op_registry::ParseCx::default(),
     )
     .unwrap();
     assert_eq!(json_result, clap_result);
@@ -261,8 +289,11 @@ struct NegativeNumberParams {
 #[test]
 fn negative_numbers_work_in_clap_with_negative_flag() {
     // JSON with negative numbers
-    let json_result =
-        NegativeNumberParams::from_json(json!({"offset": -5, "threshold": -2.5})).unwrap();
+    let json_result = NegativeNumberParams::from_json(
+        json!({"offset": -5, "threshold": -2.5}),
+        &mut op_registry::ParseCx::default(),
+    )
+    .unwrap();
     assert_eq!(json_result.offset, -5);
     assert_eq!(json_result.threshold, -2.5);
 
@@ -270,7 +301,8 @@ fn negative_numbers_work_in_clap_with_negative_flag() {
     let matches = NegativeNumberParams::clap_args(clap::Command::new("t"))
         .try_get_matches_from(["t", "--offset", "-5", "--threshold", "-2.5"])
         .unwrap();
-    let clap_result = NegativeNumberParams::from_matches(&matches).unwrap();
+    let clap_result =
+        NegativeNumberParams::from_matches(&matches, &mut op_registry::ParseCx::default()).unwrap();
     assert_eq!(clap_result.offset, -5);
     assert_eq!(clap_result.threshold, -2.5);
 
@@ -286,14 +318,16 @@ struct OptionalBoolParams {
 #[test]
 fn option_bool_absent_is_none_in_both_json_and_clap() {
     // JSON: absent Option<bool> should be None
-    let json_result = OptionalBoolParams::from_json(json!({})).unwrap();
+    let json_result =
+        OptionalBoolParams::from_json(json!({}), &mut op_registry::ParseCx::default()).unwrap();
     assert_eq!(json_result.flag, None);
 
     // Clap: absent Option<bool> should be None (not Some(false))
     let matches = OptionalBoolParams::clap_args(clap::Command::new("t"))
         .try_get_matches_from(["t"])
         .unwrap();
-    let clap_result = OptionalBoolParams::from_matches(&matches).unwrap();
+    let clap_result =
+        OptionalBoolParams::from_matches(&matches, &mut op_registry::ParseCx::default()).unwrap();
     assert_eq!(clap_result.flag, None);
 
     // Both paths should agree
@@ -303,14 +337,17 @@ fn option_bool_absent_is_none_in_both_json_and_clap() {
 #[test]
 fn option_bool_present_is_some_true_in_both_json_and_clap() {
     // JSON: present Option<bool> should be Some(true)
-    let json_result = OptionalBoolParams::from_json(json!({"flag": true})).unwrap();
+    let json_result =
+        OptionalBoolParams::from_json(json!({"flag": true}), &mut op_registry::ParseCx::default())
+            .unwrap();
     assert_eq!(json_result.flag, Some(true));
 
     // Clap: present flag should be Some(true)
     let matches = OptionalBoolParams::clap_args(clap::Command::new("t"))
         .try_get_matches_from(["t", "--flag"])
         .unwrap();
-    let clap_result = OptionalBoolParams::from_matches(&matches).unwrap();
+    let clap_result =
+        OptionalBoolParams::from_matches(&matches, &mut op_registry::ParseCx::default()).unwrap();
     assert_eq!(clap_result.flag, Some(true));
 
     // Both paths should agree
@@ -332,25 +369,32 @@ struct EnumDefaultParams {
 #[test]
 fn value_enum_with_default_uses_valueenum_name_not_serde_name() {
     // JSON: absent value_enum with default should use the ValueEnum name (kebab-case)
-    let json_result = EnumDefaultParams::from_json(json!({})).unwrap();
+    let json_result =
+        EnumDefaultParams::from_json(json!({}), &mut op_registry::ParseCx::default()).unwrap();
     assert_eq!(json_result.speed, Speed::Fast);
 
     // JSON: explicitly set via ValueEnum name (kebab-case)
-    let json_result_explicit = EnumDefaultParams::from_json(json!({"speed": "fast"})).unwrap();
+    let json_result_explicit = EnumDefaultParams::from_json(
+        json!({"speed": "fast"}),
+        &mut op_registry::ParseCx::default(),
+    )
+    .unwrap();
     assert_eq!(json_result_explicit.speed, Speed::Fast);
 
     // Clap: absent with default should give Fast
     let matches = EnumDefaultParams::clap_args(clap::Command::new("t"))
         .try_get_matches_from(["t"])
         .unwrap();
-    let clap_result = EnumDefaultParams::from_matches(&matches).unwrap();
+    let clap_result =
+        EnumDefaultParams::from_matches(&matches, &mut op_registry::ParseCx::default()).unwrap();
     assert_eq!(clap_result.speed, Speed::Fast);
 
     // Clap: with explicit value
     let matches = EnumDefaultParams::clap_args(clap::Command::new("t"))
         .try_get_matches_from(["t", "--speed", "fast"])
         .unwrap();
-    let clap_result_explicit = EnumDefaultParams::from_matches(&matches).unwrap();
+    let clap_result_explicit =
+        EnumDefaultParams::from_matches(&matches, &mut op_registry::ParseCx::default()).unwrap();
     assert_eq!(clap_result_explicit.speed, Speed::Fast);
 
     // All paths should agree
@@ -376,7 +420,11 @@ fn op_params_conflicts_with_is_oneof_in_schema() {
         ])
     );
 
-    let both = ConflictParams::from_json(json!({"file": "a", "text": "b"})).unwrap_err();
+    let both = ConflictParams::from_json(
+        json!({"file": "a", "text": "b"}),
+        &mut op_registry::ParseCx::default(),
+    )
+    .unwrap_err();
     assert_eq!(
         coded_error::facts_anyhow(&both).code,
         "op_registry.usage.invalid"
@@ -384,7 +432,7 @@ fn op_params_conflicts_with_is_oneof_in_schema() {
     assert!(both.to_string().contains("file"));
     assert!(both.to_string().contains("text"));
     assert_eq!(
-        ConflictParams::from_json(json!({"file": "a"}))
+        ConflictParams::from_json(json!({"file": "a"}), &mut op_registry::ParseCx::default())
             .unwrap()
             .file,
         Some("a".into())
@@ -397,7 +445,9 @@ fn op_params_conflicts_with_is_oneof_in_schema() {
         .try_get_matches_from(["t", "--file", "a"])
         .unwrap();
     assert_eq!(
-        ConflictParams::from_matches(&matches).unwrap().file,
+        ConflictParams::from_matches(&matches, &mut op_registry::ParseCx::default())
+            .unwrap()
+            .file,
         Some("a".into())
     );
 
@@ -421,14 +471,16 @@ fn key_value_param_refuses_unknown_and_repeated_key_naming_it() {
     let matches = KeyValueParams::clap_args(clap::Command::new("t"))
         .try_get_matches_from(["t", "--set", "alpha=1", "--set", "beta=2"])
         .unwrap();
-    let params = KeyValueParams::from_matches(&matches).unwrap();
+    let params =
+        KeyValueParams::from_matches(&matches, &mut op_registry::ParseCx::default()).unwrap();
     assert_eq!(params.set.get("alpha"), Some(&"1".to_string()));
     assert_eq!(params.set.get("beta"), Some(&"2".to_string()));
 
     let matches = KeyValueParams::clap_args(clap::Command::new("t"))
         .try_get_matches_from(["t", "--set", "gamma=1"])
         .unwrap();
-    let unknown = KeyValueParams::from_matches(&matches).unwrap_err();
+    let unknown =
+        KeyValueParams::from_matches(&matches, &mut op_registry::ParseCx::default()).unwrap_err();
     assert_eq!(
         coded_error::facts_anyhow(&unknown).code,
         "op_registry.usage.unknown_key"
@@ -438,14 +490,19 @@ fn key_value_param_refuses_unknown_and_repeated_key_naming_it() {
     let matches = KeyValueParams::clap_args(clap::Command::new("t"))
         .try_get_matches_from(["t", "--set", "alpha=1", "--set", "alpha=2"])
         .unwrap();
-    let repeated = KeyValueParams::from_matches(&matches).unwrap_err();
+    let repeated =
+        KeyValueParams::from_matches(&matches, &mut op_registry::ParseCx::default()).unwrap_err();
     assert_eq!(
         coded_error::facts_anyhow(&repeated).code,
         "op_registry.usage.repeated_key"
     );
     assert!(format!("{:#}", repeated).contains("alpha"));
 
-    let json_unknown = KeyValueParams::from_json(json!({"set": {"gamma": "1"}})).unwrap_err();
+    let json_unknown = KeyValueParams::from_json(
+        json!({"set": {"gamma": "1"}}),
+        &mut op_registry::ParseCx::default(),
+    )
+    .unwrap_err();
     assert_eq!(
         coded_error::facts_anyhow(&json_unknown).code,
         "op_registry.usage.unknown_key"
@@ -455,7 +512,8 @@ fn key_value_param_refuses_unknown_and_repeated_key_naming_it() {
     let matches = KeyValueParams::clap_args(clap::Command::new("t"))
         .try_get_matches_from(["t", "--set", "noequals"])
         .unwrap();
-    let invalid = KeyValueParams::from_matches(&matches).unwrap_err();
+    let invalid =
+        KeyValueParams::from_matches(&matches, &mut op_registry::ParseCx::default()).unwrap_err();
     assert_eq!(
         coded_error::facts_anyhow(&invalid).code,
         "op_registry.usage.invalid"
@@ -482,7 +540,8 @@ fn key_value_param_refuses_unknown_and_repeated_key_naming_it() {
 
 #[test]
 fn key_value_param_is_optional_in_json() {
-    let params = KeyValueParams::from_json(json!({})).unwrap();
+    let params =
+        KeyValueParams::from_json(json!({}), &mut op_registry::ParseCx::default()).unwrap();
     assert!(params.set.is_empty());
 }
 
@@ -526,12 +585,18 @@ fn multiple_conflicts_use_all_of_one_of_schemas() {
         })
     );
     assert!(schema.get("oneOf").is_none());
-    assert!(MultipleConflictParams::from_json(json!({})).is_ok());
+    assert!(
+        MultipleConflictParams::from_json(json!({}), &mut op_registry::ParseCx::default()).is_ok()
+    );
 }
 
 #[test]
 fn conflict_with_null_is_treated_as_absent() {
-    let params = ConflictParams::from_json(json!({"file": "a", "text": null})).unwrap();
+    let params = ConflictParams::from_json(
+        json!({"file": "a", "text": null}),
+        &mut op_registry::ParseCx::default(),
+    )
+    .unwrap();
     assert_eq!(params.file.as_deref(), Some("a"));
     assert_eq!(params.text, None);
 }

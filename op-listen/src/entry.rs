@@ -2,33 +2,32 @@
 
 use crate::{ListenCursor, ListenFrame, Listener};
 use futures_util::{FutureExt, StreamExt};
-use op_registry::{CallOptions, CliHooks, Cursor, Descriptor, Registry};
+use op_registry::{CallOptions, Cursor, OpSpec, Registry};
 use std::sync::Arc;
 
-/// Registers `listener` in `registry` as a CLI-only streaming operation.
+/// Registers `listener` in `registry` as a streaming operation.
 ///
-/// The descriptor's `streaming` flag is forced on and its output schema is set
-/// to the schema of [`ListenFrame`] for this listener. The operation is not
-/// exposed through the MCP tool list.
+/// The output type is [`ListenFrame`] for this listener, so the descriptor's
+/// output schema is the frame schema. The operation is not exposed through the
+/// MCP tool list.
 ///
 /// A listen stream borrows its listener for as long as the stream lives, while
 /// a registry entry only lends the stream the context. To make that borrow
 /// sound without unsafe code, one strong reference to `listener` is leaked
 /// (`Box::leak`) when the entry is registered; the listener therefore lives for
 /// the rest of the process. Register each listener once.
-pub fn listen_entry<C, L>(registry: &mut Registry<C>, listener: Arc<L>, mut descriptor: Descriptor)
-where
+pub fn listen_entry<C, L>(
+    registry: &mut Registry<C>,
+    listener: Arc<L>,
+    spec: OpSpec<L::Params, ListenFrame<L::Snapshot, L::Item>>,
+) where
     C: Sync + Send + 'static,
     L: Listener<C>,
 {
-    descriptor.streaming = true;
-    descriptor.output_schema =
-        <ListenFrame<L::Snapshot, L::Item> as op_registry::OutputSchema>::output_schema()
-            .unwrap_or_default();
     let leaked: &'static Arc<L> = Box::leak(Box::new(listener));
     let listener: &'static L = leaked.as_ref();
-    registry.push_stream_borrowed::<L::Params, serde_json::Value, _>(
-        descriptor,
+    registry.push_stream::<L::Params, ListenFrame<L::Snapshot, L::Item>, _>(
+        spec,
         move |ctx: &C, params: L::Params, cursor: Option<Cursor>, opts: CallOptions| {
             async move {
                 let Some(caller) = opts.caller else {
@@ -40,12 +39,9 @@ where
                 };
                 let frames =
                     crate::run::listen_stream(listener, ctx, params, cursor, caller).await?;
-                Ok(frames
-                    .map(|frame| frame.and_then(|f| serde_json::to_value(f).map_err(Into::into)))
-                    .boxed())
+                Ok(frames.boxed())
             }
             .boxed()
         },
-        CliHooks::for_params::<L::Params>(),
     );
 }

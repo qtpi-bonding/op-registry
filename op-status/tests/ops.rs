@@ -2,7 +2,7 @@
 use futures_util::future::BoxFuture;
 use op_registry::cli::{self, CliOutput};
 use op_registry::parity::{assert_parity, cli_surface};
-use op_registry::{mcp, registry, Audience, CallOptions, OpParams, Registry};
+use op_registry::{mcp, Audience, CallOptions, OpParams, OpSpec, Registry};
 use op_status::ops::{status_registry, StatusOptions};
 use op_status::{Component, ServiceInfo, State, StatusFilter, StatusSource};
 use serde_json::{json, Value};
@@ -213,18 +213,14 @@ async fn ping(_: &ToySource, _: Empty) -> anyhow::Result<Value> {
 
 #[test]
 fn status_registry_merges_into_an_app_registry_and_cli_and_mcp_parity_holds() {
-    let mut app: Registry<ToySource> = registry! {
-        Ctx = ToySource;
-        entries: [
-            {
-                name: "ping", noun: "system", verb: "ping", description: "pings",
-                access: none, audience: Agent, params: Empty, output: Value,
-                op: ping,
-            },
-        ]
-    };
+    let mut app: Registry<ToySource> = Registry::new();
+    app.group("system", "System.");
+    app.push_op(
+        OpSpec::<Empty, Value>::new("system ping", "pings"),
+        |ctx: &ToySource, params: Empty, _opts: CallOptions| Box::pin(ping(ctx, params)),
+    );
     app.merge(status_registry::<ToySource>(StatusOptions::new()));
-    assert_eq!(app.names(), vec!["ping", "status_get"]);
+    assert_eq!(app.names(), vec!["system_ping", "status_get"]);
 
     let cmd = cli::command(&app, "app", "toy app");
     cmd.clone().debug_assert();
@@ -232,7 +228,7 @@ fn status_registry_merges_into_an_app_registry_and_cli_and_mcp_parity_holds() {
     let tools = mcp::tool_list(&app, Audience::Agent);
     assert_parity(&app, &surface, &tools, &[], &[], Audience::Agent).unwrap();
     assert!(surface.names.contains("status_get"));
-    assert!(surface.names.contains("ping"));
+    assert!(surface.names.contains("system_ping"));
     assert!(tools.iter().any(|t| t.name == "status_get"));
 
     // CLI flags --kind --id --limit reach the op and match the MCP result.
@@ -265,11 +261,8 @@ fn status_registry_merges_into_an_app_registry_and_cli_and_mcp_parity_holds() {
         .into_iter()
         .find(|d| d.name == "status_get")
         .unwrap();
-    assert_eq!(
-        (status.noun.as_str(), status.verb.as_str()),
-        ("status", "get")
-    );
-    assert!(!status.streaming);
+    assert_eq!(status.path, ["status", "get"]);
+    assert_ne!(status.kind, op_registry::OpKind::Stream);
 }
 
 #[test]

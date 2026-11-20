@@ -1,6 +1,6 @@
 //! Plain-data MCP-shaped adapters for a registry.
 
-use crate::{Audience, CallError, CallOptions, Registry};
+use crate::{Audience, CallError, CallOptions, OpKind, Registry};
 
 /// The tool contract exposed for an operation.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -16,12 +16,12 @@ pub fn tool_list<C: Sync>(registry: &Registry<C>, audience: Audience) -> Vec<Too
     registry
         .descriptors()
         .into_iter()
-        .filter(|descriptor| !descriptor.streaming && descriptor.audience == audience)
+        .filter(|descriptor| descriptor.kind != OpKind::Stream && descriptor.audience == audience)
         .map(|descriptor| ToolSpec {
             name: descriptor.name.clone(),
-            description: descriptor.description.clone(),
+            description: descriptor.summary.clone(),
             input_schema: descriptor.input_schema.clone(),
-            output_schema: descriptor.output_schema.clone(),
+            output_schema: descriptor.output_schema.clone().unwrap_or_default(),
         })
         .collect()
 }
@@ -63,7 +63,7 @@ pub async fn call_tool<C: Sync>(
         }))
     })?;
 
-    if descriptor.streaming {
+    if descriptor.kind == OpKind::Stream {
         return Err(ToolError(coded_error::into_anyhow(CallError::WrongShape {
             name: name.to_owned(),
         })));

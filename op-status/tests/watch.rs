@@ -259,12 +259,15 @@ fn status_watch_is_a_cli_only_stream_entry_and_parity_holds() {
     let reg = status_registry::<Toy>(StatusOptions::new());
     assert_eq!(reg.names(), vec!["status_get", "status_watch"]);
     let d = reg.get("status_watch").unwrap();
-    assert_eq!((d.noun.as_str(), d.verb.as_str()), ("status", "watch"));
-    assert!(d.streaming);
+    assert_eq!(d.path, ["status", "watch"]);
+    assert_eq!(d.kind, op_registry::OpKind::Stream);
     assert!(d.access.reads && !d.access.writes && !d.access.network);
     assert_eq!(d.audience, Audience::Agent);
-    assert!(!d.output_schema.is_null());
-    assert!(!reg.get("status_get").unwrap().streaming);
+    assert!(d.output_schema.is_some());
+    assert_ne!(
+        reg.get("status_get").unwrap().kind,
+        op_registry::OpKind::Stream
+    );
 
     let tools = mcp::tool_list(&reg, Audience::Agent);
     assert!(tools.iter().all(|t| t.name != "status_watch"));
