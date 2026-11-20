@@ -3,7 +3,7 @@ use op_registry::OpParams;
 #[derive(OpParams)]
 struct Bad {
     #[op(env = "X")]
-    value: String,
+    x: Vec<String>,
 }
 
 fn main() {}

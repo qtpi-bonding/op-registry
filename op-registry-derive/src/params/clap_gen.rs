@@ -18,6 +18,18 @@ fn keys_expr(f: &Field) -> TokenStream {
     }
 }
 
+/// Wraps an argument with the field's env fallback; the value stays out of
+/// help. An empty variable counts as absent (see `rt::env_arg`).
+fn with_env(f: &Field, arg: TokenStream) -> TokenStream {
+    match &f.env {
+        Some(var) => {
+            let secret = f.secret;
+            quote!(::op_registry::__private::rt::env_arg(#arg, #var, #secret))
+        }
+        None => arg,
+    }
+}
+
 /// The clap arguments of one field (two for a tri-state).
 pub(crate) fn args(f: &Field) -> Vec<TokenStream> {
     let clap = clap();
@@ -34,10 +46,18 @@ pub(crate) fn args(f: &Field) -> Vec<TokenStream> {
         let required = required.then(|| quote!(.required(true)));
         let ignore_case =
             (f.ignore_case && matches!(base, Base::Enum(_))).then(|| quote!(.ignore_case(true)));
-        quote! {
-            #clap::Arg::new(#id).long(#flag) #help #required #action
-                .value_parser(#clap::value_parser!(#ty)) #negative #ignore_case
-        }
+        let hyphen = f.allow_hyphen.then(|| quote!(.allow_hyphen_values(true)));
+        let default = f
+            .help_default()
+            .map(|d| quote!(.default_value(#clap::builder::Resettable::from(#d))));
+        with_env(
+            f,
+            quote! {
+                #clap::Arg::new(#id).long(#flag) #help #required #action
+                    .value_parser(#clap::value_parser!(#ty)) #negative #ignore_case
+                    #hyphen #default
+            },
+        )
     };
     let append = Some(quote!(.action(#clap::ArgAction::Append)));
     match &f.shape {
@@ -58,9 +78,10 @@ pub(crate) fn args(f: &Field) -> Vec<TokenStream> {
         Shape::Plain(b) => vec![valued(b, None, f.required())],
         Shape::Optional(b) => vec![valued(b, None, f.explicit_required)],
         Shape::Repeated(b) => vec![valued(b, append, f.explicit_required)],
-        Shape::Switch => vec![quote! {
-            #clap::Arg::new(#id).long(#flag) #help.action(#clap::ArgAction::SetTrue)
-        }],
+        Shape::Switch => vec![with_env(
+            f,
+            quote!(#clap::Arg::new(#id).long(#flag) #help.action(#clap::ArgAction::SetTrue)),
+        )],
         Shape::TriState => {
             let no_id = format!("no_{}", f.rust_name);
             let no_flag = format!("no-{}", f.flag);

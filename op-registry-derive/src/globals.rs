@@ -23,7 +23,7 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let fields = named
         .named
         .iter()
-        .map(|f| Field::parse_with(f, true))
+        .map(|f| Field::parse(f))
         .collect::<syn::Result<Vec<_>>>()?;
     for (f, raw) in fields.iter().zip(&named.named) {
         check(f, raw)?;
@@ -32,13 +32,11 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let fields_fn = schema::fields_fn(&fields);
     let steps = fields.iter().map(|f| {
         let args = clap_gen::args(f);
-        let env = global_env(f);
         // Clap forbids a required global argument; `from_matches` reports a
         // missing one as `usage.missing` instead.
-        // The env fallback belongs to the first (positive) argument only.
         let first = args
             .first()
-            .map(|a| quote!(cmd = cmd.arg(#a.required(false).global(true) #env);));
+            .map(|a| quote!(cmd = cmd.arg(#a.required(false).global(true));));
         let rest = args
             .iter()
             .skip(1)
@@ -70,19 +68,8 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
-/// `.env(..)` for a field with an env fallback; the value stays out of help.
-fn global_env(f: &Field) -> Option<TokenStream> {
-    let var = f.env.as_ref()?;
-    let hide = if f.secret {
-        quote!(.hide_env(true))
-    } else {
-        quote!(.hide_env_values(true))
-    };
-    Some(quote!(.env(#var) #hide))
-}
-
 /// The field rules of globals: no Ref, Json, Input, SecretFile or flatten, no
-/// relations, no clearable patch; `env` only on a scalar or switch.
+/// relations, no clearable patch.
 fn check(f: &Field, raw: &syn::Field) -> syn::Result<()> {
     let err = |msg: &str| {
         Err(syn::Error::new_spanned(
@@ -107,14 +94,6 @@ fn check(f: &Field, raw: &syn::Field) -> syn::Result<()> {
         || !f.required_unless.is_empty()
     {
         return err("a global takes no relation and no required");
-    }
-    if f.env.is_some()
-        && !matches!(
-            f.shape,
-            Shape::Plain(_) | Shape::Optional(_) | Shape::Switch
-        )
-    {
-        return err("env applies only to a scalar, an optional scalar or a bool");
     }
     Ok(())
 }

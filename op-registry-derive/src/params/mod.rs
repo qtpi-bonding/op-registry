@@ -14,6 +14,7 @@ use quote::quote;
 use syn::{Data, DeriveInput, Fields};
 
 use attrs::Field;
+use types::Shape;
 
 pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let name = &input.ident;
@@ -26,11 +27,22 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             "OpParams requires named fields",
         ));
     };
-    let fields = named
+    let mut fields = named
         .named
         .iter()
         .map(Field::parse)
         .collect::<syn::Result<Vec<_>>>()?;
+    let struct_attrs = struct_attrs(&input.attrs)?;
+    if struct_attrs.allow_hyphen {
+        for f in fields.iter_mut().filter(|f| {
+            matches!(
+                f.shape,
+                Shape::Plain(_) | Shape::Optional(_) | Shape::Repeated(_) | Shape::Patch(_)
+            )
+        }) {
+            f.allow_hyphen = true;
+        }
+    }
 
     relations::check_relations(&fields)?;
     let fields_fn = schema::fields_fn(&fields);
@@ -38,8 +50,7 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let add_args = clap_gen::add_args_fn(&fields);
     let from_matches = clap_gen::from_matches_fn(&fields);
     let from_json = json_gen::from_json_fn(&fields);
-    let validator = struct_validator(&input.attrs)?;
-    let validate = schema::validate_fn(&fields, validator.as_ref());
+    let validate = schema::validate_fn(&fields, struct_attrs.validator.as_ref());
     let ref_slots = ref_gen::ref_slots_fn(&fields);
     let secrets = schema::secrets_fn(&fields);
     let needs_secrets = fields.iter().any(|f| {
@@ -72,10 +83,17 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
-/// The struct-level `#[op(validate = path)]`: the keys of a struct-level
-/// `#[op(..)]` are `validate` only (more arrive with their changes).
-fn struct_validator(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Path>> {
-    let mut validator = None;
+/// The struct-level `#[op(..)]` keys: `validate = path` and `allow_hyphen`.
+struct StructAttrs {
+    validator: Option<syn::Path>,
+    allow_hyphen: bool,
+}
+
+fn struct_attrs(attrs: &[syn::Attribute]) -> syn::Result<StructAttrs> {
+    let mut out = StructAttrs {
+        validator: None,
+        allow_hyphen: false,
+    };
     for attr in attrs.iter().filter(|a| a.path().is_ident("op")) {
         attr.parse_nested_meta(|m| {
             let key = m
@@ -90,12 +108,16 @@ fn struct_validator(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Path>> 
                     if !m.input.peek(syn::Token![=]) {
                         return Err(bad());
                     }
-                    validator = Some(m.value()?.parse::<syn::Path>().map_err(|_| bad())?);
+                    out.validator = Some(m.value()?.parse::<syn::Path>().map_err(|_| bad())?);
+                    Ok(())
+                }
+                "allow_hyphen" => {
+                    out.allow_hyphen = true;
                     Ok(())
                 }
                 _ => Err(m.error(format!("unknown #[op] key `{key}`"))),
             }
         })?;
     }
-    Ok(validator)
+    Ok(out)
 }

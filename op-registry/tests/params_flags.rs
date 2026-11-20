@@ -510,3 +510,238 @@ fn without_ignore_case_the_names_stay_exact() {
         "op_registry.usage.invalid"
     );
 }
+
+// ---- PAR-7: allow_hyphen ----
+
+#[derive(Debug, PartialEq, OpParams)]
+struct Hyphen {
+    #[op(allow_hyphen)]
+    value: Option<String>,
+    other: Option<String>,
+}
+
+#[derive(Debug, PartialEq, OpParams)]
+#[op(allow_hyphen)]
+struct AllHyphen {
+    message: Option<String>,
+    args: Vec<String>,
+    quiet: bool,
+}
+
+fn run<P: OpParams>(args: &[&str]) -> Result<P, clap::Error> {
+    let mut argv = vec!["t"];
+    argv.extend_from_slice(args);
+    let matches = P::add_args(Command::new("t")).try_get_matches_from(argv)?;
+    Ok(P::from_matches(&matches, &mut ParseCx::default()).unwrap())
+}
+
+#[test]
+fn allow_hyphen_value_minus_one() {
+    let h: Hyphen = run(&["--value", "-1"]).unwrap();
+    assert_eq!(h.value.as_deref(), Some("-1"));
+    let h: Hyphen = run(&["--value", "-1", "--other", "x"]).unwrap();
+    assert_eq!(h.other.as_deref(), Some("x"));
+}
+
+#[test]
+fn struct_allow_hyphen_reply_message() {
+    let a: AllHyphen = run(&["--message", "- ok", "--args", "-y", "--quiet"]).unwrap();
+    assert_eq!(a.message.as_deref(), Some("- ok"));
+    assert_eq!(a.args, vec!["-y".to_owned()]);
+    assert!(a.quiet);
+}
+
+#[test]
+fn without_allow_hyphen_fails_as_before() {
+    assert!(run::<Hyphen>(&["--other", "-1"]).is_err());
+    assert!(run::<Hyphen>(&["--other", "- ok"]).is_err());
+}
+
+// ---- PAR-9: literal defaults in help ----
+
+const COMPUTED: u32 = 7;
+
+#[derive(Debug, PartialEq, OpParams)]
+struct Defaults {
+    #[op(default = 50)]
+    limit: u32,
+    #[op(default = "syntax")]
+    format: String,
+    #[op(value_enum, default = Mode::Slow)]
+    mode: Mode,
+    #[op(default = -3)]
+    offset: i64,
+    #[op(default = "")]
+    blank: String,
+    #[op(default = 0, hide_default)]
+    pid: u32,
+    #[op(default = COMPUTED)]
+    computed: u32,
+    #[op(from_str, default = "127.0.0.1:1".parse().unwrap())]
+    addr: SocketAddr,
+}
+
+fn help<P: OpParams>() -> String {
+    P::add_args(Command::new("t"))
+        .render_long_help()
+        .to_string()
+}
+
+#[test]
+fn help_shows_literal_defaults() {
+    let h = help::<Defaults>();
+    assert!(h.contains("[default: 50]"), "{h}");
+    assert!(h.contains("[default: syntax]"), "{h}");
+    assert!(h.contains("[default: slow]"), "{h}");
+    assert!(h.contains("[default: -3]"), "{h}");
+    let d: Defaults = run(&[]).unwrap();
+    assert_eq!(
+        (d.limit, d.format.as_str(), d.mode),
+        (50, "syntax", Mode::Slow)
+    );
+    assert_eq!(d.offset, -3);
+}
+
+#[test]
+fn empty_and_hidden_defaults_not_shown_schema_keeps_default() {
+    let h = help::<Defaults>();
+    assert_eq!(h.matches("[default:").count(), 4, "{h}");
+    let schema = Defaults::input_schema();
+    assert_eq!(schema["properties"]["pid"]["default"], 0);
+    assert_eq!(schema["properties"]["blank"]["default"], "");
+    assert_eq!(schema["properties"]["computed"]["default"], 7);
+    let d: Defaults = run(&[]).unwrap();
+    assert_eq!((d.pid, d.blank.as_str(), d.computed), (0, "", 7));
+}
+
+// ---- PAR-10: env on params (CLI only) ----
+
+#[derive(Debug, PartialEq, OpParams)]
+struct EnvP {
+    #[op(env = "OPREG_T16_NAME")]
+    name: Option<String>,
+    #[op(env = "OPREG_T16_COUNT")]
+    count: Option<u32>,
+    #[op(env = "OPREG_T16_EMPTY")]
+    empty: Option<String>,
+    #[op(env = "OPREG_T16_VERBOSE")]
+    verbose: bool,
+    #[op(env = "OPREG_T16_HELP")]
+    shown: Option<String>,
+    #[op(env = "OPREG_T16_HIDDEN_HELP", secret)]
+    hidden: Option<String>,
+}
+
+#[test]
+fn env_fills_absent_flag() {
+    std::env::set_var("OPREG_T16_NAME", "from-env");
+    std::env::set_var("OPREG_T16_VERBOSE", "true");
+    let p: EnvP = run(&[]).unwrap();
+    assert_eq!(p.name.as_deref(), Some("from-env"));
+    assert!(p.verbose);
+    let f = EnvP::fields();
+    let name = f.iter().find(|f| f.rust_name == "name").unwrap();
+    assert_eq!(name.env.as_deref(), Some("OPREG_T16_NAME"));
+    assert!(!EnvP::input_schema().to_string().contains("OPREG_T16"));
+}
+
+#[test]
+fn flag_wins_over_env() {
+    std::env::set_var("OPREG_T16_NAME", "from-env");
+    let p: EnvP = run(&["--name", "from-flag"]).unwrap();
+    assert_eq!(p.name.as_deref(), Some("from-flag"));
+}
+
+#[test]
+fn malformed_env_value_is_exit_2() {
+    std::env::set_var("OPREG_T16_COUNT", "many");
+    let err = run::<EnvP>(&[]).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::ValueValidation);
+}
+
+#[test]
+fn help_shows_env_var() {
+    let h = help::<EnvP>();
+    assert!(h.contains("[env: OPREG_T16_HELP]"), "{h}");
+    assert!(!h.contains("OPREG_T16_HIDDEN_HELP"), "{h}");
+}
+
+#[test]
+fn empty_env_param_is_absent() {
+    std::env::set_var("OPREG_T16_EMPTY", "");
+    let p: EnvP = run(&[]).unwrap();
+    assert_eq!(p.empty, None);
+}
+
+#[derive(Clone, Debug, PartialEq, OpParams)]
+struct NeedEnv {
+    #[op(env = "OPREG_T16_NEED")]
+    need: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct Got {
+    need: String,
+}
+
+struct NoCtx;
+impl op_registry::Resolve for NoCtx {}
+
+#[test]
+fn env_ignored_off_cli_value_must_be_passed() {
+    use futures_util::future::BoxFuture;
+    use op_registry::{CallOptions, OpSpec, Registry};
+    std::env::set_var("OPREG_T16_NEED", "from-env");
+    let cli: NeedEnv = run(&[]).unwrap();
+    assert_eq!(cli.need, "from-env");
+
+    let mut r = Registry::<NoCtx>::new();
+    r.push_op(
+        OpSpec::<NeedEnv, Got>::new("need", "Needs a value."),
+        |_c: &NoCtx, p: NeedEnv, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Got>> {
+            Box::pin(async move { Ok(Got { need: p.need }) })
+        },
+    );
+    let failure =
+        futures_executor::block_on(r.call("need", json!({}), &NoCtx, CallOptions::default()))
+            .unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(failure.error()).code,
+        "op_registry.usage.missing"
+    );
+    let ok = futures_executor::block_on(r.call(
+        "need",
+        json!({"need": "passed"}),
+        &NoCtx,
+        CallOptions::default(),
+    ))
+    .unwrap();
+    assert_eq!(ok["need"], "passed");
+}
+
+#[derive(Debug, PartialEq, OpParams)]
+struct EmptyEnv {
+    /// The count.
+    #[op(env = "OPREG_T16_EMPTY_COUNT")]
+    count: Option<u32>,
+    #[op(env = "OPREG_T16_EMPTY_FLAG")]
+    flag: bool,
+}
+
+#[test]
+fn empty_env_on_typed_and_switch_params_is_absent() {
+    std::env::set_var("OPREG_T16_EMPTY_COUNT", "");
+    std::env::set_var("OPREG_T16_EMPTY_FLAG", "");
+    let p: EmptyEnv = run(&[]).unwrap();
+    assert_eq!(
+        p,
+        EmptyEnv {
+            count: None,
+            flag: false
+        }
+    );
+    let p: EmptyEnv = run(&["--count", "4"]).unwrap();
+    assert_eq!(p.count, Some(4));
+    assert!(help::<EmptyEnv>().contains("[env: OPREG_T16_EMPTY_COUNT]"));
+}

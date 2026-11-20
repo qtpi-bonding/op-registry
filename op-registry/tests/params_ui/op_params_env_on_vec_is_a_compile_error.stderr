@@ -1,0 +1,5 @@
+error: field `x`: env applies to a scalar, path, enum, from_str value or switch
+ --> tests/params_ui/op_params_env_on_vec_is_a_compile_error.rs:6:8
+  |
+6 |     x: Vec<String>,
+  |        ^^^^^^^^^^^

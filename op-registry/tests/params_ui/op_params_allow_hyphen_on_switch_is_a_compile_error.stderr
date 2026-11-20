@@ -1,0 +1,5 @@
+error: field `x`: allow_hyphen applies to a field that takes a value
+ --> tests/params_ui/op_params_allow_hyphen_on_switch_is_a_compile_error.rs:6:8
+  |
+6 |     x: bool,
+  |        ^^^^

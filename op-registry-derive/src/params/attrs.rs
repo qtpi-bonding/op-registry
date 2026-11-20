@@ -39,8 +39,12 @@ pub struct Field {
     pub explicit_required: bool,
     /// Set on a `Ref` field.
     pub reference: Option<RefInfo>,
-    /// The environment variable a global falls back to (`OpGlobals` only).
+    /// `#[op(env = "X")]`: the variable the CLI falls back to.
     pub env: Option<String>,
+    /// `#[op(allow_hyphen)]`, or the struct-level key.
+    pub allow_hyphen: bool,
+    /// `#[op(hide_default)]`: the default stays out of help.
+    pub hide_default: bool,
     /// On a flattened group: the scope its subject takes (`scope = [..]`).
     pub group_scope: Vec<ScopeName>,
 }
@@ -81,11 +85,6 @@ pub struct RefInfo {
 
 impl Field {
     pub fn parse(f: &syn::Field) -> syn::Result<Field> {
-        Self::parse_with(f, false)
-    }
-
-    /// Parses a field; `allow_env` accepts `#[op(env = "...")]` (globals).
-    pub fn parse_with(f: &syn::Field, allow_env: bool) -> syn::Result<Field> {
         let ident = f
             .ident
             .clone()
@@ -114,6 +113,8 @@ impl Field {
         let mut absent_ok = false;
         let mut scope: Option<Vec<ScopeName>> = None;
         let mut env: Option<String> = None;
+        let mut allow_hyphen = false;
+        let mut hide_default = false;
         for attr in f.attrs.iter().filter(|a| a.path().is_ident("op")) {
             attr.parse_nested_meta(|m| {
                 let key = m.path.get_ident().map(Ident::to_string).unwrap_or_default();
@@ -187,8 +188,10 @@ impl Field {
                         }
                         keys = Some(out);
                     }
-                    "env" if allow_env => env = Some(m.value()?.parse::<syn::LitStr>()?.value()),
-                    "long" | "short" | "positional" | "env" => {
+                    "env" => env = Some(m.value()?.parse::<syn::LitStr>()?.value()),
+                    "allow_hyphen" => allow_hyphen = true,
+                    "hide_default" => hide_default = true,
+                    "long" | "short" | "positional" => {
                         return Err(m.error(format!(
                         "unknown #[op] key `{key}`: flags are the long kebab-case field name only"
                     )))
@@ -222,7 +225,10 @@ impl Field {
                     || subject.is_some()
                     || kind.is_some()
                     || id_only
-                    || absent_ok,
+                    || absent_ok
+                    || env.is_some()
+                    || allow_hyphen
+                    || hide_default,
                 scope.unwrap_or_default(),
             );
         }
@@ -234,6 +240,9 @@ impl Field {
         };
         if ignore_case && !value_enum {
             return err_on("ignore_case needs value_enum");
+        }
+        if hide_default && default.is_none() {
+            return err_on("hide_default needs default");
         }
         if from_str {
             if value_enum {
@@ -266,6 +275,21 @@ impl Field {
                 ),
             )
         })?;
+        if allow_hyphen && matches!(shape, Shape::Switch | Shape::TriState | Shape::Map) {
+            return err_on("allow_hyphen applies to a field that takes a value");
+        }
+        if env.is_some() {
+            let ok = match &shape {
+                Shape::Switch => true,
+                Shape::Plain(b) | Shape::Optional(b) => {
+                    !matches!(b, Base::Json | Base::Input | Base::Ref | Base::SecretFile)
+                }
+                _ => false,
+            };
+            if !ok {
+                return err_on("env applies to a scalar, path, enum, from_str value or switch");
+            }
+        }
         if from_str && matches!(shape, Shape::Patch(_) | Shape::Map) {
             return err_on("from_str applies to a plain value, Option or Vec");
         }
@@ -403,6 +427,8 @@ impl Field {
             explicit_required,
             reference,
             env,
+            allow_hyphen,
+            hide_default,
             group_scope: Vec::new(),
         })
     }
@@ -447,6 +473,8 @@ impl Field {
             explicit_required: false,
             reference: None,
             env: None,
+            allow_hyphen: false,
+            hide_default: false,
             group_scope,
         })
     }
@@ -632,5 +660,66 @@ impl Field {
             }
             _ => return None,
         })
+    }
+}
+
+impl Field {
+    /// The literal default as help text: an `Option<String>` expression for
+    /// clap's `default_value`. A computed default, an empty string, a secret
+    /// and a `hide_default` field show nothing.
+    pub fn help_default(&self) -> Option<proc_macro2::TokenStream> {
+        use quote::quote;
+        if self.hide_default || self.secret {
+            return None;
+        }
+        let e = self.default.as_ref()?;
+        match &self.shape {
+            Shape::Plain(Base::Enum(ty)) => {
+                let Expr::Path(p) = e else { return None };
+                // A variant, not a SCREAMING_CASE const.
+                let last = p.path.segments.last()?.ident.to_string();
+                if p.path.segments.len() < 2 || !last.chars().any(|c| c.is_lowercase()) {
+                    return None;
+                }
+                Some(quote! {
+                    ::op_registry::__private::clap::ValueEnum::to_possible_value(
+                        &{ let d: #ty = #e; d },
+                    )
+                    .map(|v| ::op_registry::__private::clap::builder::OsStr::from(v.get_name().to_owned()))
+                })
+            }
+            Shape::Plain(Base::FromStr(_)) => None,
+            Shape::Plain(_) => {
+                let text = literal_text(e)?;
+                (!text.is_empty()).then(
+                    || quote!(::std::option::Option::Some(::op_registry::__private::clap::builder::OsStr::from(#text.to_owned()))),
+                )
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The text of a string, integer or float literal, with a leading `-`.
+fn literal_text(e: &Expr) -> Option<String> {
+    match e {
+        Expr::Lit(ExprLit { lit, .. }) => match lit {
+            Lit::Str(s) => Some(s.value()),
+            Lit::Int(i) => Some(i.base10_digits().to_owned()),
+            Lit::Float(f) => Some(f.base10_digits().to_owned()),
+            _ => None,
+        },
+        Expr::Unary(u) if matches!(u.op, syn::UnOp::Neg(_)) => {
+            let inner = literal_text(&u.expr)?;
+            matches!(
+                &*u.expr,
+                Expr::Lit(ExprLit {
+                    lit: Lit::Int(_) | Lit::Float(_),
+                    ..
+                })
+            )
+            .then(|| format!("-{inner}"))
+        }
+        _ => None,
     }
 }

@@ -7,7 +7,6 @@ fn op_params_compile_failures() {
     tests.compile_fail("tests/params_ui/op_params_long_attribute_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_params_short_attribute_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_params_positional_attribute_is_a_compile_error.rs");
-    tests.compile_fail("tests/params_ui/op_params_env_on_params_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_globals_json_field_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_params_one_of_needs_two_members_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_params_relation_on_plain_field_is_a_compile_error.rs");
@@ -56,4 +55,10 @@ fn op_params_compile_failures() {
     tests.compile_fail(
         "tests/params_ui/op_params_ignore_case_without_value_enum_is_a_compile_error.rs",
     );
+    tests.compile_fail("tests/params_ui/op_params_allow_hyphen_on_switch_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_allow_hyphen_on_map_is_a_compile_error.rs");
+    tests.compile_fail(
+        "tests/params_ui/op_params_hide_default_without_default_is_a_compile_error.rs",
+    );
+    tests.compile_fail("tests/params_ui/op_params_env_on_vec_is_a_compile_error.rs");
 }

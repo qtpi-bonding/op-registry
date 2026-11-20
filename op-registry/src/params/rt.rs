@@ -66,6 +66,27 @@ pub fn enum_value<T: ValueEnum>(key: &str, name: &str, ignore_case: bool) -> Res
         .map_err(|_| invalid(key, format!("`{name}` is not a valid value")))
 }
 
+/// Gives a param its env fallback. clap takes an empty variable as the value
+/// `""`, so an empty one is left off the argument (the flag stays absent) and
+/// help still names it. `secret` hides the variable from help.
+pub fn env_arg(arg: clap::Arg, var: &'static str, secret: bool) -> clap::Arg {
+    if std::env::var_os(var).is_some_and(|v| v.is_empty()) {
+        if secret {
+            return arg;
+        }
+        let help = match arg.get_help() {
+            Some(h) => format!("{h} [env: {var}]"),
+            None => format!("[env: {var}]"),
+        };
+        return arg.help(help);
+    }
+    if secret {
+        arg.env(var).hide_env(true)
+    } else {
+        arg.env(var).hide_env_values(true)
+    }
+}
+
 /// A `from_str` value: the text through `T::from_str`. A `secret` field says
 /// only `invalid value`, since a parser's message may quote its input.
 pub fn from_str_arg<T>(key: &str, text: &str, hide: bool) -> Result<T>
