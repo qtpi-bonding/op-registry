@@ -5,6 +5,7 @@ pub(crate) mod attrs;
 pub(crate) mod clap_gen;
 mod json_gen;
 mod ref_gen;
+mod relations;
 pub(crate) mod schema;
 pub(crate) mod types;
 
@@ -31,7 +32,7 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         .map(Field::parse)
         .collect::<syn::Result<Vec<_>>>()?;
 
-    check_relations(&fields)?;
+    relations::check_relations(&fields)?;
     let fields_fn = schema::fields_fn(&fields);
     let schema_fn = schema::input_schema_fn(&fields);
     let add_args = clap_gen::add_args_fn(&fields);
@@ -68,172 +69,4 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             #secrets
         }
     })
-}
-
-/// Checks that every relation names fields the derive can see.
-fn check_relations(fields: &[Field]) -> syn::Result<()> {
-    for (name, optional, members) in schema::one_of_groups(fields) {
-        if members.len() < 2 {
-            return Err(syn::Error::new(
-                members[0].ident.span(),
-                format!("one_of group `{name}` needs two members"),
-            ));
-        }
-        if members
-            .iter()
-            .any(|f| f.one_of.as_ref().map(|g| g.1) != Some(optional))
-        {
-            return Err(syn::Error::new(
-                members[0].ident.span(),
-                format!("group `{name}` mixes one_of and one_of_optional"),
-            ));
-        }
-    }
-    check_refs(fields)?;
-    for (name, members) in schema::at_least_one_groups(fields) {
-        if members.len() < 2 {
-            return Err(syn::Error::new(
-                members[0].ident.span(),
-                format!("at_least_one group `{name}` needs two members"),
-            ));
-        }
-        if let Some((_, _, one_of)) = schema::one_of_groups(fields)
-            .into_iter()
-            .find(|g| g.0 == name)
-        {
-            return Err(syn::Error::new(
-                one_of[0].ident.span(),
-                format!("group `{name}` is used with two kinds (one_of and at_least_one)"),
-            ));
-        }
-    }
-    for f in fields {
-        for list in [&f.requires_if, &f.conflicts_with, &f.required_unless] {
-            for target in list {
-                check_target(fields, f, target)?;
-            }
-        }
-        if let Some(both) = f
-            .conflicts_with
-            .iter()
-            .find(|c| f.required_unless.iter().any(|u| u.path == c.path))
-        {
-            return Err(syn::Error::new(
-                both.span,
-                format!(
-                    "field `{}`: conflicts_with and required_unless both name `{}`",
-                    f.rust_name, both.path
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// A relation target is another field of this struct that can be absent, or
-/// a dotted path starting at one of its flattened groups.
-fn check_target(fields: &[Field], f: &Field, target: &attrs::ScopeName) -> syn::Result<()> {
-    let err = |msg: String| {
-        Err(syn::Error::new(
-            target.span,
-            format!("field `{}`: {msg}", f.rust_name),
-        ))
-    };
-    let path = &target.path;
-    let segments = target.segments();
-    if segments.iter().any(|s| s.is_empty()) {
-        return err(format!("`{path}` has an empty segment"));
-    }
-    let head = fields.iter().find(|o| o.rust_name == segments[0]);
-    if segments.len() > 1 {
-        return match head {
-            Some(h) if matches!(h.shape, types::Shape::Flatten(_)) => Ok(()),
-            _ => err(format!(
-                "`{}` in `{path}` is not a #[op(flatten)] field",
-                segments[0]
-            )),
-        };
-    }
-    match head {
-        None => err(format!("unknown target `{path}`")),
-        Some(h) if h.rust_name == f.rust_name => {
-            err("a relation cannot name the field itself".into())
-        }
-        Some(h) if h.present().is_none() => err(format!(
-            "target `{path}` cannot be absent, so it cannot be a relation target"
-        )),
-        Some(_) => Ok(()),
-    }
-}
-
-/// One subject at most, and every scope name is a field of this struct or a
-/// dotted path starting at one of its flattened groups.
-fn check_refs(fields: &[Field]) -> syn::Result<()> {
-    let mut subjects = fields
-        .iter()
-        .filter(|f| f.reference.as_ref().is_some_and(|r| r.subject));
-    subjects.next();
-    if let Some(second) = subjects.next() {
-        return Err(syn::Error::new(
-            second.ident.span(),
-            "an op has one subject: only one field takes `#[op(subject = ..)]`",
-        ));
-    }
-    for f in fields {
-        if let Some(r) = &f.reference {
-            check_scope(fields, f, &r.scope)?;
-        }
-        check_scope(fields, f, &f.group_scope)?;
-    }
-    Ok(())
-}
-
-/// Checks one `scope = [..]` list: names resolve, and keys are distinct.
-fn check_scope(fields: &[Field], owner: &Field, scope: &[attrs::ScopeName]) -> syn::Result<()> {
-    let mut keys: Vec<(String, &str)> = Vec::new();
-    for name in scope {
-        let segments = name.segments();
-        if segments.iter().any(|s| s.is_empty()) {
-            return Err(syn::Error::new(
-                name.span,
-                format!("scope names `{}`, which is not a field path", name.path),
-            ));
-        }
-        let head = fields.iter().find(|o| o.rust_name == segments[0]);
-        let ok = if segments.len() == 1 {
-            head.is_some_and(|o| {
-                o.rust_name != owner.rust_name && !matches!(o.shape, types::Shape::Flatten(_))
-            })
-        } else {
-            head.is_some_and(|o| matches!(o.shape, types::Shape::Flatten(_)))
-        };
-        if !ok {
-            let span = if segments.len() == 1 {
-                owner.ident.span()
-            } else {
-                name.span
-            };
-            let what = if segments.len() == 1 {
-                "which is not another field of this struct"
-            } else {
-                "whose first segment is not a flattened group of this struct"
-            };
-            return Err(syn::Error::new(
-                span,
-                format!("scope names `{}`, {what}", name.path),
-            ));
-        }
-        let key = name.key();
-        if let Some((_, first)) = keys.iter().find(|(k, _)| *k == key) {
-            return Err(syn::Error::new(
-                name.span,
-                format!(
-                    "scope names `{first}` and `{}`, which share the scope key `{key}`",
-                    name.path
-                ),
-            ));
-        }
-        keys.push((key, &name.path));
-    }
-    Ok(())
 }

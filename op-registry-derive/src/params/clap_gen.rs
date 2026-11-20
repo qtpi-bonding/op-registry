@@ -4,6 +4,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use super::attrs::Field;
+use super::relations::group_ids;
 use super::types::{Base, Shape};
 
 fn clap() -> TokenStream {
@@ -82,18 +83,6 @@ pub(crate) fn args(f: &Field) -> Vec<TokenStream> {
     }
 }
 
-/// The clap arg ids of a relation member: a tri-state also has `no_x`, a
-/// `Patch` also `clear_x`.
-pub(crate) fn group_ids(f: &Field) -> Vec<String> {
-    let mut ids = vec![f.rust_name.clone()];
-    match f.shape {
-        Shape::TriState => ids.push(format!("no_{}", f.rust_name)),
-        Shape::Patch(_) => ids.push(format!("clear_{}", f.rust_name)),
-        _ => {}
-    }
-    ids
-}
-
 /// A `Vec<String>` expression: the clap arg ids of every target, then `extra`.
 fn target_ids(
     fields: &[Field],
@@ -102,7 +91,7 @@ fn target_ids(
 ) -> TokenStream {
     let ids = targets
         .iter()
-        .map(|t| super::schema::resolve(fields, t).arg_ids());
+        .map(|t| super::relations::resolve(fields, t).arg_ids());
     quote! {{
         let mut ids: ::std::vec::Vec<::std::string::String> = ::std::vec::Vec::new();
         #(ids.extend(#ids);)*
@@ -145,18 +134,17 @@ pub fn add_args_fn(fields: &[Field]) -> TokenStream {
                 );
             }
         });
-    let at_least_one =
-        super::schema::at_least_one_groups(fields)
-            .into_iter()
-            .map(|(name, members)| {
-                let ids = members.iter().flat_map(|f| group_ids(f));
-                quote! {
-                    cmd = cmd.group(
-                        #clap::ArgGroup::new(#name).args([#(#ids),*]).required(true).multiple(true),
-                    );
-                }
-            });
-    let groups = super::schema::one_of_groups(fields).into_iter().map(|(name, optional, members)| {
+    let at_least_one = super::relations::at_least_one_groups(fields)
+        .into_iter()
+        .map(|(name, members)| {
+            let ids = members.iter().flat_map(|f| group_ids(f));
+            quote! {
+                cmd = cmd.group(
+                    #clap::ArgGroup::new(#name).args([#(#ids),*]).required(true).multiple(true),
+                );
+            }
+        });
+    let groups = super::relations::one_of_groups(fields).into_iter().map(|(name, optional, members)| {
         let ids = members.iter().flat_map(|f| group_ids(f));
         let required = !optional;
         quote! {
