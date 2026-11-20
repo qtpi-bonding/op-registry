@@ -241,7 +241,7 @@ pub fn render_json<C: CliContext>(registry: &Registry<C>) -> Value {
             let mut op = serde_json::to_value(d).expect("a descriptor is serializable");
             let fields = op.as_object_mut().expect("a descriptor is an object");
             if d.output_schema.is_none() {
-                fields.remove("output_schema");
+                fields.remove("outputSchema");
             }
             let codes: Vec<Value> = codes_of(registry, d).iter().map(CodeRow::json).collect();
             fields.insert("codes".to_owned(), Value::Array(codes));

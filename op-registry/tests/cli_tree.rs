@@ -15,6 +15,13 @@ use std::ffi::OsString;
 
 const HUB_ENV: &str = "OPREG_CLI_TREE_HUB_UNIQUE";
 
+/// Serializes the tests that depend on the process environment.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Process settings of the test binary.
 #[derive(Debug, OpGlobals)]
 struct G {
@@ -339,6 +346,7 @@ fn text_flag_only_on_text_ops() {
 
 #[test]
 fn globals_before_or_after_verb() {
+    let _env = env_lock();
     let (_, before) = parse(&["--hub", "h1", "--verbose", "ping"]).unwrap();
     assert_eq!(before.hub.as_deref(), Some("h1"));
     assert!(before.verbose);
@@ -351,6 +359,7 @@ fn globals_before_or_after_verb() {
 
 #[test]
 fn global_env_fallback() {
+    let _env = env_lock();
     std::env::set_var(HUB_ENV, "from-env");
     let (_, g) = parse(&["ping"]).unwrap();
     assert_eq!(g.hub.as_deref(), Some("from-env"));

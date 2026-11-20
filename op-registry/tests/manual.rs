@@ -17,6 +17,13 @@ use std::ffi::OsString;
 
 const HUB_ENV: &str = "OPREG_MANUAL_HUB_UNIQUE";
 
+/// Serializes the tests that read or write the process environment.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Process settings of the test binary.
 #[derive(Debug, OpGlobals)]
 struct G {
@@ -262,7 +269,11 @@ fn manual_json_has_ops_and_codes() {
     );
     assert_eq!(get["exits"][0]["code"], 4);
     assert!(ops.iter().any(|o| o["name"] == "manual"));
-    assert_eq!(get.get("output_schema").is_some(), cfg!(feature = "schema"));
+    assert_eq!(get.get("outputSchema").is_some(), cfg!(feature = "schema"));
+    for key in ["longHelp", "inputSchema", "listPair", "groupDefault"] {
+        assert!(get.get(key).is_some(), "missing {key}");
+    }
+    assert!(get.get("long_help").is_none());
 
     let (io, out) = Io::memory(b"", false, false);
     let code = futures_executor::block_on(cli::run_with_io(
@@ -342,6 +353,7 @@ fn manual_includes_ops_merged_after_with_manual() {
 
 #[test]
 fn help_never_shows_env_value() {
+    let _env = env_lock();
     std::env::set_var(HUB_ENV, "https://hub.example.test/SECRETVALUE");
     let r = with_manual();
     let text = render(&r, &sample_manual()).unwrap();

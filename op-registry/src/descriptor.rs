@@ -170,7 +170,7 @@ impl From<&coded_error::CodeEntry> for ErrorCodeEntry {
 /// The serializable metadata describing an operation.
 #[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Descriptor {
     /// The operation name, derived from the path by [`derive_name`].
     pub name: String,
