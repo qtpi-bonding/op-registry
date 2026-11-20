@@ -1,0 +1,5 @@
+error: field `x`: ignore_case needs value_enum
+ --> tests/params_ui/op_params_ignore_case_without_value_enum_is_a_compile_error.rs:6:8
+  |
+6 |     x: String,
+  |        ^^^^^^

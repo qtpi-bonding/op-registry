@@ -32,9 +32,11 @@ pub(crate) fn args(f: &Field) -> Vec<TokenStream> {
             .allows_negative()
             .then(|| quote!(.allow_negative_numbers(true)));
         let required = required.then(|| quote!(.required(true)));
+        let ignore_case =
+            (f.ignore_case && matches!(base, Base::Enum(_))).then(|| quote!(.ignore_case(true)));
         quote! {
             #clap::Arg::new(#id).long(#flag) #help #required #action
-                .value_parser(#clap::value_parser!(#ty)) #negative
+                .value_parser(#clap::value_parser!(#ty)) #negative #ignore_case
         }
     };
     let append = Some(quote!(.action(#clap::ArgAction::Append)));
@@ -189,6 +191,14 @@ pub(crate) fn decode(f: &Field) -> TokenStream {
                 }
             }
             Base::Ref => quote!(m.get_one::<#ty>(#id).cloned().map(::op_registry::Ref::new)),
+            Base::FromStr(t) => {
+                let hide = f.secret;
+                quote! {
+                    m.get_one::<#ty>(#id)
+                        .map(|s| #rt::from_str_arg::<#t>(#flag, s, #hide))
+                        .transpose()?
+                }
+            }
             _ => quote!(m.get_one::<#ty>(#id).cloned()),
         }
     };
@@ -234,6 +244,16 @@ pub(crate) fn decode(f: &Field) -> TokenStream {
                 .map(::op_registry::Ref::new)
                 .collect::<::std::vec::Vec<_>>()
         },
+        Shape::Repeated(Base::FromStr(t)) => {
+            let hide = f.secret;
+            quote! {
+                m.get_many::<::std::string::String>(#id)
+                    .into_iter()
+                    .flatten()
+                    .map(|s| #rt::from_str_arg::<#t>(#flag, s, #hide))
+                    .collect::<::op_registry::__private::anyhow::Result<::std::vec::Vec<_>>>()?
+            }
+        }
         Shape::Repeated(b) => {
             let ty = b.ty();
             quote!(m.get_many::<#ty>(#id).map(|v| v.cloned().collect()).unwrap_or_default())

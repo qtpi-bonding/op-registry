@@ -1,0 +1,5 @@
+error: field `x`: sample applies only to a string-valued field
+ --> tests/params_ui/op_params_sample_on_non_string_is_a_compile_error.rs:6:8
+  |
+6 |     x: u32,
+  |        ^^^

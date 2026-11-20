@@ -24,6 +24,8 @@ pub enum Base {
     Ref,
     /// `op_registry::SecretFile`: secret bytes from a path or stdin.
     SecretFile,
+    /// An `#[op(from_str)]` type: text, then `T::from_str`.
+    FromStr(Type),
 }
 
 impl Base {
@@ -32,7 +34,7 @@ impl Base {
         match self {
             Base::String => quote!(::std::string::String),
             Base::Path => quote!(::std::path::PathBuf),
-            Base::Int { ty, .. } | Base::Enum(ty) => quote!(#ty),
+            Base::Int { ty, .. } | Base::Enum(ty) | Base::FromStr(ty) => quote!(#ty),
             Base::Float => quote!(f64),
             Base::Bool => quote!(bool),
             Base::Json => quote!(::op_registry::Json),
@@ -46,7 +48,7 @@ impl Base {
     /// resolved (file, stdin) at decode time.
     pub fn clap_ty(&self) -> proc_macro2::TokenStream {
         match self {
-            Base::Json | Base::Input | Base::Ref | Base::SecretFile => {
+            Base::Json | Base::Input | Base::Ref | Base::SecretFile | Base::FromStr(_) => {
                 quote::quote!(::std::string::String)
             }
             b => b.ty(),
@@ -98,7 +100,10 @@ fn name_of(ty: &Type) -> String {
     quote::quote!(#ty).to_string().replace(' ', "")
 }
 
-fn base(ty: &Type, value_enum: bool) -> Option<Base> {
+fn base(ty: &Type, value_enum: bool, from_str: bool) -> Option<Base> {
+    if from_str {
+        return Some(Base::FromStr(ty.clone()));
+    }
     let name = name_of(ty);
     let name = name.strip_prefix("std::path::").unwrap_or(&name);
     let name = name.strip_prefix("std::string::").unwrap_or(name);
@@ -126,23 +131,23 @@ fn base(ty: &Type, value_enum: bool) -> Option<Base> {
 }
 
 /// `None` means the type is unsupported.
-pub fn classify(ty: &Type, value_enum: bool) -> Option<Shape> {
+pub fn classify(ty: &Type, value_enum: bool, from_str: bool) -> Option<Shape> {
     if let Some((wrapper, inner)) = wrapped(ty) {
         match wrapper.as_str() {
             "Option" => {
-                return match base(inner, value_enum)? {
+                return match base(inner, value_enum, from_str)? {
                     Base::Bool => Some(Shape::TriState),
                     b => Some(Shape::Optional(b)),
                 }
             }
             "Vec" => {
-                return match base(inner, value_enum)? {
+                return match base(inner, value_enum, from_str)? {
                     Base::Bool | Base::Input | Base::SecretFile => None,
                     b => Some(Shape::Repeated(b)),
                 }
             }
             "Patch" => {
-                return match base(inner, value_enum)? {
+                return match base(inner, value_enum, from_str)? {
                     Base::Bool | Base::Json | Base::Input | Base::SecretFile => None,
                     b => Some(Shape::Patch(b)),
                 }
@@ -153,7 +158,7 @@ pub fn classify(ty: &Type, value_enum: bool) -> Option<Shape> {
             _ => return None,
         }
     }
-    match base(ty, value_enum)? {
+    match base(ty, value_enum, from_str)? {
         Base::Bool => Some(Shape::Switch),
         b => Some(Shape::Plain(b)),
     }

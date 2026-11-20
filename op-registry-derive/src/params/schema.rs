@@ -16,7 +16,7 @@ fn json_path() -> TokenStream {
 fn base_schema(base: &Base) -> TokenStream {
     let json = json_path();
     match base {
-        Base::String | Base::Path | Base::Ref | Base::SecretFile => {
+        Base::String | Base::Path | Base::Ref | Base::SecretFile | Base::FromStr(_) => {
             quote!(#json::json!({"type": "string"}))
         }
         Base::Int { signed: true, .. } => quote!(#json::json!({"type": "integer"})),
@@ -34,6 +34,20 @@ fn base_schema(base: &Base) -> TokenStream {
     }
 }
 
+/// A string field's base schema, with its `sample` as `examples`.
+fn sampled(f: &Field, base: &Base) -> TokenStream {
+    let json = json_path();
+    let schema = base_schema(base);
+    match &f.sample {
+        Some(sample) => quote!({
+            let mut schema = #schema;
+            schema["examples"] = #json::Value::Array(::std::vec![#json::Value::String(::std::string::String::from(#sample))]);
+            schema
+        }),
+        None => schema,
+    }
+}
+
 fn shape_schema(f: &Field) -> TokenStream {
     let json = json_path();
     match &f.shape {
@@ -48,15 +62,15 @@ fn shape_schema(f: &Field) -> TokenStream {
                 },
             ]}))
         }
-        Shape::Plain(b) | Shape::Optional(b) => base_schema(b),
+        Shape::Plain(b) | Shape::Optional(b) => sampled(f, b),
         Shape::Patch(b) => {
-            let base = base_schema(b);
+            let base = sampled(f, b);
             quote!(::op_registry::__private::rt::nullable(#base))
         }
         Shape::Flatten(_) => unreachable!("flattened groups have no property"),
         Shape::Repeated(b) => {
-            let item = base_schema(b);
-            quote!(#json::json!({"type": "array", "items": #item}))
+            let item = sampled(f, b);
+            quote!(#json::json!({"type": "array", "items": (#item)}))
         }
         Shape::Switch | Shape::TriState => quote!(#json::json!({"type": "boolean"})),
         Shape::Map => match &f.keys {
@@ -81,7 +95,8 @@ fn default_schema(f: &Field) -> TokenStream {
     let (Some(e), Shape::Plain(base)) = (&f.default, &f.shape) else {
         return quote!();
     };
-    if f.secret {
+    // A `from_str` default is a `T` with no `Display` or `Serialize` bound.
+    if f.secret || matches!(base, Base::FromStr(_)) {
         return quote!();
     }
     let value = match base {

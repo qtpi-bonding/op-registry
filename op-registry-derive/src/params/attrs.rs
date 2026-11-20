@@ -18,6 +18,10 @@ pub struct Field {
     /// A closed key set for map fields.
     pub keys: Option<Vec<String>>,
     pub secret: bool,
+    /// `#[op(sample = "..")]`: the `examples[0]` of a string field's schema.
+    pub sample: Option<String>,
+    /// `#[op(value_enum, ignore_case)]`.
+    pub ignore_case: bool,
     /// A `SecretFile` that also takes `{"inline": base64}` on JSON paths.
     pub secret_inline: bool,
     /// `(group, optional)` from `one_of` / `one_of_optional`.
@@ -92,6 +96,9 @@ impl Field {
         let mut value_enum = false;
         let mut keys = None;
         let mut secret = false;
+        let mut from_str = false;
+        let mut sample: Option<String> = None;
+        let mut ignore_case = false;
         let mut secret_inline = false;
         let mut one_of: Option<(String, bool)> = None;
         let mut requires_if: Vec<ScopeName> = Vec::new();
@@ -114,6 +121,9 @@ impl Field {
                     "default" => default = Some(m.value()?.parse::<Expr>()?),
                     "value_enum" => value_enum = true,
                     "secret" => secret = true,
+                    "from_str" => from_str = true,
+                    "ignore_case" => ignore_case = true,
+                    "sample" => sample = Some(m.value()?.parse::<syn::LitStr>()?.value()),
                     "secret_inline" => secret_inline = true,
                     "clearable" => clearable = true,
                     "flatten" => flatten = true,
@@ -198,6 +208,9 @@ impl Field {
                     || secret_inline
                     || default.is_some()
                     || value_enum
+                    || from_str
+                    || ignore_case
+                    || sample.is_some()
                     || keys.is_some()
                     || clearable
                     || one_of.is_some()
@@ -213,7 +226,37 @@ impl Field {
                 scope.unwrap_or_default(),
             );
         }
-        let shape = classify(&f.ty, value_enum).ok_or_else(|| {
+        let err_on = |msg: &str| {
+            Err(syn::Error::new_spanned(
+                &f.ty,
+                format!("field `{rust_name}`: {msg}"),
+            ))
+        };
+        if ignore_case && !value_enum {
+            return err_on("ignore_case needs value_enum");
+        }
+        if from_str {
+            if value_enum {
+                return err_on("from_str and value_enum are exclusive");
+            }
+            let builtin_bad = |b: &Base| {
+                matches!(
+                    b,
+                    Base::Ref | Base::Json | Base::Input | Base::SecretFile | Base::Bool
+                )
+            };
+            let bad = match classify(&f.ty, false, false) {
+                Some(Shape::Switch | Shape::TriState) => true,
+                Some(
+                    Shape::Plain(b) | Shape::Optional(b) | Shape::Repeated(b) | Shape::Patch(b),
+                ) => builtin_bad(&b),
+                _ => false,
+            };
+            if bad {
+                return err_on("from_str does not apply to Ref, Json, Input, SecretFile or bool");
+            }
+        }
+        let shape = classify(&f.ty, value_enum, from_str).ok_or_else(|| {
             let ty = &f.ty;
             syn::Error::new_spanned(
                 ty,
@@ -223,6 +266,19 @@ impl Field {
                 ),
             )
         })?;
+        if from_str && matches!(shape, Shape::Patch(_) | Shape::Map) {
+            return err_on("from_str applies to a plain value, Option or Vec");
+        }
+        if sample.is_some() {
+            let string_valued = matches!(
+                &shape,
+                Shape::Plain(b) | Shape::Optional(b) | Shape::Repeated(b) | Shape::Patch(b)
+                    if matches!(b, Base::String | Base::Path | Base::Ref | Base::FromStr(_))
+            );
+            if !string_valued {
+                return err_on("sample applies only to a string-valued field");
+            }
+        }
         if matches!(shape, Shape::Patch(_)) != clearable {
             return Err(syn::Error::new_spanned(
                 &f.ty,
@@ -336,6 +392,8 @@ impl Field {
             default,
             keys,
             secret,
+            sample,
+            ignore_case,
             secret_inline,
             one_of,
             requires_if,
@@ -378,6 +436,8 @@ impl Field {
             default: None,
             keys: None,
             secret: false,
+            sample: None,
+            ignore_case: false,
             secret_inline: false,
             one_of: None,
             requires_if: Vec::new(),
@@ -565,7 +625,7 @@ impl Field {
         let e = self.default.as_ref()?;
         let name = &self.rust_name;
         Some(match &self.shape {
-            Shape::Plain(Base::Enum(ty)) => quote!({ let d: #ty = #e; d }),
+            Shape::Plain(Base::Enum(ty) | Base::FromStr(ty)) => quote!({ let d: #ty = #e; d }),
             Shape::Plain(b) => {
                 let ty = b.ty();
                 quote!(::op_registry::__private::rt::default_of::<#ty>(#name, &(#e)))

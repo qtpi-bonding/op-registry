@@ -50,4 +50,10 @@ fn op_params_compile_failures() {
         "tests/params_ui/op_params_non_subject_scope_names_ref_is_a_compile_error.rs",
     );
     tests.compile_fail("tests/params_ui/op_params_patch_ref_subject_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_from_str_with_value_enum_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_from_str_on_ref_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_sample_on_non_string_is_a_compile_error.rs");
+    tests.compile_fail(
+        "tests/params_ui/op_params_ignore_case_without_value_enum_is_a_compile_error.rs",
+    );
 }

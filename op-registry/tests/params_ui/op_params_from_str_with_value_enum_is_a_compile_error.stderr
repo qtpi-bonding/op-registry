@@ -1,0 +1,5 @@
+error: field `x`: from_str and value_enum are exclusive
+  --> tests/params_ui/op_params_from_str_with_value_enum_is_a_compile_error.rs:12:8
+   |
+12 |     x: Mode,
+   |        ^^^^

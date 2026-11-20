@@ -1,0 +1,5 @@
+error: field `x`: from_str does not apply to Ref, Json, Input, SecretFile or bool
+ --> tests/params_ui/op_params_from_str_on_ref_is_a_compile_error.rs:6:8
+  |
+6 |     x: Ref,
+  |        ^^^

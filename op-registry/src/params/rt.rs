@@ -61,8 +61,25 @@ pub fn default_of<T: DeserializeOwned>(rust_name: &str, value: impl serde::Seria
         .unwrap_or_else(|e| panic!("op-registry: default of `{rust_name}` has the wrong type: {e}"))
 }
 
-pub fn enum_value<T: ValueEnum>(key: &str, name: &str) -> Result<T> {
-    T::from_str(name, false).map_err(|_| invalid(key, format!("`{name}` is not a valid value")))
+pub fn enum_value<T: ValueEnum>(key: &str, name: &str, ignore_case: bool) -> Result<T> {
+    T::from_str(name, ignore_case)
+        .map_err(|_| invalid(key, format!("`{name}` is not a valid value")))
+}
+
+/// A `from_str` value: the text through `T::from_str`. A `secret` field says
+/// only `invalid value`, since a parser's message may quote its input.
+pub fn from_str_arg<T>(key: &str, text: &str, hide: bool) -> Result<T>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    T::from_str(text).map_err(|e| {
+        if hide {
+            invalid(key, "invalid value")
+        } else {
+            invalid(key, e)
+        }
+    })
 }
 
 pub fn enum_name<T: ValueEnum>(value: &T) -> String {
@@ -148,11 +165,15 @@ pub fn patch<T: DeserializeOwned>(object: &Map<String, Value>, key: &str) -> Res
 }
 
 /// A clearable enum key, decoded through its value names.
-pub fn patch_enum<T: ValueEnum>(object: &Map<String, Value>, key: &str) -> Result<Patch<T>> {
+pub fn patch_enum<T: ValueEnum>(
+    object: &Map<String, Value>,
+    key: &str,
+    ignore_case: bool,
+) -> Result<Patch<T>> {
     Ok(match patch::<String>(object, key)? {
         Patch::Keep => Patch::Keep,
         Patch::Clear => Patch::Clear,
-        Patch::Set(name) => Patch::Set(enum_value(key, &name)?),
+        Patch::Set(name) => Patch::Set(enum_value(key, &name, ignore_case)?),
     })
 }
 

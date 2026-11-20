@@ -9,6 +9,7 @@ use super::types::{Base, Shape};
 fn decode(f: &Field) -> TokenStream {
     let rt = quote!(::op_registry::__private::rt);
     let key = &f.key;
+    let ignore_case = f.ignore_case;
     // One optional scalar of a base type; an enum goes through its names.
     let get = |b: &Base| match b {
         Base::SecretFile => {
@@ -17,9 +18,17 @@ fn decode(f: &Field) -> TokenStream {
         }
         Base::Enum(ty) => quote! {
             #rt::get::<::std::string::String>(&o, #key)?
-                .map(|s| #rt::enum_value::<#ty>(#key, &s))
+                .map(|s| #rt::enum_value::<#ty>(#key, &s, #ignore_case))
                 .transpose()?
         },
+        Base::FromStr(ty) => {
+            let hide = f.secret;
+            quote! {
+                #rt::get::<::std::string::String>(&o, #key)?
+                    .map(|s| #rt::from_str_arg::<#ty>(#key, &s, #hide))
+                    .transpose()?
+            }
+        }
         b => {
             let ty = b.ty();
             quote!(#rt::get::<#ty>(&o, #key)?)
@@ -32,7 +41,7 @@ fn decode(f: &Field) -> TokenStream {
                 _cx,
             )?
         },
-        Shape::Patch(Base::Enum(ty)) => quote!(#rt::patch_enum::<#ty>(&o, #key)?),
+        Shape::Patch(Base::Enum(ty)) => quote!(#rt::patch_enum::<#ty>(&o, #key, #ignore_case)?),
         Shape::Patch(b) => {
             let ty = b.ty();
             quote!(#rt::patch::<#ty>(&o, #key)?)
@@ -49,9 +58,19 @@ fn decode(f: &Field) -> TokenStream {
             #rt::get::<::std::vec::Vec<::std::string::String>>(&o, #key)?
                 .unwrap_or_default()
                 .iter()
-                .map(|s| #rt::enum_value::<#ty>(#key, s))
+                .map(|s| #rt::enum_value::<#ty>(#key, s, #ignore_case))
                 .collect::<::std::result::Result<::std::vec::Vec<_>, _>>()?
         },
+        Shape::Repeated(Base::FromStr(ty)) => {
+            let hide = f.secret;
+            quote! {
+                #rt::get::<::std::vec::Vec<::std::string::String>>(&o, #key)?
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|s| #rt::from_str_arg::<#ty>(#key, s, #hide))
+                    .collect::<::op_registry::__private::anyhow::Result<::std::vec::Vec<_>>>()?
+            }
+        }
         Shape::Repeated(b) => {
             let ty = b.ty();
             quote!(#rt::get::<::std::vec::Vec<#ty>>(&o, #key)?.unwrap_or_default())

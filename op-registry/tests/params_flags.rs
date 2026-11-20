@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use clap::{error::ErrorKind, Command, ValueEnum};
-use op_registry::{FieldKind, OpParams, ParseCx};
+use op_registry::{FieldKind, OpGlobals, OpParams, ParseCx};
 use serde_json::json;
+use std::net::SocketAddr;
+use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
 enum Mode {
@@ -233,4 +235,278 @@ fn only_short_flag_is_h() {
             arg.get_id()
         );
     }
+}
+
+// ---- PAR-6 from_str, sample; PAR-8 ignore_case ----
+
+#[derive(Clone, Debug, PartialEq)]
+struct Grant {
+    scope: String,
+    level: String,
+}
+
+impl FromStr for Grant {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        let (scope, level) = s
+            .split_once(':')
+            .ok_or_else(|| format!("grant `{s}` is not scope:level"))?;
+        Ok(Grant {
+            scope: scope.to_owned(),
+            level: level.to_owned(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PrincipalId(String);
+
+impl FromStr for PrincipalId {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        s.strip_prefix("p-")
+            .map(|rest| PrincipalId(rest.to_owned()))
+            .ok_or_else(|| "a principal id starts with p-".to_owned())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, OpParams)]
+struct Typed {
+    #[op(from_str, sample = "127.0.0.1:7000")]
+    addr: SocketAddr,
+    #[op(from_str)]
+    peer: Option<SocketAddr>,
+    #[op(from_str)]
+    grants: Vec<Grant>,
+    #[op(from_str, default = 8080)]
+    port: u16,
+}
+
+fn typed_cli(args: &[&str]) -> anyhow::Result<Typed> {
+    let mut argv = vec!["t"];
+    argv.extend_from_slice(args);
+    let matches = Typed::add_args(Command::new("t"))
+        .try_get_matches_from(argv)
+        .unwrap();
+    Typed::from_matches(&matches, &mut ParseCx::default())
+}
+
+#[test]
+fn socket_addr_from_str_cli_and_json() {
+    let cli = typed_cli(&["--addr", "127.0.0.1:7000", "--peer", "[::1]:9"]).unwrap();
+    assert_eq!(cli.addr, "127.0.0.1:7000".parse().unwrap());
+    assert_eq!(cli.peer, Some("[::1]:9".parse().unwrap()));
+    assert_eq!(cli.port, 8080);
+    let json = Typed::from_json(
+        json!({"addr": "127.0.0.1:7000", "peer": "[::1]:9"}),
+        &mut ParseCx::default(),
+    )
+    .unwrap();
+    assert_eq!(json, cli);
+    let fields = Typed::fields();
+    assert_eq!(fields[0].kind, FieldKind::Scalar);
+    assert_eq!(fields[1].kind, FieldKind::Scalar);
+    assert_eq!(fields[2].kind, FieldKind::Repeated);
+    let schema = Typed::input_schema();
+    assert_eq!(schema["properties"]["addr"]["type"], "string");
+    assert_eq!(schema["properties"]["peer"]["type"], "string");
+    assert_eq!(schema["properties"]["grants"]["items"]["type"], "string");
+}
+
+#[test]
+fn vec_of_custom_grant_from_str() {
+    let cli = typed_cli(&[
+        "--addr",
+        "127.0.0.1:1",
+        "--grants",
+        "rooms:read",
+        "--grants",
+        "mail:write",
+    ])
+    .unwrap();
+    let want = vec![
+        Grant {
+            scope: "rooms".into(),
+            level: "read".into(),
+        },
+        Grant {
+            scope: "mail".into(),
+            level: "write".into(),
+        },
+    ];
+    assert_eq!(cli.grants, want);
+    let json = Typed::from_json(
+        json!({"addr": "127.0.0.1:1", "grants": ["rooms:read", "mail:write"]}),
+        &mut ParseCx::default(),
+    )
+    .unwrap();
+    assert_eq!(json.grants, want);
+}
+
+#[derive(Debug, OpGlobals)]
+struct Globals {
+    #[op(from_str, env = "T_PRINCIPAL_UNSET")]
+    principal: Option<PrincipalId>,
+}
+
+#[test]
+fn global_principal_id_from_str() {
+    let cmd = Globals::add_args(Command::new("t"));
+    let m = cmd
+        .clone()
+        .try_get_matches_from(["t", "--principal", "p-42"])
+        .unwrap();
+    assert_eq!(
+        Globals::from_matches(&m).unwrap().principal,
+        Some(PrincipalId("42".into()))
+    );
+    let m = cmd
+        .try_get_matches_from(["t", "--principal", "bob"])
+        .unwrap();
+    let err = Globals::from_matches(&m).unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(&err).code,
+        "op_registry.usage.invalid"
+    );
+    assert!(
+        err.to_string().contains("a principal id starts with p-"),
+        "{err}"
+    );
+}
+
+#[test]
+fn bad_from_str_is_exit_2_with_parser_message() {
+    let err = typed_cli(&["--addr", "nonsense"]).unwrap_err();
+    let facts = coded_error::facts_anyhow(&err);
+    assert_eq!(facts.code, "op_registry.usage.invalid");
+    let text = err.to_string();
+    assert!(text.contains("addr"), "{text}");
+    assert!(text.contains("invalid socket address"), "{text}");
+
+    let err = typed_cli(&["--addr", "127.0.0.1:1", "--grants", "nocolon"]).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("grant `nocolon` is not scope:level"));
+
+    let err = Typed::from_json(json!({"addr": "nonsense"}), &mut ParseCx::default()).unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(&err).code,
+        "op_registry.usage.invalid"
+    );
+    let text = err.to_string();
+    assert!(
+        text.contains("addr") && text.contains("invalid socket address"),
+        "{text}"
+    );
+}
+
+#[derive(Debug, OpParams)]
+struct SecretPin {
+    #[op(secret, from_str)]
+    pin: u32,
+}
+
+#[test]
+fn secret_from_str_failure_says_invalid_value() {
+    let matches = SecretPin::add_args(Command::new("t"))
+        .try_get_matches_from(["t", "--pin", "hunter2-not-a-number"])
+        .unwrap();
+    let err = SecretPin::from_matches(&matches, &mut ParseCx::default()).unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains("invalid value"), "{text}");
+    assert!(!text.contains("hunter2"), "{text}");
+    let err = SecretPin::from_json(
+        json!({"pin": "hunter2-not-a-number"}),
+        &mut ParseCx::default(),
+    )
+    .unwrap_err();
+    let text = err.to_string();
+    assert!(
+        text.contains("invalid value") && !text.contains("hunter2"),
+        "{text}"
+    );
+}
+
+#[derive(Debug, OpParams)]
+#[allow(dead_code)]
+struct Sampled {
+    #[op(sample = "agent-1")]
+    agent: String,
+    #[op(sample = "/tmp/x")]
+    path: Option<PathBuf>,
+    #[op(sample = "a")]
+    names: Vec<String>,
+}
+
+#[test]
+fn sample_puts_examples_in_schema() {
+    let schema = Sampled::input_schema();
+    assert_eq!(
+        schema["properties"]["agent"]["examples"],
+        json!(["agent-1"])
+    );
+    assert_eq!(schema["properties"]["path"]["examples"], json!(["/tmp/x"]));
+    assert_eq!(
+        schema["properties"]["names"]["items"]["examples"],
+        json!(["a"])
+    );
+    let typed = Typed::input_schema();
+    assert_eq!(
+        typed["properties"]["addr"]["examples"],
+        json!(["127.0.0.1:7000"])
+    );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
+enum Status {
+    Open,
+    #[value(alias = "in_progress")]
+    InProgress,
+}
+
+#[derive(Debug, PartialEq, OpParams)]
+struct Filter {
+    #[op(value_enum, ignore_case)]
+    status: Status,
+    #[op(value_enum, ignore_case)]
+    more: Vec<Status>,
+}
+
+#[test]
+fn ignore_case_status_cli_and_json() {
+    for text in ["IN_PROGRESS", "In-Progress", "in-progress"] {
+        let matches = Filter::add_args(Command::new("t"))
+            .try_get_matches_from(["t", "--status", text, "--more", "OPEN"])
+            .unwrap();
+        let f = Filter::from_matches(&matches, &mut ParseCx::default()).unwrap();
+        assert_eq!(f.status, Status::InProgress, "{text}");
+        assert_eq!(f.more, vec![Status::Open]);
+    }
+    for text in ["IN_PROGRESS", "In-Progress"] {
+        let f = Filter::from_json(
+            json!({"status": text, "more": ["OPEN", "In-Progress"]}),
+            &mut ParseCx::default(),
+        )
+        .unwrap();
+        assert_eq!(f.status, Status::InProgress);
+        assert_eq!(f.more, vec![Status::Open, Status::InProgress]);
+    }
+    let schema = Filter::input_schema();
+    assert_eq!(
+        schema["properties"]["status"]["enum"],
+        json!(["open", "in-progress"])
+    );
+}
+
+#[test]
+fn without_ignore_case_the_names_stay_exact() {
+    let err = Params::from_json(
+        json!({"agentId": "a", "mode": "FAST"}),
+        &mut ParseCx::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(&err).code,
+        "op_registry.usage.invalid"
+    );
 }
