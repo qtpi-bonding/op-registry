@@ -3,7 +3,7 @@
 use clap::Command;
 use futures_util::future::BoxFuture;
 use op_registry::{
-    CallOptions, Op, OpParams, OpSpec, ParseCx, Ref, Registry, Resolve, Resolved, Scope,
+    CallOptions, Op, OpParams, OpSpec, ParseCx, Ref, Registry, Resolve, Resolved, Scope, UsageError,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -694,4 +694,429 @@ fn subject_field_meta_names_kind() {
         .unwrap()
         .subject
         .is_none());
+}
+
+// ---- Optional subjects, `absent_ok` subjects, `Resolve::check_id` ----
+
+#[derive(Debug, OpParams)]
+struct OptSubject {
+    #[op(subject = "build", scope = ["blueprint"])]
+    id: Option<Ref>,
+    #[op(kind = "blueprint")]
+    blueprint: Option<Ref>,
+}
+
+#[derive(Debug, OpParams)]
+struct IdOrAction {
+    #[op(subject = "build", one_of = "target")]
+    id: Option<Ref>,
+    #[op(one_of = "target")]
+    action: Option<String>,
+}
+
+#[derive(Debug, OpParams)]
+struct AbsentOk {
+    #[op(subject = "agent", absent_ok)]
+    id: Ref,
+}
+
+#[derive(Debug, OpParams)]
+struct AbsentOkOpt {
+    #[op(subject = "agent", absent_ok)]
+    id: Option<Ref>,
+}
+
+#[derive(Debug, OpParams)]
+struct AbsentOkIdOnly {
+    #[op(subject = "agent", absent_ok, id_only)]
+    id: Ref,
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct OptSeen {
+    id: Option<String>,
+    raw: bool,
+    action: Option<String>,
+}
+
+fn opt_seen(id: &Option<Ref>, action: Option<String>) -> OptSeen {
+    OptSeen {
+        id: id.as_ref().map(|r| r.id().to_owned()),
+        raw: id
+            .as_ref()
+            .is_some_and(|r| matches!(r.resolved(), Resolved::Raw(_))),
+        action,
+    }
+}
+
+/// A context whose `check_id` rejects ids with a space and records every call.
+#[derive(Default)]
+struct CheckCtx {
+    checked: Mutex<Vec<(String, String)>>,
+}
+
+impl Resolve for CheckCtx {
+    fn resolve<'a>(
+        &'a self,
+        _kind: &'a str,
+        _r: &'a Ref,
+        _scope: &'a Scope,
+    ) -> BoxFuture<'a, anyhow::Result<Resolved>> {
+        Box::pin(async { panic!("the resolver must not be called") })
+    }
+
+    fn check_id(&self, kind: &str, raw: &str) -> Result<(), UsageError> {
+        self.checked
+            .lock()
+            .unwrap()
+            .push((kind.to_owned(), raw.to_owned()));
+        if raw.contains(' ') {
+            return Err(UsageError::InvalidField {
+                name: "id".to_owned(),
+                reason: format!("`{raw}` is not a {kind} id"),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(op_registry::OpGlobals)]
+struct NoGlobals {}
+
+impl op_registry::CliContext for CheckCtx {
+    type Globals = NoGlobals;
+    fn from_globals(_: &NoGlobals) -> anyhow::Result<Self> {
+        Ok(CheckCtx::default())
+    }
+}
+
+struct AbsentOkOp;
+impl Op for AbsentOkOp {
+    type Ctx = CheckCtx;
+    type Params = AbsentOk;
+    type Output = Seen;
+    const NAME: &'static str = "absent";
+}
+
+fn opt_registry() -> Registry<Ctx> {
+    let mut r: Registry<Ctx> = Registry::new();
+    r.push_op(
+        OpSpec::<OptSubject, OptSeen>::new("opt", "Optional subject."),
+        |_c: &Ctx, p: OptSubject, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<OptSeen>> {
+            Box::pin(async move { Ok(opt_seen(&p.id, None)) })
+        },
+    );
+    r.push_op(
+        OpSpec::<IdOrAction, OptSeen>::new("pick", "Id or action."),
+        |_c: &Ctx, p: IdOrAction, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<OptSeen>> {
+            Box::pin(async move { Ok(opt_seen(&p.id, p.action)) })
+        },
+    );
+    r.push_op(
+        OpSpec::<AbsentOk, Seen>::new("absent", "Absent ok."),
+        |_c: &Ctx, p: AbsentOk, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Seen>> {
+            Box::pin(async move { Ok(seen(&p.id)) })
+        },
+    );
+    r.push_op(
+        OpSpec::<AbsentOkOpt, OptSeen>::new("absent_opt", "Absent ok, optional."),
+        |_c: &Ctx, p: AbsentOkOpt, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<OptSeen>> {
+            Box::pin(async move { Ok(opt_seen(&p.id, None)) })
+        },
+    );
+    r.push_op(
+        OpSpec::<AbsentOkIdOnly, Seen>::new("absent_id_only", "Absent ok and id only."),
+        |_c: &Ctx, p: AbsentOkIdOnly, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Seen>> {
+            Box::pin(async move { Ok(seen(&p.id)) })
+        },
+    );
+    r
+}
+
+fn panicking() -> Ctx {
+    Ctx {
+        panic_on_resolve: true,
+        ..Ctx::default()
+    }
+}
+
+#[tokio::test]
+async fn optional_subject_absent_is_none_without_resolver() {
+    let fields = OptSubject::fields();
+    let id = fields.iter().find(|f| f.key == "id").unwrap();
+    assert_eq!(id.flag, "id");
+    assert!(!id.required);
+    assert!(id.subject.is_some());
+    let r = opt_registry();
+    // JSON
+    let out = r
+        .call("opt", json!({}), &panicking(), CallOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(out, json!({"id": null, "raw": false, "action": null}));
+    // CLI parse, then typed
+    let m = OptSubject::add_args(Command::new("t"))
+        .try_get_matches_from(["t"])
+        .unwrap();
+    let p = OptSubject::from_matches(&m, &mut ParseCx::default()).unwrap();
+    assert!(p.id.is_none());
+    // The schema does not require `id`.
+    let schema = r.get("opt").unwrap().input_schema.clone();
+    assert!(
+        !schema["required"]
+            .as_array()
+            .is_some_and(|a| a.contains(&json!("id"))),
+        "{schema}"
+    );
+}
+
+#[tokio::test]
+async fn optional_subject_present_resolved_with_scope() {
+    let r = opt_registry();
+    let ctx = Ctx::default();
+    let out = r
+        .call(
+            "opt",
+            json!({"id": "nightly", "blueprint": "Blue"}),
+            &ctx,
+            CallOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out, json!({"id": "b1", "raw": false, "action": null}));
+    assert_eq!(*ctx.seen_scope.lock().unwrap(), [Some("bp".to_owned())]);
+    // `--id` on the CLI
+    let m = OptSubject::add_args(Command::new("t"))
+        .try_get_matches_from(["t", "--id", "x"])
+        .unwrap();
+    let p = OptSubject::from_matches(&m, &mut ParseCx::default()).unwrap();
+    assert_eq!(p.id.as_ref().unwrap().as_raw(), "x");
+    // The subject without its optional scope member: no `blueprint` key.
+    let ctx = Ctx::default();
+    r.call("opt", json!({"id": "b1"}), &ctx, CallOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(*ctx.seen_scope.lock().unwrap(), [None]);
+}
+
+#[tokio::test]
+async fn one_of_over_id_and_action() {
+    let r = opt_registry();
+    let ctx = Ctx::default();
+    let go = |args| r.call("pick", args, &ctx, CallOptions::default());
+    let out = go(json!({"id": "b1"})).await.unwrap();
+    assert_eq!(out["id"], "b1");
+    let out = go(json!({"action": "stop"})).await.unwrap();
+    assert_eq!(out, json!({"id": null, "raw": false, "action": "stop"}));
+    for bad in [json!({}), json!({"id": "b1", "action": "stop"})] {
+        let err = go(bad).await.unwrap_err();
+        assert_eq!(code(err.error()), "op_registry.usage.one_of");
+    }
+    let fields = IdOrAction::fields();
+    assert!(fields.iter().all(|f| !f.required));
+    let cmd = IdOrAction::add_args(Command::new("t"));
+    assert!(cmd
+        .clone()
+        .try_get_matches_from(["t", "--id", "b1"])
+        .is_ok());
+    assert!(cmd
+        .clone()
+        .try_get_matches_from(["t", "--id", "b1", "--action", "x"])
+        .is_err());
+}
+
+#[tokio::test]
+async fn absent_ok_subject_never_resolved() {
+    let r = opt_registry();
+    let fields = AbsentOk::fields();
+    assert_eq!(
+        fields[0].subject,
+        Some(op_registry::SubjectMeta::new("agent").absent_ok(true))
+    );
+    // JSON
+    let out = r
+        .call(
+            "absent",
+            json!({"id": "brand-new"}),
+            &panicking(),
+            CallOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out, json!({"id": "brand-new", "raw": false}));
+    // typed
+    let out = r
+        .call_typed::<AbsentOkOpAny>(
+            &panicking(),
+            AbsentOk {
+                id: Ref::new("brand-new"),
+            },
+            CallOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.id, "brand-new");
+    // the optional form: absent is None, present passes through
+    let out = r
+        .call(
+            "absent_opt",
+            json!({}),
+            &panicking(),
+            CallOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out["id"], json!(null));
+    let out = r
+        .call(
+            "absent_opt",
+            json!({"id": "x1"}),
+            &panicking(),
+            CallOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out["id"], "x1");
+}
+
+struct AbsentOkOpAny;
+impl Op for AbsentOkOpAny {
+    type Ctx = Ctx;
+    type Params = AbsentOk;
+    type Output = Seen;
+    const NAME: &'static str = "absent";
+}
+
+#[tokio::test]
+async fn absent_ok_with_id_only_allowed() {
+    let fields = AbsentOkIdOnly::fields();
+    let s = fields[0].subject.as_ref().unwrap();
+    assert_eq!(
+        (s.kind.as_str(), s.id_only, s.absent_ok),
+        ("agent", true, true)
+    );
+    let r = opt_registry();
+    let out = r
+        .call(
+            "absent_id_only",
+            json!({"id": "z-1"}),
+            &panicking(),
+            CallOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out, json!({"id": "z-1", "raw": false}));
+}
+
+fn check_registry() -> Registry<CheckCtx> {
+    let mut r: Registry<CheckCtx> = Registry::new();
+    r.set_pillar("fix");
+    r.set_bin("app", "1.0.0", "A test app.");
+    r.push_op(
+        OpSpec::<AbsentOk, Seen>::new("absent", "Absent ok."),
+        |_c: &CheckCtx, p: AbsentOk, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Seen>> {
+            Box::pin(async move { Ok(seen(&p.id)) })
+        },
+    );
+    r.push_op(
+        OpSpec::<IdOnly, Seen>::new("idonly", "Id only."),
+        |_c: &CheckCtx, p: IdOnly, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Seen>> {
+            Box::pin(async move { Ok(seen(&p.id)) })
+        },
+    );
+    r.push_op(
+        OpSpec::<AbsentOkIdOnly, Seen>::new("both", "Both."),
+        |_c: &CheckCtx,
+         p: AbsentOkIdOnly,
+         _o: CallOptions|
+         -> BoxFuture<'_, anyhow::Result<Seen>> {
+            Box::pin(async move { Ok(seen(&p.id)) })
+        },
+    );
+    r
+}
+
+#[tokio::test]
+async fn check_id_runs_for_absent_ok_and_id_only() {
+    let r = check_registry();
+    let ctx = CheckCtx::default();
+    for op in ["absent", "idonly", "both"] {
+        r.call(op, json!({"id": "a-1"}), &ctx, CallOptions::default())
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        *ctx.checked.lock().unwrap(),
+        [
+            ("agent".to_owned(), "a-1".to_owned()),
+            ("agent".to_owned(), "a-1".to_owned()),
+            ("agent".to_owned(), "a-1".to_owned()),
+        ]
+    );
+    // A resolved subject is not checked, and a server kind is not checked.
+    let mut server = check_registry();
+    server.resolve_server("agent");
+    let ctx = CheckCtx::default();
+    server
+        .call("idonly", json!({"id": "s 1"}), &ctx, CallOptions::default())
+        .await
+        .unwrap();
+    assert!(ctx.checked.lock().unwrap().is_empty());
+    // The default `check_id` accepts anything.
+    assert!(Plain.check_id("agent", "anything at all").is_ok());
+}
+
+#[tokio::test]
+async fn malformed_id_is_usage_invalid_every_surface() {
+    use op_registry::cli::{self, Io, NoHooks};
+    use op_registry::{mcp, Audience};
+    let r = check_registry();
+    let ctx = CheckCtx::default();
+    // JSON
+    let err = r
+        .call(
+            "absent",
+            json!({"id": "bad id"}),
+            &ctx,
+            CallOptions::default(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(code(err.error()), "op_registry.usage.invalid");
+    // typed
+    let err = r
+        .call_typed::<AbsentOkOp>(
+            &ctx,
+            AbsentOk {
+                id: Ref::new("bad id"),
+            },
+            CallOptions::default(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(code(&err), "op_registry.usage.invalid");
+    // MCP
+    let err = mcp::call_tool(
+        &r,
+        &ctx,
+        Audience::Agent,
+        "idonly",
+        json!({"id": "bad id"}),
+        CallOptions::default(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(code(err.error()), "op_registry.usage.invalid");
+    // CLI: exit 2 for a malformed id, 0 for a well-formed one
+    let run = |id: &str| {
+        let argv: Vec<std::ffi::OsString> = ["app", "absent", "--id", id]
+            .iter()
+            .map(std::ffi::OsString::from)
+            .collect();
+        let (io, _cap) = Io::memory(b"", false, false);
+        futures_executor::block_on(cli::run_with_io(&check_registry(), argv, &NoHooks, io))
+    };
+    assert_eq!(run("bad id"), 2);
+    assert_eq!(run("good-id"), 0);
 }

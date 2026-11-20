@@ -54,7 +54,7 @@ pub fn ref_slots_fn(fields: &[Field]) -> TokenStream {
             }
             continue;
         };
-        let (kind, subject, id_only) = (&r.kind, r.subject, r.id_only);
+        let (kind, subject, id_only, absent_ok) = (&r.kind, r.subject, r.id_only, r.absent_ok);
         let scope = if r.subject {
             let expr = scope_expr(&r.scope);
             subject_scope = quote!(let scope = #expr;);
@@ -68,6 +68,7 @@ pub fn ref_slots_fn(fields: &[Field]) -> TokenStream {
                     kind: #kind,
                     subject: #subject,
                     id_only: #id_only,
+                    absent_ok: #absent_ok,
                     scope: #scope.clone(),
                     slot: #target,
                 }

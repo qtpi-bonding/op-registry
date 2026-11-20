@@ -118,6 +118,16 @@ pub trait Resolve: Send + Sync {
         let _ = (r, scope);
         Box::pin(async move { Err(anyhow::anyhow!("context has no resolver for kind `{kind}`")) })
     }
+
+    /// Checks the shape of an id that skips resolution (an `id_only` or
+    /// `absent_ok` subject or ref) before the op runs, on every surface.
+    ///
+    /// An `Err` is a usage error (exit 2 on the CLI). Server-resolved kinds are
+    /// not checked. The default accepts any id.
+    fn check_id(&self, kind: &str, raw: &str) -> Result<(), crate::UsageError> {
+        let _ = (kind, raw);
+        Ok(())
+    }
 }
 
 /// One ref of a parameter struct, as the derive hands it to the pipeline.
@@ -128,6 +138,9 @@ pub struct RefSlot<'a> {
     pub subject: bool,
     /// Whether the slot takes ids only and skips name resolution.
     pub id_only: bool,
+    /// Whether the subject may name an object that does not exist yet: never
+    /// resolved, the id passes through.
+    pub absent_ok: bool,
     /// The sibling values the resolver may need.
     pub scope: Scope,
     /// The ref to fill.

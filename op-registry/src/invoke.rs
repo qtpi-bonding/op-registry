@@ -291,12 +291,16 @@ impl<C: Resolve> Registry<C> {
         let RefSlot {
             kind,
             id_only,
+            absent_ok,
             scope,
             slot,
             ..
         } = slot;
         let raw = slot.as_raw().to_owned();
-        let resolved = if id_only {
+        let resolved = if id_only || absent_ok {
+            if !self.server_kinds.contains(kind) {
+                ctx.check_id(kind, &raw).map_err(crate::usage)?;
+            }
             Resolved::Id(raw)
         } else if self.server_kinds.contains(kind) {
             Resolved::Raw(raw)

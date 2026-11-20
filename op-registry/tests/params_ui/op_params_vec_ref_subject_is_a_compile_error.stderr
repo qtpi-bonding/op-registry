@@ -1,0 +1,5 @@
+error: field `id`: the subject is one `Ref` or `Option<Ref>`
+ --> tests/params_ui/op_params_vec_ref_subject_is_a_compile_error.rs:6:9
+  |
+6 |     id: Vec<Ref>,
+  |         ^^^^^^^^

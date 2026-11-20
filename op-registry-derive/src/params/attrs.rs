@@ -71,6 +71,7 @@ pub struct RefInfo {
     pub kind: String,
     pub subject: bool,
     pub id_only: bool,
+    pub absent_ok: bool,
     pub scope: Vec<ScopeName>,
 }
 
@@ -103,6 +104,7 @@ impl Field {
         let mut subject: Option<String> = None;
         let mut kind: Option<String> = None;
         let mut id_only = false;
+        let mut absent_ok = false;
         let mut scope: Option<Vec<ScopeName>> = None;
         let mut env: Option<String> = None;
         for attr in f.attrs.iter().filter(|a| a.path().is_ident("op")) {
@@ -116,6 +118,7 @@ impl Field {
                     "clearable" => clearable = true,
                     "flatten" => flatten = true,
                     "id_only" => id_only = true,
+                    "absent_ok" => absent_ok = true,
                     "subject" => subject = Some(m.value()?.parse::<syn::LitStr>()?.value()),
                     "kind" => kind = Some(m.value()?.parse::<syn::LitStr>()?.value()),
                     "scope" => {
@@ -205,7 +208,8 @@ impl Field {
                     || !required_unless.is_empty()
                     || subject.is_some()
                     || kind.is_some()
-                    || id_only,
+                    || id_only
+                    || absent_ok,
                 scope.unwrap_or_default(),
             );
         }
@@ -250,6 +254,7 @@ impl Field {
             subject,
             kind,
             id_only,
+            absent_ok,
             scope,
             default.is_some(),
         )?;
@@ -441,6 +446,7 @@ fn ref_info(
     subject: Option<String>,
     kind: Option<String>,
     id_only: bool,
+    absent_ok: bool,
     scope: Option<Vec<ScopeName>>,
     has_default: bool,
 ) -> syn::Result<Option<RefInfo>> {
@@ -454,6 +460,9 @@ fn ref_info(
             format!("field `{rust_name}`: {msg}"),
         ))
     };
+    if absent_ok && !(is_ref && subject.is_some()) {
+        return err("`absent_ok` applies only to the subject".into());
+    }
     if !is_ref {
         if subject.is_some() || kind.is_some() || id_only || scope.is_some() {
             return err("subject, kind, id_only and scope apply only to a `Ref` field".into());
@@ -469,13 +478,14 @@ fn ref_info(
             err("a `Ref` field needs `#[op(subject = \"..\")]` or `#[op(kind = \"..\")]`".into())
         }
         (Some(kind), None) => {
-            if !matches!(shape, Shape::Plain(_)) {
-                return err("the subject is a plain `Ref`".into());
+            if !matches!(shape, Shape::Plain(_) | Shape::Optional(_)) {
+                return err("the subject is one `Ref` or `Option<Ref>`".into());
             }
             Ok(Some(RefInfo {
                 kind,
                 subject: true,
                 id_only,
+                absent_ok,
                 scope: scope.unwrap_or_default(),
             }))
         }
@@ -487,6 +497,7 @@ fn ref_info(
                 kind,
                 subject: false,
                 id_only: false,
+                absent_ok: false,
                 scope: Vec::new(),
             }))
         }

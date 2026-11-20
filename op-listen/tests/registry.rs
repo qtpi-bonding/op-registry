@@ -8,6 +8,7 @@ use op_registry::testing::assert_parity;
 use op_registry::{
     cli, Audience, CallOptions, Caller, CliContext, Cursor, OpGlobals, OpSpec, Registry,
 };
+use op_registry::{OpParams, Ref};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -136,4 +137,100 @@ async fn kit_listen_op_reaches_body() {
     .await;
     // The kit's caller let the call past `op_listen.no_caller` to the listener.
     assert!(!listener.authorize_calls().is_empty());
+}
+
+#[derive(Clone, Debug, serde::Serialize, OpParams)]
+struct Pick {
+    #[op(subject = "topic", id_only)]
+    id: Option<Ref>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, OpParams)]
+struct PickGroup {
+    #[op(flatten)]
+    pick: Pick,
+    name: Option<String>,
+}
+
+struct PickListener(LogListener);
+
+impl op_listen::Listener<Ctx> for PickListener {
+    type Params = PickGroup;
+    type Snapshot = ();
+    type Item = String;
+
+    fn topic(&self, params: &PickGroup) -> String {
+        params
+            .pick
+            .id
+            .as_ref()
+            .map_or_else(|| "none".to_owned(), |r| r.id().to_owned())
+    }
+    fn epoch(&self) -> u64 {
+        0
+    }
+    fn authorize<'a>(
+        &'a self,
+        ctx: &'a Ctx,
+        caller: &'a Caller,
+        topic: &'a str,
+    ) -> futures_util::future::BoxFuture<'a, anyhow::Result<op_listen::Grant>> {
+        self.0.authorize(ctx, caller, topic)
+    }
+    fn open<'a>(
+        &'a self,
+        ctx: &'a Ctx,
+        _params: PickGroup,
+        cursor: Option<op_listen::ListenCursor>,
+        floor: Option<op_listen::ListenCursor>,
+    ) -> futures_util::future::BoxFuture<'a, anyhow::Result<op_listen::Opened<'a, (), String>>>
+    {
+        self.0.open(ctx, params_topic(), cursor, floor)
+    }
+}
+
+fn params_topic() -> TopicParams {
+    params("t")
+}
+
+#[tokio::test]
+async fn listen_entry_with_optional_subject_group() {
+    let listener = Arc::new(PickListener(LogListener::new(vec![(1, "a")])));
+    let mut registry = Registry::new();
+    registry.set_bin("app", "0.0.0", "toy");
+    registry.group("log", "Log.");
+    listen_entry(
+        &mut registry,
+        listener.clone(),
+        OpSpec::new("log pick", "listens to a picked topic"),
+    );
+    let caller = || CallOptions::default().with_caller(Caller("tester".to_owned()));
+    // The optional subject is absent: no slot, the stream opens.
+    let s = registry
+        .call_stream("log_pick", json!({}), &Ctx, caller(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        frames_json(s).await,
+        vec![json!({"frame": "item", "item": "a", "cursor": "0:1"})]
+    );
+    // Present: id_only passes it through to the listener.
+    let s = registry
+        .call_stream("log_pick", json!({"id": "t9"}), &Ctx, caller(), None)
+        .await
+        .unwrap();
+    assert_eq!(frames_json(s).await.len(), 1);
+    assert_eq!(
+        listener.0.authorize_calls(),
+        [
+            ("tester".to_owned(), "none".to_owned()),
+            ("tester".to_owned(), "t9".to_owned())
+        ]
+    );
+    // `--id` is a flag of the leaf, and `id` is not required.
+    let cmd = cli::command(&registry);
+    let argv: Vec<std::ffi::OsString> =
+        ["app", "log", "pick"].into_iter().map(Into::into).collect();
+    assert!(cli::parse(&registry, &argv).ok().is_some());
+    cmd.clone().debug_assert();
 }

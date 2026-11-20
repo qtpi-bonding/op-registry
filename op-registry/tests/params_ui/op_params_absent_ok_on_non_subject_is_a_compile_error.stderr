@@ -1,0 +1,5 @@
+error: field `other`: `absent_ok` applies only to the subject
+ --> tests/params_ui/op_params_absent_ok_on_non_subject_is_a_compile_error.rs:8:12
+  |
+8 |     other: Option<Ref>,
+  |            ^^^^^^^^^^^

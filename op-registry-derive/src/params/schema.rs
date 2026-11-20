@@ -260,8 +260,10 @@ pub fn fields_fn(fields: &[Field]) -> TokenStream {
         let kind = kind_name(f);
         let (required, secret) = (f.required(), f.secret);
         let subject = f.reference.as_ref().filter(|r| r.subject).map(|r| {
-            let (kind, id_only) = (&r.kind, r.id_only);
-            quote!(.with_subject(::op_registry::SubjectMeta::new(#kind).id_only(#id_only)))
+            let (kind, id_only, absent_ok) = (&r.kind, r.id_only, r.absent_ok);
+            quote!(.with_subject(
+                ::op_registry::SubjectMeta::new(#kind).id_only(#id_only).absent_ok(#absent_ok)
+            ))
         });
         let env = f.env.as_ref().map(|var| quote!(.with_env(#var)));
         quote! {
