@@ -17,9 +17,10 @@ pub mod mcp;
 mod notices;
 mod output;
 mod params;
-pub mod parity;
 mod refs;
 mod registry;
+#[cfg(feature = "testing")]
+pub mod testing;
 
 pub use call::CallError;
 pub use call::{CallOptions, Caller, Cursor, Op, TraceParent};

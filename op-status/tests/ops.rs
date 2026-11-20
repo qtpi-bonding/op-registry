@@ -1,7 +1,7 @@
 #![allow(clippy::err_expect, clippy::ok_expect)]
 use futures_util::future::BoxFuture;
 use op_registry::cli::{self, Parsed};
-use op_registry::parity::{assert_parity, cli_surface};
+use op_registry::testing::{assert_parity, Mount};
 use op_registry::{mcp, Audience, CallOptions, OpParams, OpSpec, Registry};
 use op_status::ops::{status_registry, StatusOptions};
 use op_status::{Component, ServiceInfo, State, StatusFilter, StatusSource};
@@ -237,11 +237,13 @@ fn status_registry_merges_into_an_app_registry_and_cli_and_mcp_parity_holds() {
     app.set_bin("app", "0.0.0", "toy app");
     let cmd = cli::command(&app);
     cmd.clone().debug_assert();
-    let surface = cli_surface(&cmd);
     let tools = mcp::tool_list(&app, Audience::Agent);
-    assert_parity(&app, &surface, &tools, &[], &[], Audience::Agent).unwrap();
-    assert!(surface.names.contains("status_get"));
-    assert!(surface.names.contains("system_ping"));
+    let mounts = [Mount {
+        name: "mcp",
+        audience: Audience::Agent,
+        ops: &["system_ping", "status_get"],
+    }];
+    assert_parity(&app, &mounts);
     assert!(tools.iter().any(|t| t.name == "status_get"));
 
     // CLI flags --kind --limit select the op; its JSON call matches MCP.

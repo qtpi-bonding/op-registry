@@ -4,7 +4,7 @@ mod common;
 use common::*;
 use op_listen::listen_entry;
 use op_registry::mcp;
-use op_registry::parity::cli_surface;
+use op_registry::testing::assert_parity;
 use op_registry::{cli, Audience, CallOptions, Caller, CliContext, Cursor, OpGlobals, OpSpec, Registry};
 use serde_json::json;
 use std::sync::Arc;
@@ -67,7 +67,7 @@ fn listen_entry_is_a_cli_only_streaming_op_and_absent_from_the_tool_list() {
     }
 
     let cmd = cli::command(&registry);
-    assert!(cli_surface(&cmd).names.contains("log_listen"));
+    assert_parity(&registry, &[]);
     cmd.clone().debug_assert();
     // The listen leaf resumes from a cursor, so it takes `--cursor`.
     let argv: Vec<std::ffi::OsString> = ["app", "log", "listen", "--topic", "t", "--cursor", "0:2"]

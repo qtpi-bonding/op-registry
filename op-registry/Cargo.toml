@@ -35,3 +35,7 @@ tokio = { workspace = true, features = ["rt", "time", "macros", "io-util"] }
 rmcp = { workspace = true, features = ["server", "client"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"] }
+
+[[test]]
+name = "testing_kit"
+required-features = ["testing"]

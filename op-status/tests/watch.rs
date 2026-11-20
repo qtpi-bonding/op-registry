@@ -10,7 +10,7 @@ use op_listen::{
     follow, listen_stream, Caller, FollowOptions, ListenCursor, Listener, Opened, OverflowPolicy,
 };
 use op_registry::cli::{self, Parsed};
-use op_registry::parity::{assert_parity, cli_surface};
+use op_registry::testing::{assert_parity, Mount};
 use op_registry::{mcp, Audience};
 use op_status::ops::{status_registry, GetParams, StatusOptions};
 use op_status::{open_status, Component, StatusFilter, StatusListener, WATCH_BUFFER};
@@ -287,9 +287,12 @@ fn status_watch_is_a_cli_only_stream_entry_and_parity_holds() {
     reg.set_bin("app", "0.0.0", "toy app");
     let cmd = cli::command(&reg);
     cmd.clone().debug_assert();
-    let surface = cli_surface(&cmd);
-    assert!(surface.names.contains("status_watch"));
-    assert_parity(&reg, &surface, &tools, &[], &[], Audience::Agent).unwrap();
+    let mounts = [Mount {
+        name: "mcp",
+        audience: Audience::Agent,
+        ops: &["status_get", "status_watch"],
+    }];
+    assert_parity(&reg, &mounts);
     let argv: Vec<std::ffi::OsString> =
         ["app", "status", "watch", "--kind", "room", "--limit", "2"]
             .into_iter()

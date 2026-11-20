@@ -26,7 +26,7 @@ schemars = { workspace = true, optional = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
 futures-executor = { workspace = true }
-op-registry = { path = "../op-registry", version = "0.3.0" }
+op-registry = { path = "../op-registry", version = "0.3.0", features = ["testing"] }
 clap = { workspace = true }
 schemars = { workspace = true }
 
