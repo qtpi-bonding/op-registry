@@ -308,7 +308,6 @@ pub struct ManualParams {
 
 /// What the `manual` op returns.
 #[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum ManualOutput {
     /// The manual, when neither `--out` nor `--json` was given.
@@ -317,6 +316,23 @@ pub enum ManualOutput {
     Written { written: PathBuf },
     /// The JSON form.
     Json(Value),
+}
+
+/// All three variants are objects at run time, so the schema says so; the
+/// derived one would leave the `Json` variant without a type.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ManualOutput {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ManualOutput".into()
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "title": "ManualOutput",
+            "description": "What the `manual` op returns.",
+            "type": "object"
+        })
+    }
 }
 
 impl RenderText for ManualOutput {

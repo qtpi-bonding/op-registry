@@ -1,6 +1,7 @@
 //! `assert_help_complete`: every visible op, group and flag is documented.
 
 use super::fail_on;
+use crate::shape::mark_object_root;
 use crate::{CliContext, Descriptor, OpKind, Registry};
 use clap::Command;
 use serde_json::Value;
@@ -151,7 +152,13 @@ fn warnings<C: Sync>(registry: &Registry<C>) -> Vec<String> {
             g.verb() == "get" && g.noun_path() == d.noun_path() && g.kind != OpKind::ListPage
         });
         let Some(get) = get else { continue };
-        let single = get.output_schema.as_ref().map(|s| inline(s, s, 0));
+        // Both sides are marked the same way: `get`'s schema already is, and
+        // an item taken from the list's array is marked as a root here.
+        let single = get.output_schema.as_ref().map(|s| {
+            let mut single = inline(s, s, 0);
+            mark_object_root(&mut single);
+            single
+        });
         if let (Some(items), Some(single)) = (item_schema(d), single) {
             if items != single {
                 warnings.push(format!(
@@ -167,11 +174,14 @@ fn warnings<C: Sync>(registry: &Registry<C>) -> Vec<String> {
 /// The item schema of a list op's wrapped array output, with references inlined.
 fn item_schema(d: &Descriptor) -> Option<Value> {
     let root = d.output_schema.as_ref()?;
-    Some(inline(root.pointer("/properties/items/items")?, root, 0))
+    let mut item = inline(root.pointer("/properties/items/items")?, root, 0);
+    mark_object_root(&mut item);
+    Some(item)
 }
 
 /// Replaces every `$ref` with its target in `root`, and drops the keys that
-/// differ between a root schema and a definition (`$schema`, `title`, `$defs`).
+/// differ between a root schema and a definition (`$schema`, `title`, `$defs`,
+/// `definitions`).
 fn inline(schema: &Value, root: &Value, depth: usize) -> Value {
     match schema {
         Value::Object(object) => {
@@ -185,7 +195,9 @@ fn inline(schema: &Value, root: &Value, depth: usize) -> Value {
             }
             object
                 .iter()
-                .filter(|(key, _)| !matches!(key.as_str(), "$schema" | "title" | "$defs"))
+                .filter(|(key, _)| {
+                    !matches!(key.as_str(), "$schema" | "title" | "$defs" | "definitions")
+                })
                 .map(|(key, value)| (key.clone(), inline(value, root, depth + 1)))
                 .collect()
         }

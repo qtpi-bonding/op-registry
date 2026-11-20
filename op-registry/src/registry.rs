@@ -545,11 +545,13 @@ impl<C: Resolve + 'static> Registry<C> {
             cursor: spec.cursor,
             input_schema: P::input_schema(),
             output_schema: <O as OutputSchema>::output_schema().map(|schema| {
-                if kind == OpKind::Stream {
+                let mut schema = if kind == OpKind::Stream {
                     schema
                 } else {
                     crate::shape::wrap_array_schema(schema)
-                }
+                };
+                crate::shape::mark_object_root(&mut schema);
+                schema
             }),
             list_pair: None,
             unpaged: spec.unpaged,

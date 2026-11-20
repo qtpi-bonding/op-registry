@@ -527,3 +527,101 @@ fn list_halves_share_audiences() {
         assert!(owner.contains(&d.name));
     }
 }
+
+// OUT-2: object roots for either-or outputs.
+
+#[cfg(feature = "schema")]
+#[allow(dead_code)]
+mod object_roots {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, Serialize, schemars::JsonSchema)]
+    #[serde(tag = "kind", rename_all = "camelCase")]
+    enum Tagged {
+        Alpha { size: u32 },
+        Beta { label: String },
+    }
+
+    #[derive(Clone, Debug, PartialEq, Serialize, schemars::JsonSchema)]
+    struct Left {
+        left: u32,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Serialize, schemars::JsonSchema)]
+    struct Right {
+        right: String,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Serialize, schemars::JsonSchema)]
+    #[serde(untagged)]
+    enum Newtypes {
+        Left(Left),
+        Right(Right),
+    }
+
+    fn schema_of<O: Serialize + op_registry::OutputSchema + Send + 'static>(
+        run: for<'a> fn(&'a Ctx, Plain, CallOptions) -> BoxFuture<'a, anyhow::Result<O>>,
+    ) -> Option<Value> {
+        let mut r: Registry<Ctx> = Registry::new();
+        r.push_op(OpSpec::<Plain, O>::new("probe", "Probes."), run);
+        tool_list(&r, Audience::Agent).remove(0).output_schema
+    }
+
+    fn tagged(_c: &Ctx, _p: Plain, _o: CallOptions) -> BoxFuture<'_, anyhow::Result<Tagged>> {
+        Box::pin(async { Ok(Tagged::Alpha { size: 1 }) })
+    }
+
+    fn newtypes(_c: &Ctx, _p: Plain, _o: CallOptions) -> BoxFuture<'_, anyhow::Result<Newtypes>> {
+        Box::pin(async { Ok(Newtypes::Right(Right { right: "r".into() })) })
+    }
+
+    fn number(_c: &Ctx, _p: Plain, _o: CallOptions) -> BoxFuture<'_, anyhow::Result<u32>> {
+        Box::pin(async { Ok(7) })
+    }
+
+    fn any_value(_c: &Ctx, _p: Plain, _o: CallOptions) -> BoxFuture<'_, anyhow::Result<Value>> {
+        Box::pin(async { Ok(json!({"a": 1})) })
+    }
+
+    #[test]
+    fn tagged_enum_schema_root_is_object() {
+        let schema = schema_of(tagged).expect("an output schema");
+        assert_eq!(schema["type"], "object", "{schema}");
+        assert!(schema.get("oneOf").is_some(), "{schema}");
+    }
+
+    #[test]
+    fn ref_newtype_variants_classed_object() {
+        let schema = schema_of(newtypes).expect("an output schema");
+        assert_eq!(schema["type"], "object", "{schema}");
+        let branches = schema["anyOf"].as_array().expect("anyOf branches");
+        assert!(branches.iter().all(|b| b.get("$ref").is_some()), "{schema}");
+    }
+
+    #[test]
+    fn u32_output_has_no_output_schema() {
+        assert_eq!(schema_of(number), None);
+    }
+
+    #[test]
+    fn value_output_has_no_output_schema() {
+        assert_eq!(schema_of(any_value), None);
+    }
+
+    #[tokio::test]
+    async fn tagged_enum_value_is_an_object() {
+        let mut r: Registry<Ctx> = Registry::new();
+        r.push_op(OpSpec::<Plain, Tagged>::new("probe", "Probes."), tagged);
+        let out = call_tool(
+            &r,
+            &Ctx,
+            Audience::Agent,
+            "probe",
+            json!({}),
+            CallOptions::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, json!({"kind": "alpha", "size": 1}));
+    }
+}

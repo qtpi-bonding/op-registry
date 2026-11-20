@@ -512,3 +512,16 @@ fn manual_json_has_audiences() {
     assert_eq!(op["audiences"], serde_json::json!(["agent", "owner"]));
     assert_eq!(op["audience"], "agent");
 }
+
+#[cfg(feature = "schema")]
+#[test]
+fn manual_op_schema_root_is_object() {
+    let r = with_manual();
+    let schema = r.get("manual").unwrap().output_schema.as_ref().unwrap();
+    assert_eq!(schema["type"], "object", "{schema}");
+    let tool = tool_list(&r, Audience::Agent)
+        .into_iter()
+        .find(|t| t.name == "manual")
+        .expect("the manual tool");
+    assert!(tool.output_schema.is_some());
+}

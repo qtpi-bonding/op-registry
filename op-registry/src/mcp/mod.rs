@@ -1,5 +1,6 @@
 //! Plain-data MCP adapters for a registry: tool specs and tool calls.
 
+use crate::shape::{root_class, RootClass};
 use crate::{
     Audience, CallError, CallFailure, CallOptions, CallPath, OpKind, Registry, Resolve, Surface,
 };
@@ -32,7 +33,7 @@ pub struct ToolAnnotations {
 /// Lists the tools of an audience, in registry order: every op that
 /// belongs to that audience (its primary or an extra one), is not hidden, is
 /// not a stream and whose paths contain `mcp`. Both halves of a list pair are
-/// tools.
+/// tools. `output_schema` is set only when the output root is an object.
 pub fn tool_list<C: Sync>(registry: &Registry<C>, audience: Audience) -> Vec<ToolSpec> {
     registry
         .descriptors()
@@ -51,7 +52,10 @@ pub fn tool_list<C: Sync>(registry: &Registry<C>, audience: Audience) -> Vec<Too
                 format!("{}\n\n{}", d.summary, d.long_help)
             },
             input_schema: d.input_schema.clone(),
-            output_schema: d.output_schema.clone(),
+            output_schema: d
+                .output_schema
+                .clone()
+                .filter(|schema| root_class(schema) == RootClass::Object),
             annotations: ToolAnnotations {
                 read_only_hint: d.access.reads && !d.access.writes && !d.access.destructive,
                 destructive_hint: d.access.destructive,

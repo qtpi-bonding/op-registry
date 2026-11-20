@@ -335,3 +335,91 @@ async fn new_server_unchanged() {
         assert_eq!(r.structured_content, Some(json!({"greetedHost": "7"})));
     }
 }
+
+// OUT-2: structured content only for objects.
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum Tagged {
+    Alpha { size: u32 },
+}
+
+fn tagged(_c: &Ctx, _p: Echo, _o: CallOptions) -> BoxFuture<'_, anyhow::Result<Tagged>> {
+    Box::pin(async { Ok(Tagged::Alpha { size: 1 }) })
+}
+
+fn number(_c: &Ctx, _p: Echo, _o: CallOptions) -> BoxFuture<'_, anyhow::Result<u32>> {
+    Box::pin(async { Ok(7) })
+}
+
+fn any_object(_c: &Ctx, _p: Echo, _o: CallOptions) -> BoxFuture<'_, anyhow::Result<Value>> {
+    Box::pin(async { Ok(json!({"a": 1})) })
+}
+
+fn any_scalar(_c: &Ctx, _p: Echo, _o: CallOptions) -> BoxFuture<'_, anyhow::Result<Value>> {
+    Box::pin(async { Ok(json!("plain")) })
+}
+
+async fn connect_shapes() -> RunningService<RoleClient, Client> {
+    let mut r: Registry<Ctx> = Registry::new();
+    r.push_op(OpSpec::<Echo, Tagged>::new("tagged", "Tagged."), tagged);
+    r.push_op(OpSpec::<Echo, u32>::new("number", "Number."), number);
+    r.push_op(OpSpec::<Echo, Value>::new("any_object", "Any."), any_object);
+    r.push_op(OpSpec::<Echo, Value>::new("any_scalar", "Any."), any_scalar);
+    let (a, b) = tokio::io::duplex(64 * 1024);
+    let server = RegistryServer::new(
+        Arc::new(r),
+        Arc::new(Ctx),
+        Audience::Agent,
+        Implementation::new("test-server", "0.0.1"),
+    );
+    tokio::spawn(async move {
+        let running = server.serve(a).await.unwrap();
+        let _ = running.waiting().await;
+    });
+    Client::default().serve(b).await.unwrap()
+}
+
+#[tokio::test]
+async fn tagged_enum_output_has_object_root_and_structured_content() {
+    let c = connect_shapes().await;
+    #[cfg(feature = "schema")]
+    {
+        let tools = c.list_all_tools().await.unwrap();
+        let tool = tools.iter().find(|t| t.name == "tagged").unwrap();
+        let schema = tool.output_schema.as_ref().expect("an output schema");
+        assert_eq!(schema["type"], "object");
+    }
+    let r = call(&c, "tagged", json!({}), None).await;
+    assert_eq!(
+        r.structured_content,
+        Some(json!({"kind": "alpha", "size": 1}))
+    );
+}
+
+#[tokio::test]
+async fn u32_output_has_no_output_schema_and_text_content() {
+    let c = connect_shapes().await;
+    let tools = c.list_all_tools().await.unwrap();
+    let tool = tools.iter().find(|t| t.name == "number").unwrap();
+    assert!(tool.output_schema.is_none());
+    let r = call(&c, "number", json!({}), None).await;
+    assert_ne!(r.is_error, Some(true));
+    assert_eq!(r.structured_content, None);
+    assert_eq!(r.content.len(), 1);
+    assert_eq!(r.content[0].as_text().unwrap().text, "7");
+}
+
+#[tokio::test]
+async fn value_output_no_schema_structured_when_object() {
+    let c = connect_shapes().await;
+    let tools = c.list_all_tools().await.unwrap();
+    let tool = tools.iter().find(|t| t.name == "any_object").unwrap();
+    assert!(tool.output_schema.is_none());
+    let r = call(&c, "any_object", json!({}), None).await;
+    assert_eq!(r.structured_content, Some(json!({"a": 1})));
+    let r = call(&c, "any_scalar", json!({}), None).await;
+    assert_eq!(r.structured_content, None);
+    assert_eq!(r.content[0].as_text().unwrap().text, "\"plain\"");
+}

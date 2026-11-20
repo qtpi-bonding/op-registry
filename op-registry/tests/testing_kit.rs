@@ -447,7 +447,10 @@ fn list_get_warning_fires_when_items_differ() {
     let list = r.get("thing_list").unwrap();
     let schema = list.output_schema.as_ref().unwrap();
     assert_eq!(schema["type"], "object", "{schema}");
-    assert!(schema.pointer("/properties/items/items").is_some(), "{schema}");
+    assert!(
+        schema.pointer("/properties/items/items").is_some(),
+        "{schema}"
+    );
     let warnings = assert_help_complete(&r, &rules());
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(warnings[0].contains("thing_list items differ from the output of thing_get"));
@@ -457,8 +460,16 @@ fn list_get_warning_fires_when_items_differ() {
 fn list_get_warning_quiet_when_items_match() {
     // The fixture's `concept get` and `concept list` share `Item`.
     let r = fixture();
-    let schema = r.get("concept_list").unwrap().output_schema.clone().unwrap();
-    assert!(schema.pointer("/properties/items/items").is_some(), "{schema}");
+    let schema = r
+        .get("concept_list")
+        .unwrap()
+        .output_schema
+        .clone()
+        .unwrap();
+    assert!(
+        schema.pointer("/properties/items/items").is_some(),
+        "{schema}"
+    );
     assert!(assert_help_complete(&r, &rules()).is_empty());
 }
 
@@ -1506,4 +1517,52 @@ mod kit_surfaces {
         futures_executor::block_on(assert_unknown_ref_not_found(&r, &Ctx, &[]));
         assert!(ran(&hook).iter().all(|c| c.0 != "tool_op"));
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct Cat {
+    lives: u32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct Dog {
+    bones: u32,
+}
+
+/// An untagged either-or output whose branches are `$ref`s.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+enum Pet {
+    Cat(Cat),
+    Dog(Dog),
+}
+
+fn pet_get(_c: &Ctx, _p: Get, _o: CallOptions) -> BoxFuture<'_, anyhow::Result<Pet>> {
+    Box::pin(async { Ok(Pet::Cat(Cat { lives: 9 })) })
+}
+
+fn pet_page(_c: &Ctx, _p: Filter, _r: PageRequest) -> BoxFuture<'_, anyhow::Result<Page<Pet>>> {
+    Box::pin(async {
+        Ok(Page {
+            items: vec![],
+            next_cursor: None,
+        })
+    })
+}
+
+#[test]
+fn tagged_enum_list_get_no_spurious_warning() {
+    let mut r = Registry::<Ctx>::new();
+    r.set_pillar("fix");
+    r.group("pet", "Pets.");
+    r.push_op(OpSpec::<Get, Pet>::new("pet get", "Show a pet."), pet_get);
+    r.push_list(
+        OpSpec::<Filter, Pet>::new("pet list", "List pets."),
+        pet_page,
+    );
+    let warnings = assert_help_complete(&r, &rules());
+    assert!(warnings.is_empty(), "{warnings:?}");
 }

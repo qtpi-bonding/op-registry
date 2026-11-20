@@ -3,7 +3,7 @@
 use super::{call_tool, tool_error, tool_list, ToolSpec};
 use crate::{Audience, CallOptions, Notice, NoticeSink, Notices, Registry, Resolve, TraceParent};
 use ::rmcp::model::{
-    CallToolRequestParams, CallToolResult, Implementation, ListToolsResult, LoggingLevel,
+    CallToolRequestParams, CallToolResult, Content, Implementation, ListToolsResult, LoggingLevel,
     LoggingMessageNotificationParam, Meta, PaginatedRequestParams, ProgressNotificationParam,
     ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
 };
@@ -218,7 +218,9 @@ impl<C: Resolve + Send + Sync + 'static> ServerHandler for RegistryServer<C> {
 
         Ok(match result {
             // `structured` also adds the compact JSON as the text block.
-            Ok(value) => CallToolResult::structured(value),
+            Ok(value @ Value::Object(_)) => CallToolResult::structured(value),
+            // Structured content is for objects only.
+            Ok(value) => CallToolResult::success(vec![Content::text(value.to_string())]),
             Err(error) => {
                 let failure = tool_error(&error, "mcp", "internal error");
                 CallToolResult::structured_error(json!({"error": {
