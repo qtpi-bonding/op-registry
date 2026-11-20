@@ -395,8 +395,14 @@ caller can downcast them. episutra's bridge uses it in place of calling
 `Operation::run`. JSON paths (`call`, `call_tool`, a REST mount) go through
 the same entry after decoding. Taken from: catuskoti review; gp's parity rule.
 
-An op may be `paths: [typed]` (in-process only). Every other op is reachable
-on every path; parity checks it (section 9).
+An op may be `paths: [typed]` (in-process only). An op may also be
+`paths: [cli]` with a required `reason: "..."`: it is on the CLI and the typed
+path and never on MCP, `call`, `call_tool` or any JSON or REST mount, and
+those paths return the same coded `wrong_path` error. It is for ops that act
+with an owner key or sign (gp 2026-11-20); nothing else. op-registry has no
+auth concept: the marker is generic and the policy is this paragraph. Every
+other op is reachable on every path (archegraph `mutation run` stays on MCP);
+parity checks it (section 9).
 
 ### 4.5 Notices and progress
 
@@ -606,7 +612,7 @@ ship. The resolver makes this hold for every op with a subject.
 
 | Test | Checks | Taken from |
 |---|---|---|
-| `assert_parity` | every op is on every path unless `paths: [typed]`; MCP, CLI, typed and declared mounts agree; extras and streams have reasons; list pairs match | v1, archegraph, gp's parity rule |
+| `assert_parity` | every op is on every path unless `paths: [typed]` or `paths: [cli]` (a CLI-only op must be on the CLI and in no tool list or mount; the report names it CLI-only with its reason); MCP, CLI, typed and declared mounts agree; extras and streams have reasons; list pairs match | v1, archegraph, gp's parity rule |
 | `assert_help_complete` | every op, group and flag has help; one wording per flag; no banned paths or words | grorg, archegraph, gait |
 | `assert_manual_snapshot` | the checked-in manual equals a fresh render | archegraph |
 | `assert_exit_table` | the table, declared exits and codes are in the manual; exits in 3..=63 | archegraph |

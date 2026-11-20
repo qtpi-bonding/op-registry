@@ -32,6 +32,14 @@ pub struct ParityLine {
 /// Reasons an op may be absent from a surface without it being a problem.
 const ALLOWED: [&str; 3] = ["stream", "typed only", "not an op"];
 
+/// The prefix of the reason a CLI-only op is absent from MCP; the declared
+/// reason follows it.
+const CLI_ONLY: &str = "cli only: ";
+
+fn allowed(reason: &str) -> bool {
+    ALLOWED.contains(&reason) || reason.starts_with(CLI_ONLY)
+}
+
 fn reachable(name: &str, path: &str) -> ParityLine {
     ParityLine {
         name: name.to_owned(),
@@ -114,6 +122,28 @@ fn analyse<C: CliContext>(
             }
             continue;
         }
+        if d.paths == Paths::CliOnly {
+            lines.push(match on_cli {
+                Some(_) => reachable(&d.name, "cli"),
+                None => absent(
+                    &d.name,
+                    "cli",
+                    &format!("no command at `{}`", d.path.join(" ")),
+                ),
+            });
+            lines.push(absent(
+                &d.name,
+                "mcp",
+                &format!("{CLI_ONLY}{}", d.cli_only_reason),
+            ));
+            if on_mcp {
+                problems.push(format!("cli-only op {} is on MCP", d.name));
+            }
+            for mount in mounts.iter().filter(|m| m.ops.contains(&d.name.as_str())) {
+                problems.push(format!("cli-only op {} is in mount {}", d.name, mount.name));
+            }
+            continue;
+        }
         lines.push(match on_cli {
             Some(_) => reachable(&d.name, "cli"),
             None => absent(
@@ -174,7 +204,9 @@ pub fn parity_report<C: CliContext>(
 /// Checks that every op that is not `TypedOnly` is on the CLI at its path, in
 /// `tool_list` (a stream or a hidden op excepted; a hidden op must still be
 /// callable) and in every mount of its audience; that no `TypedOnly` op is on
-/// a surface; and that every mount name is an op.
+/// a surface; that a `CliOnly` op is on the CLI and in no `tool_list` or mount
+/// (the report names it as CLI-only with its reason); and that every mount
+/// name is an op.
 ///
 /// # Panics
 ///
@@ -184,7 +216,7 @@ pub fn assert_parity<C: CliContext>(registry: &Registry<C>, mounts: &[Mount<'_>]
     let mut problems: Vec<String> = lines
         .iter()
         .filter_map(|line| match &line.reach {
-            Reach::Absent { reason } if !ALLOWED.contains(&reason.as_str()) => {
+            Reach::Absent { reason } if !allowed(reason) => {
                 Some(format!("{} on {}: {reason}", line.name, line.path))
             }
             _ => None,

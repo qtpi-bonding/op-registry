@@ -30,17 +30,14 @@ pub struct ToolAnnotations {
 }
 
 /// Lists the tools of an audience, in registry order: every op of that
-/// audience that is not hidden, not a stream and not typed-only. Both halves
+/// audience that is not hidden, not a stream and not typed-only or CLI-only. Both halves
 /// of a list pair are tools.
 pub fn tool_list<C: Sync>(registry: &Registry<C>, audience: Audience) -> Vec<ToolSpec> {
     registry
         .descriptors()
         .into_iter()
         .filter(|d| {
-            d.audience == audience
-                && !d.hidden
-                && d.kind != OpKind::Stream
-                && d.paths != Paths::TypedOnly
+            d.audience == audience && !d.hidden && d.kind != OpKind::Stream && d.paths == Paths::All
         })
         .map(|d| ToolSpec {
             name: d.name.clone(),

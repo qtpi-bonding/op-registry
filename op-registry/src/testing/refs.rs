@@ -54,7 +54,7 @@ pub async fn assert_unknown_ref_not_found<C: Resolve>(
 ) {
     let mut problems = Vec::new();
     for d in registry.descriptors() {
-        if d.paths == Paths::TypedOnly || !has_subject(registry, d) {
+        if d.paths != Paths::All || !has_subject(registry, d) {
             continue;
         }
         let mut args = args_for(d, overrides);

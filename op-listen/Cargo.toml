@@ -7,7 +7,7 @@ license.workspace = true
 description = "Shared listener for op-registry: cursors, frames, per-app gates and a reconnecting follower"
 
 [dependencies]
-op-registry = { path = "../op-registry", version = "0.3.0" }
+op-registry = { path = "../op-registry", version = "0.3.1" }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -23,6 +23,6 @@ detach = ["tokio/rt"]
 testkit = ["detach"]
 
 [dev-dependencies]
-op-registry = { path = "../op-registry", version = "0.3.0", features = ["testing"] }
+op-registry = { path = "../op-registry", version = "0.3.1", features = ["testing"] }
 tokio = { workspace = true, features = ["test-util", "rt", "macros", "time"] }
 futures-executor = { workspace = true }

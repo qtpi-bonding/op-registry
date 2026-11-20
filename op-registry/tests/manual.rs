@@ -180,6 +180,19 @@ fn too_many_listed_for_list_ops() {
 }
 
 #[test]
+fn cli_only_op_is_listed_and_marked() {
+    let mut r = fixture();
+    let mut owner = OpSpec::<Filter, Item>::new("concept sign", "Sign it.");
+    owner.paths = Paths::CliOnly;
+    owner.cli_only_reason = "signs with the owner key";
+    r.push_op(owner, nothing::<Filter>);
+    let text = render(&r, &sample_manual()).unwrap();
+    assert!(text.contains("### concordd concept sign"));
+    assert!(text.contains("CLI-only: signs with the owner key"));
+    assert_eq!(text.matches("CLI-only:").count(), 1);
+}
+
+#[test]
 fn hidden_and_typed_only_not_in_manual() {
     let mut r = fixture();
     let mut hidden = OpSpec::<Filter, Item>::new("concept purge", "Purge it.");

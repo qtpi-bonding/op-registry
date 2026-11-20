@@ -118,6 +118,10 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
     if e.typed_only {
         sets.push(quote!(__spec.paths = ::op_registry::Paths::TypedOnly;));
     }
+    if let Some(reason) = &e.cli_only {
+        sets.push(quote!(__spec.paths = ::op_registry::Paths::CliOnly;));
+        sets.push(quote!(__spec.cli_only_reason = #reason;));
+    }
     if let Some(fields) = &e.fields {
         sets.push(quote!(__spec.fields = Some(#fields);));
     }

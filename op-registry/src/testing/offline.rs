@@ -20,7 +20,7 @@ pub async fn assert_local_ops_offline<C: Resolve>(
 ) {
     let mut problems = Vec::new();
     for d in registry.descriptors() {
-        if d.kind != OpKind::Local || d.paths == Paths::TypedOnly {
+        if d.kind != OpKind::Local || d.paths != Paths::All {
             continue;
         }
         let args = args_for(d, overrides);

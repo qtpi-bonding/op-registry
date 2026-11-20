@@ -135,7 +135,10 @@ Entry keys:
   params), `exits: { 3 => "meaning" }` (extra exit codes, 3 to 63), `text: true`
   (the output implements `RenderText` for text output), `hidden: true`,
   `default: true` (runs when the group is named with no verb, at most one per
-  group), `paths: [typed]` (reachable only in process), and, for a `stream:`,
+  group), `paths: [typed]` (reachable only in process), `paths: [cli]` with a required
+  `reason: "..."` (on the CLI and the typed path, never an MCP tool, `call`,
+  `call_tool` or a JSON or REST mount; for ops that act with an owner key or
+  sign, and nothing else; the manual marks it CLI-only), and, for a `stream:`,
   `cursor: true`; for a `list:`, `cap:` and `page_size:`. `unpaged: true` marks a non-list op
   with the verb `list`, so `assert_help_complete` does not warn about it.
 - Header keys: `Ctx`, `globals`, `pillar`, `bin`/`version`/`about` (all three or
@@ -229,7 +232,9 @@ wrong_path}`. `get` and `delete` of a missing object are
   one; the default does nothing.
 - Every call path (CLI, `mcp::call_tool`, `Registry::call`, `call_typed`) runs
   one pipeline: decode, validate, resolve refs, run. An op marked
-  `paths: [typed]` is reachable only in process.
+  `paths: [typed]` is reachable only in process, and one marked `paths: [cli]` is
+  reachable only on the CLI and in process; any other path fails with the coded
+  `op_registry.call.wrong_path`.
 - Redaction: `Registry::call` and `mcp::call_tool` fail with a `CallFailure`.
   Its `Display`, `Debug` and `redacted_message()` have the call's secrets
   replaced by `<secret>`; `error()` and `into_inner()` give the raw error for

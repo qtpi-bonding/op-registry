@@ -138,6 +138,10 @@ pub enum Paths {
     All,
     /// The typed path only.
     TypedOnly,
+    /// The typed and command-line paths, never MCP, `call`, `call_tool` or a
+    /// JSON or REST mount. For ops that act with an owner key or sign; the
+    /// descriptor carries the declared reason (`cli_only_reason`).
+    CliOnly,
 }
 
 /// A documented exit code.
@@ -198,6 +202,8 @@ pub struct Descriptor {
     pub errors: Vec<ErrorCodeEntry>,
     /// Which call paths reach the operation.
     pub paths: Paths,
+    /// Why the op is [`Paths::CliOnly`]; empty for every other op.
+    pub cli_only_reason: String,
     /// Whether the operation accepts a cursor.
     pub cursor: bool,
     /// The input schema.

@@ -17,7 +17,7 @@ enum Node {
     Leaf(usize),
 }
 
-/// Whether an entry is a command of its own: not typed-only, and not the
+/// Whether an entry is a command of its own: not typed-only (a CLI-only op is a command), and not the
 /// paged half of a list pair (the pair is one command).
 pub(crate) fn on_cli<C>(registry: &Registry<C>, index: usize) -> bool {
     let d = &registry.entries[index].descriptor;

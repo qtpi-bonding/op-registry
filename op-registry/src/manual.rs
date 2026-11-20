@@ -4,7 +4,7 @@
 use crate::registry::TypedUnary;
 use crate::{
     cli, Access, Audience, CallError, CallPath, CliContext, Descriptor, ErrorCodeEntry, Op, OpKind,
-    OpParams, OpSpec, Registry, RenderText, Resolve,
+    OpParams, OpSpec, Paths, Registry, RenderText, Resolve,
 };
 use anyhow::{anyhow, Result};
 use coded_error::{CodeCatalog, ErrorClass};
@@ -211,6 +211,9 @@ pub fn render<C: CliContext>(registry: &Registry<C>, manual: &Manual) -> Result<
         let help = command.clone().render_long_help().to_string();
         blocks.push(format!("```text\n{}\n```", help.trim_end()));
         blocks.push(format!("Access: {}", access_words(&d.access)));
+        if d.paths == Paths::CliOnly {
+            blocks.push(format!("CLI-only: {}", d.cli_only_reason));
+        }
         if !d.exits.is_empty() {
             let lines: Vec<String> = d
                 .exits

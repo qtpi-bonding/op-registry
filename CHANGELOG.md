@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.1
+
+Additive. All four crates move to 0.3.1.
+
+- `paths: [cli]` in `ops!` (and `Paths::CliOnly` with `OpSpec::cli_only_reason`
+  on the push API) marks an op that is on the CLI and the typed path and never
+  an MCP tool, a `call` or `call_tool` target, or a JSON or REST mount. A
+  `reason: "..."` is required: a missing one is a compile error in `ops!` and a
+  panic at `push_*`. It is for ops that act with an owner key or sign; every
+  other op stays on every path. The descriptor carries `cli_only_reason`.
+- `assert_parity` accepts a CLI-only op (on the CLI, in no tool list or mount),
+  reports it as `cli only: <reason>` on MCP, and fails if it appears in a mount.
+- The generated manual marks the op `CLI-only: <reason>`.
+
 ## 0.3.0
 
 op-registry v2. All four crates (op-registry, op-registry-derive, op-listen,

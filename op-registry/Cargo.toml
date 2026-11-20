@@ -15,7 +15,7 @@ testing = ["manual"]
 rmcp = ["dep:rmcp", "dep:tokio"]
 
 [dependencies]
-op-registry-derive = { path = "../op-registry-derive", version = "0.3.0" }
+op-registry-derive = { path = "../op-registry-derive", version = "0.3.1" }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -36,4 +36,8 @@ rmcp = { workspace = true, features = ["server", "client"] }
 
 [[test]]
 name = "testing_kit"
+required-features = ["testing"]
+
+[[test]]
+name = "cli_only"
 required-features = ["testing"]

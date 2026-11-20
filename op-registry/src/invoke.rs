@@ -400,9 +400,15 @@ fn json_path(opts: &CallOptions) -> CallPath {
     CallPath::Transport(opts.transport.clone().unwrap_or_else(|| "json".to_owned()))
 }
 
-/// Rejects a `TypedOnly` op on any path but the typed one.
+/// Rejects a `TypedOnly` op on any path but the typed one, and a `CliOnly` op
+/// on any path but the typed and command-line ones.
 fn check_path<C>(entry: &Entry<C>, name: &str, path: &CallPath) -> Result<()> {
-    if entry.descriptor.paths == Paths::TypedOnly && *path != CallPath::Typed {
+    let allowed = match entry.descriptor.paths {
+        Paths::All => true,
+        Paths::TypedOnly => *path == CallPath::Typed,
+        Paths::CliOnly => matches!(path, CallPath::Typed | CallPath::Cli),
+    };
+    if !allowed {
         return Err(coded_error::into_anyhow(CallError::WrongPath {
             name: name.to_owned(),
         }));

@@ -1,0 +1,5 @@
+error: `reason:` goes only with `paths: [cli]`
+  --> tests/ops_ui/ops_reason_without_cli_is_a_compile_error.rs:23:77
+   |
+23 |     "a b" => { params: P, output: O, access: reads, audience: owner, op: f, reason: "no path" },
+   |                                                                             ^^^^^^

@@ -49,6 +49,8 @@ pub struct Entry {
     pub hidden: Option<LitBool>,
     pub default: Option<LitBool>,
     pub typed_only: bool,
+    /// `paths: [cli]` with its `reason:`.
+    pub cli_only: Option<LitStr>,
     pub cursor: Option<LitBool>,
     pub cap: Option<LitInt>,
     pub page_size: Option<LitInt>,
@@ -234,6 +236,9 @@ impl Parse for Entry {
         let mut text_key: Option<Ident> = None;
         let mut default_key: Option<Ident> = None;
         let mut typed_only = false;
+        let mut cli_only: Option<Ident> = None;
+        let mut reason: Option<LitStr> = None;
+        let mut reason_key: Option<Ident> = None;
         let (mut cursor, mut cap, mut page_size, mut unpaged) = (None, None, None, None);
         let mut cursor_key = None;
         let mut list_only: Vec<Ident> = Vec::new();
@@ -340,13 +345,26 @@ impl Parse for Entry {
                     for word in inner.parse_terminated(Ident::parse, Token![,])? {
                         if word == "typed" {
                             typed_only = true;
+                        } else if word == "cli" {
+                            cli_only = Some(word);
                         } else {
                             return Err(syn::Error::new(
                                 word.span(),
-                                "`paths` takes `[typed]` (the typed path only)",
+                                "`paths` takes `[typed]` (the typed path only) or `[cli]` \
+                                 (the command line and the typed path, never a JSON path)",
                             ));
                         }
                     }
+                    if typed_only && cli_only.is_some() {
+                        return Err(syn::Error::new(
+                            key.span(),
+                            "`paths` takes one of `[typed]` or `[cli]`, not both",
+                        ));
+                    }
+                }
+                "reason" => {
+                    reason_key = Some(key.clone());
+                    reason = Some(body.parse::<LitStr>()?);
                 }
                 "cursor" => {
                     cursor_key = Some(key.clone());
@@ -370,7 +388,7 @@ impl Parse for Entry {
                         format!(
                             "unknown key `{other}`: expected params, output, item, op, local, \
                              stream, list, access, audience, errors, fields, exits, text, hidden, \
-                             default, paths, cursor, cap, page_size or unpaged"
+                             default, paths, reason, cursor, cap, page_size or unpaged"
                         ),
                     ))
                 }
@@ -448,6 +466,23 @@ impl Parse for Entry {
                 ));
             }
         }
+        if let Some(word) = &cli_only {
+            match &reason {
+                Some(r) if !r.value().trim().is_empty() => {}
+                _ => {
+                    return Err(syn::Error::new(
+                        word.span(),
+                        "`paths: [cli]` needs a non-empty `reason: \"...\"` (why the op must \
+                         never be offered over MCP or JSON)",
+                    ))
+                }
+            }
+        } else if let Some(key) = reason_key {
+            return Err(syn::Error::new(
+                key.span(),
+                "`reason:` goes only with `paths: [cli]`",
+            ));
+        }
         if let Some(key) = default_key {
             if path.value().split_whitespace().count() < 2 {
                 return Err(syn::Error::new(
@@ -474,6 +509,7 @@ impl Parse for Entry {
             hidden,
             default,
             typed_only,
+            cli_only: cli_only.and(reason),
             cursor,
             cap,
             page_size,
