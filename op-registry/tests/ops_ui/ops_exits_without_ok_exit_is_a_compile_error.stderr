@@ -1,0 +1,11 @@
+error[E0277]: the trait bound `O: OkExit` is not satisfied
+  --> tests/ops_ui/ops_exits_without_ok_exit_is_a_compile_error.rs:25:35
+   |
+25 |     "a b" => { params: P, output: O, access: reads, audience: agent, op: f, exits: { 3 => "x" } },
+   |                                   ^ unsatisfied trait bound
+   |
+help: the trait `OkExit` is not implemented for `O`
+  --> tests/ops_ui/ops_exits_without_ok_exit_is_a_compile_error.rs:14:1
+   |
+14 | pub struct O {
+   | ^^^^^^^^^^^^

@@ -31,8 +31,6 @@ pub struct OpSpec<P, O> {
     pub hidden: bool,
     /// Whether the command runs when its group is named without a verb.
     pub group_default: bool,
-    /// Whether the operation has a text rendering.
-    pub text: bool,
     /// Documented exit codes.
     pub exits: Vec<(u8, &'static str)>,
     /// Error codes the operation may return.
@@ -49,9 +47,9 @@ pub struct OpSpec<P, O> {
     pub unpaged: bool,
     /// Extra `key: value` lines for the text rendering of the parameters.
     pub fields: Option<fn(&P) -> Vec<(&'static str, String)>>,
-    /// The exit code for a successful output (acted on from Task 12).
+    /// The exit code for a successful output; it must be one of `exits`.
     pub ok_exit: Option<fn(&O) -> u8>,
-    /// The text rendering of an output (acted on from Task 12).
+    /// The text rendering of an output; its presence is `Descriptor::text`.
     pub render_text: Option<fn(&O) -> String>,
 }
 
@@ -67,7 +65,6 @@ impl<P, O> OpSpec<P, O> {
             audience: Audience::default(),
             hidden: false,
             group_default: false,
-            text: false,
             exits: Vec::new(),
             errors: Vec::new(),
             paths: Paths::All,
@@ -86,7 +83,7 @@ impl<P, O> OpSpec<P, O> {
     /// The same metadata over other parameter and output types: what a list
     /// pair's two ops share. The output hooks (`ok_exit`, `render_text`) are
     /// typed by `O` and do not carry over, and a list pair has no text
-    /// rendering or extra exits (ruling R12), so `text` and `exits` are cleared.
+    /// rendering or extra exits (ruling R12), so `exits` is cleared.
     pub(crate) fn respec<P2, O2>(
         &self,
         fields: Option<fn(&P2) -> Vec<(&'static str, String)>>,
@@ -99,7 +96,6 @@ impl<P, O> OpSpec<P, O> {
             audience: self.audience,
             hidden: self.hidden,
             group_default: self.group_default,
-            text: false,
             exits: Vec::new(),
             errors: self.errors.clone(),
             paths: self.paths,
@@ -137,8 +133,17 @@ pub(crate) type ResolveRefs<C> =
 pub(crate) type ErasedFields =
     Box<dyn Fn(&(dyn Any + Send)) -> Vec<(&'static str, String)> + Send + Sync>;
 
+/// What a unary run produces: the output as JSON, its raw ok exit code
+/// (checked against the declared exits by the pipeline) and its text.
+pub(crate) struct Ran {
+    pub value: Value,
+    pub exit: u8,
+    pub text: Option<String>,
+}
+
+/// Runs a unary op; the flag asks for the text rendering.
 type UnaryRun<C> = Box<
-    dyn for<'a> Fn(&'a C, Box<dyn Any + Send>, CallOptions) -> BoxFuture<'a, Result<Value>>
+    dyn for<'a> Fn(&'a C, Box<dyn Any + Send>, CallOptions, bool) -> BoxFuture<'a, Result<Ran>>
         + Send
         + Sync,
 >;
@@ -465,7 +470,7 @@ impl<C: Resolve + 'static> Registry<C> {
             kind,
             hidden: spec.hidden,
             group_default: spec.group_default,
-            text: spec.text,
+            text: spec.render_text.is_some(),
             exits: spec
                 .exits
                 .iter()
@@ -513,9 +518,17 @@ impl<C: Resolve + 'static> Registry<C> {
             render_text: spec.render_text,
         };
         let runner = f.clone();
-        let run: UnaryRun<C> = Box::new(move |ctx, params, opts| {
+        let (ok_exit, render_text) = (spec.ok_exit, spec.render_text);
+        let run: UnaryRun<C> = Box::new(move |ctx, params, opts, want_text| {
             let fut = runner(ctx, downcast::<P>(params), opts);
-            Box::pin(async move { serde_json::to_value(fut.await?).map_err(Into::into) })
+            Box::pin(async move {
+                let out = fut.await?;
+                Ok(Ran {
+                    exit: ok_exit.map_or(0, |f| f(&out)),
+                    text: render_text.filter(|_| want_text).map(|f| f(&out)),
+                    value: serde_json::to_value(out)?,
+                })
+            })
         });
         Entry {
             descriptor,

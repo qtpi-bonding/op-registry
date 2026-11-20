@@ -204,29 +204,9 @@ pub async fn dispatch<'a, C: Resolve>(
     } else {
         Ok(CliOutput::Value(
             registry
-                .call_decoded(&descriptor.name, params, ctx, opts, CallPath::Cli)
+                .call_decoded(&descriptor.name, params, ctx, opts, CallPath::Cli, false)
                 .await
                 .result?,
         ))
     }
-}
-
-/// Renders a JSON result without a trailing newline.
-pub fn render(out: &Value, pretty: bool) -> String {
-    if pretty {
-        serde_json::to_string_pretty(out).expect("JSON values are serializable")
-    } else {
-        serde_json::to_string(out).expect("JSON values are serializable")
-    }
-}
-
-/// Maps a coded error to a caller-provided CLI exit code.
-pub fn exit_code_for(err: &anyhow::Error, table: &coded_error::cli::ExitTable) -> u8 {
-    coded_error::cli::exit_code_anyhow_with(err, table)
-}
-
-/// Formats an error with its code and complete display message.
-pub fn error_line(err: &anyhow::Error) -> String {
-    let facts = coded_error::facts_anyhow(err);
-    format!("{}: {err:#}", facts.code)
 }

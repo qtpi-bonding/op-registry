@@ -12,7 +12,10 @@ pub fn expand(ops: &Ops) -> TokenStream {
         let (bin, version, about) = (&b.bin, &b.version, &b.about);
         quote!(__r.set_bin(#bin, #version, #about);)
     });
-    let servers = ops.resolve_server.iter().map(|k| quote!(__r.resolve_server(#k);));
+    let servers = ops
+        .resolve_server
+        .iter()
+        .map(|k| quote!(__r.resolve_server(#k);));
     let groups = ops.groups.iter().map(|(p, s)| quote!(__r.group(#p, #s);));
     let pushes = ops.entries.iter().map(|e| push(ctx, e));
     let markers = ops.entries.iter().enumerate().map(|(i, e)| markers(i, e));
@@ -51,7 +54,11 @@ fn pascal(path: &str, suffix: &str) -> syn::Ident {
         .join("_")
         .replace('-', "_");
     let mut out = String::new();
-    for word in name.split('_').chain(suffix.split('_')).filter(|w| !w.is_empty()) {
+    for word in name
+        .split('_')
+        .chain(suffix.split('_'))
+        .filter(|w| !w.is_empty())
+    {
         let mut chars = word.chars();
         if let Some(first) = chars.next() {
             out.extend(first.to_uppercase());
@@ -62,14 +69,21 @@ fn pascal(path: &str, suffix: &str) -> syn::Ident {
 }
 
 fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
-    let (path, summary, long_help) = (&e.path, LitStr::new(&e.summary, e.path.span()), &e.long_help);
+    let (path, summary, long_help) = (
+        &e.path,
+        LitStr::new(&e.summary, e.path.span()),
+        &e.long_help,
+    );
     let (params, output, func) = (&e.params, &e.output, &e.func);
     let audience = match e.audience.to_string().as_str() {
         "agent" => quote!(Agent),
         "owner" => quote!(Owner),
         _ => quote!(Dev),
     };
-    let words = e.access.iter().map(|w| LitStr::new(&w.to_string(), w.span()));
+    let words = e
+        .access
+        .iter()
+        .map(|w| LitStr::new(&w.to_string(), w.span()));
     let mut sets = vec![
         quote!(__spec.long_help = #long_help;),
         quote!(__spec.access = ::op_registry::Access::from_words(&[#(#words),*]);),
@@ -81,7 +95,6 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
             sets.push(quote!(__spec.#field = #v;));
         }
     };
-    set("text", &e.text);
     set("hidden", &e.hidden);
     set("group_default", &e.default);
     set("cursor", &e.cursor);
@@ -101,11 +114,21 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
     if !e.exits.is_empty() {
         let exits = e.exits.iter().map(|(c, m)| quote!((#c, #m)));
         sets.push(quote!(__spec.exits = vec![#(#exits),*];));
+        sets.push(quote! {
+            __spec.ok_exit = Some(|o: &#output| <#output as ::op_registry::OkExit>::exit_code(o));
+        });
+    }
+    if e.text.as_ref().is_some_and(|t| t.value) {
+        sets.push(quote! {
+            __spec.render_text =
+                Some(|o: &#output| <#output as ::op_registry::RenderText>::render_text(o));
+        });
     }
     if !e.errors.is_empty() {
-        let errors = e.errors.iter().map(|t| {
-            quote!(<#t as ::op_registry::__private::coded_error::CodeCatalog>::codes())
-        });
+        let errors = e
+            .errors
+            .iter()
+            .map(|t| quote!(<#t as ::op_registry::__private::coded_error::CodeCatalog>::codes()));
         sets.push(quote!(__spec.errors = [#(#errors),*].concat();));
     }
 
@@ -113,7 +136,14 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
     let anyhow = quote!(::op_registry::__private::anyhow);
     let (push, call) = match e.kind {
         Kind::Op | Kind::Local => {
-            let method = format_ident!("{}", if e.kind == Kind::Op { "push_op" } else { "push_local" });
+            let method = format_ident!(
+                "{}",
+                if e.kind == Kind::Op {
+                    "push_op"
+                } else {
+                    "push_local"
+                }
+            );
             (
                 method,
                 quote! {
@@ -145,7 +175,10 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
 }
 
 fn alias_names(i: usize) -> (syn::Ident, syn::Ident) {
-    (format_ident!("__OpParams{i}"), format_ident!("__OpOutput{i}"))
+    (
+        format_ident!("__OpParams{i}"),
+        format_ident!("__OpOutput{i}"),
+    )
 }
 
 fn aliases(i: usize, e: &Entry) -> TokenStream {
@@ -175,7 +208,11 @@ fn markers(i: usize, e: &Entry) -> TokenStream {
             }
         }
     };
-    let name: String = path.split_whitespace().collect::<Vec<_>>().join("_").replace('-', "_");
+    let name: String = path
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_")
+        .replace('-', "_");
     match e.kind {
         Kind::List => {
             let list = one(

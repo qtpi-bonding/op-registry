@@ -35,6 +35,13 @@ pub struct Concept {
     pub id: String,
 }
 
+impl op_registry::OkExit for Concept {}
+impl op_registry::RenderText for Concept {
+    fn render_text(&self) -> String {
+        self.id.clone()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct KeyPath {
@@ -123,7 +130,9 @@ async fn plan(_c: &Ctx, p: PlanParams, _o: CallOptions) -> anyhow::Result<Plan> 
 }
 
 async fn index(_c: &Ctx, _p: Index, _o: CallOptions) -> anyhow::Result<Plan> {
-    Ok(Plan { goal: "indexed".into() })
+    Ok(Plan {
+        goal: "indexed".into(),
+    })
 }
 
 mod fixture {
@@ -176,7 +185,10 @@ fn doc_comment_is_summary_and_long_help() {
     let r = registry();
     let d = r.get("concept_get").unwrap();
     assert_eq!(d.summary, "Show one concept.");
-    assert_eq!(d.long_help, "Longer help, shown by `--help`.\nA second line.");
+    assert_eq!(
+        d.long_help,
+        "Longer help, shown by `--help`.\nA second line."
+    );
     assert_eq!(r.get("key_keygen").unwrap().long_help, "");
     assert_eq!(r.pillar(), "fix");
     assert_eq!(d.exits.len(), 1);
@@ -244,7 +256,10 @@ fn list_entry_generates_pair_and_markers() {
         CallOptions::default(),
     ))
     .unwrap();
-    assert_eq!(items, vec![Concept { id: "a".into() }, Concept { id: "b".into() }]);
+    assert_eq!(
+        items,
+        vec![Concept { id: "a".into() }, Concept { id: "b".into() }]
+    );
 
     let page = futures_executor::block_on(r.call_typed::<ops::ConceptListPage>(
         &Ctx,
@@ -332,12 +347,22 @@ fn bin_info_is_stored() {
 async fn json_call_runs_the_wrapped_functions() {
     let r = registry();
     let out = r
-        .call("concept_get", json!({"id": "z"}), &Ctx, CallOptions::default())
+        .call(
+            "concept_get",
+            json!({"id": "z"}),
+            &Ctx,
+            CallOptions::default(),
+        )
         .await
         .unwrap();
     assert_eq!(out, json!({"id": "z"}));
     let out = r
-        .call("concept_list_page", json!({"limit": 5}), &Ctx, CallOptions::default())
+        .call(
+            "concept_list_page",
+            json!({"limit": 5}),
+            &Ctx,
+            CallOptions::default(),
+        )
         .await
         .unwrap();
     assert_eq!(out["nextCursor"], "n1");
@@ -350,7 +375,9 @@ fn marker_named_like_a_user_type_does_not_shadow_it() {
     let r = registry();
     let out: Plan = futures_executor::block_on(r.call_typed::<ops::Plan>(
         &Ctx,
-        PlanParams { goal: Some("g".into()) },
+        PlanParams {
+            goal: Some("g".into()),
+        },
         CallOptions::default(),
     ))
     .unwrap();

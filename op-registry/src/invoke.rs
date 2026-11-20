@@ -20,11 +20,16 @@ use std::sync::{Arc, Mutex};
 
 /// The outcome of a call together with the redactor built from its
 /// parameters, so an adapter can redact the error message it renders.
-// The MCP adapter reads `redactor`; the CLI adapter will too (Task 14).
-#[allow(dead_code)]
 pub(crate) struct Invocation<T> {
     pub result: Result<T>,
     pub redactor: Redactor,
+    /// The process exit code of a successful call (0 unless the op declares
+    /// one); meaningless for a failure.
+    #[allow(dead_code)] // read by the command-line adapter (Task 13)
+    pub exit: u8,
+    /// The text rendering, when asked for and the op has one.
+    #[allow(dead_code)] // read by the command-line adapter (Task 13)
+    pub text: Option<String>,
 }
 
 impl<T> Invocation<T> {
@@ -33,6 +38,8 @@ impl<T> Invocation<T> {
         Self {
             result: Err(err),
             redactor: Redactor::default(),
+            exit: 0,
+            text: None,
         }
     }
 }
@@ -58,7 +65,9 @@ impl<C: Resolve> Registry<C> {
     /// The path label is `Transport(opts.transport)`, or `Transport("json")`.
     pub async fn call(&self, name: &str, args: Value, ctx: &C, opts: CallOptions) -> Result<Value> {
         let path = json_path(&opts);
-        self.call_json(name, args, ctx, opts, path).await.result
+        self.call_json(name, args, ctx, opts, path, false)
+            .await
+            .result
     }
 
     /// Decodes JSON arguments and runs a unary op on `path`, keeping the
@@ -70,9 +79,13 @@ impl<C: Resolve> Registry<C> {
         ctx: &C,
         opts: CallOptions,
         path: CallPath,
+        want_text: bool,
     ) -> Invocation<Value> {
         match self.decode_json(name, args, &path, false) {
-            Ok(params) => self.call_decoded(name, params, ctx, opts, path).await,
+            Ok(params) => {
+                self.call_decoded(name, params, ctx, opts, path, want_text)
+                    .await
+            }
             Err(err) => Invocation::failed(err),
         }
     }
@@ -117,6 +130,7 @@ impl<C: Resolve> Registry<C> {
         ctx: &C,
         mut opts: CallOptions,
         path: CallPath,
+        want_text: bool,
     ) -> Invocation<Value> {
         let entry = match self.entry(name) {
             Ok(entry) => entry,
@@ -133,10 +147,24 @@ impl<C: Resolve> Registry<C> {
         let result = async {
             (entry.resolve_refs)(self, ctx, &mut *params).await?;
             let info = self.info(entry, &*params, path, &opts);
-            self.pipeline(info, move || run(ctx, params, opts)).await
+            self.pipeline(info, move || run(ctx, params, opts, want_text))
+                .await
         }
         .await;
-        Invocation { result, redactor }
+        match result {
+            Ok(ran) => Invocation {
+                result: Ok(ran.value),
+                redactor,
+                exit: crate::exit::ok_exit(&entry.descriptor.exits, ran.exit),
+                text: ran.text,
+            },
+            Err(err) => Invocation {
+                result: Err(err),
+                redactor,
+                exit: 0,
+                text: None,
+            },
+        }
     }
 
     /// Runs a streaming op on decoded parameters.
@@ -168,7 +196,12 @@ impl<C: Resolve> Registry<C> {
                 .await
         }
         .await;
-        Invocation { result, redactor }
+        Invocation {
+            result,
+            redactor,
+            exit: 0,
+            text: None,
+        }
     }
 
     /// Resolves the refs of `params` in place: non-subject refs first, then
@@ -301,4 +334,97 @@ fn check_path<C>(entry: &Entry<C>, name: &str, path: &CallPath) -> Result<()> {
         }));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{OpSpec, Paths};
+    use futures_util::future::BoxFuture;
+    use serde::Serialize;
+    use serde_json::json;
+
+    struct Ctx;
+    impl Resolve for Ctx {}
+
+    #[derive(OpParams)]
+    struct P {
+        code: Option<u8>,
+    }
+
+    #[derive(Serialize)]
+    #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+    struct Out {
+        code: u8,
+    }
+
+    fn registry() -> Registry<Ctx> {
+        let mut r = Registry::<Ctx>::new();
+        let mut spec = OpSpec::<P, Out>::new("probe run", "Probe.");
+        spec.paths = Paths::All;
+        spec.exits = vec![(4, "four")];
+        spec.ok_exit = Some(|o| o.code);
+        spec.render_text = Some(|o| format!("code {}", o.code));
+        r.group("probe", "Probes.");
+        r.push_op(
+            spec,
+            |_c: &Ctx, p: P, _o: CallOptions| -> BoxFuture<'_, Result<Out>> {
+                Box::pin(async move {
+                    Ok(Out {
+                        code: p.code.unwrap_or(0),
+                    })
+                })
+            },
+        );
+        r.push_op(
+            OpSpec::<P, Out>::new("probe plain", "Plain."),
+            |_c: &Ctx, p: P, _o: CallOptions| -> BoxFuture<'_, Result<Out>> {
+                Box::pin(async move {
+                    Ok(Out {
+                        code: p.code.unwrap_or(0),
+                    })
+                })
+            },
+        );
+        r
+    }
+
+    fn run(name: &str, code: u8, want_text: bool) -> Invocation<Value> {
+        futures_executor::block_on(registry().call_json(
+            name,
+            json!({"code": code}),
+            &Ctx,
+            CallOptions::default(),
+            CallPath::Cli,
+            want_text,
+        ))
+    }
+
+    #[test]
+    fn declared_ok_exit_returned() {
+        let inv = run("probe_run", 4, false);
+        assert_eq!(inv.result.unwrap(), json!({"code": 4}));
+        assert_eq!(inv.exit, 4);
+        assert_eq!(run("probe_run", 0, false).exit, 0);
+    }
+
+    #[test]
+    fn undeclared_ok_exit_is_70() {
+        assert_eq!(run("probe_run", 9, false).exit, 70);
+        assert_eq!(run("probe_run", 64, false).exit, 70);
+    }
+
+    #[test]
+    fn op_without_ok_exit_exits_0() {
+        assert_eq!(run("probe_plain", 4, true).exit, 0);
+    }
+
+    #[test]
+    fn text_rendered_only_when_asked() {
+        assert_eq!(run("probe_run", 4, true).text.as_deref(), Some("code 4"));
+        assert_eq!(run("probe_run", 4, false).text, None);
+        assert_eq!(run("probe_plain", 4, true).text, None);
+        assert!(registry().get("probe_run").unwrap().text);
+        assert!(!registry().get("probe_plain").unwrap().text);
+    }
 }

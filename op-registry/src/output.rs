@@ -1,4 +1,94 @@
-//! Output schema discovery: `Some(schema)` when the `schema` feature is on.
+//! Output: schema discovery, text rendering, and the JSON, error and notice
+//! lines the command-line adapter prints.
+
+use crate::{Notice, Redactor};
+use serde_json::{json, Value};
+use std::io::{self, Write};
+
+/// An output type's text rendering (`text: true` in `ops!`).
+pub trait RenderText {
+    fn render_text(&self) -> String;
+}
+
+/// An output type's exit code on success (`exits:` in `ops!`). The code must
+/// be declared; see [`crate::exit::ok_exit`].
+pub trait OkExit {
+    fn exit_code(&self) -> u8 {
+        0
+    }
+}
+
+/// How JSON is laid out on a terminal or a pipe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Style {
+    /// Indented, for people.
+    Pretty,
+    /// One line, for programs.
+    Compact,
+}
+
+impl Style {
+    /// Pretty if either stream is a terminal, else compact; `force` wins.
+    pub fn detect(stdout_tty: bool, stderr_tty: bool, force: Option<Style>) -> Style {
+        match force {
+            Some(style) => style,
+            None if stdout_tty || stderr_tty => Style::Pretty,
+            None => Style::Compact,
+        }
+    }
+}
+
+/// Renders a JSON value without a trailing newline.
+pub fn render(value: &Value, style: Style) -> String {
+    match style {
+        Style::Pretty => serde_json::to_string_pretty(value),
+        Style::Compact => serde_json::to_string(value),
+    }
+    .expect("JSON values are serializable")
+}
+
+/// Writes a JSON value followed by a newline.
+pub fn print_json(out: &mut dyn Write, value: &Value, style: Style) -> io::Result<()> {
+    writeln!(out, "{}", render(value, style))
+}
+
+/// The error line: `{"error": {"code", "class", "message"}}`, the message
+/// being the whole context chain with secrets redacted.
+pub fn error_value(err: &anyhow::Error, redactor: &Redactor) -> Value {
+    let facts = coded_error::facts_anyhow(err);
+    json!({"error": {
+        "code": facts.code,
+        "class": facts.class.as_str(),
+        "message": redactor.redact(&format!("{err:#}")),
+    }})
+}
+
+/// Writes the error line: indented on a terminal, else one compact line.
+pub fn write_error(
+    out: &mut dyn Write,
+    err: &anyhow::Error,
+    redactor: &Redactor,
+    stderr_tty: bool,
+) -> io::Result<()> {
+    let style = if stderr_tty {
+        Style::Pretty
+    } else {
+        Style::Compact
+    };
+    print_json(out, &error_value(err, redactor), style)
+}
+
+/// The line for a notice: `{"notice": ...}` or `{"progress": {...}}`.
+pub fn notice_line(n: &Notice) -> Value {
+    match n {
+        Notice::Text(text) => json!({"notice": text}),
+        Notice::Progress { done, total, label } => {
+            json!({"progress": {"done": done, "total": total, "label": label}})
+        }
+    }
+}
+
+// Output schema discovery: `Some(schema)` when the `schema` feature is on.
 
 /// Produces the JSON schema of an operation output type, when available.
 pub trait OutputSchema {
@@ -22,11 +112,7 @@ impl<T> OutputSchema for T {
 /// Writes `bytes` to `path` for key material: a new file at mode 0600 on
 /// unix. An existing file is an `AlreadyExists` error unless `overwrite`, in
 /// which case it is truncated and its mode set to 0600.
-pub fn write_private(
-    path: &std::path::Path,
-    bytes: &[u8],
-    overwrite: bool,
-) -> std::io::Result<()> {
+pub fn write_private(path: &std::path::Path, bytes: &[u8], overwrite: bool) -> std::io::Result<()> {
     use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
     options.write(true);

@@ -1,8 +1,13 @@
 //! op-registry: declare operations once, derive the adapters.
 
+// Lets the derive macros' `::op_registry::` paths resolve in unit tests.
+#[cfg(test)]
+extern crate self as op_registry;
+
 mod call;
 pub mod cli;
 mod descriptor;
+pub mod exit;
 mod hook;
 mod invoke;
 mod list;
@@ -21,7 +26,10 @@ pub use hook::{CallHook, CallInfo, CallPath, NoHook};
 pub use list::{ListItem, Page, PageParams, PageRequest, TooMany};
 pub use notices::{Notice, NoticeSink, Notices};
 pub use op_registry_derive::{ops, OpParams};
-pub use output::{write_private, OutputSchema};
+pub use output::{
+    error_value, notice_line, print_json, render, write_error, write_private, OkExit, OutputSchema,
+    RenderText, Style,
+};
 pub use params::*;
 pub use refs::{Ref, RefSlot, Resolve, Resolved, Scope};
 pub use registry::{OpSpec, Registry};

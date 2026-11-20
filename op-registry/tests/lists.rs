@@ -282,7 +282,8 @@ fn list_with_zero_page_size_panics() {
 #[test]
 fn list_pair_halves_carry_no_text_or_exits() {
     let r = registry(|s| {
-        s.text = true;
+        s.render_text = Some(|_| String::new());
+        s.ok_exit = Some(|_| 3);
         s.exits = vec![(3, "x")];
     });
     for name in ["concept_list", "concept_list_page"] {

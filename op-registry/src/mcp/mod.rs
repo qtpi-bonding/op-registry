@@ -116,7 +116,7 @@ pub async fn call_tool<C: Resolve>(
         }));
     }
     let invocation = registry
-        .call_json(name, args, ctx, opts, CallPath::Mcp)
+        .call_json(name, args, ctx, opts, CallPath::Mcp, false)
         .await;
     invocation.result.map_err(|error| ToolError {
         error,
