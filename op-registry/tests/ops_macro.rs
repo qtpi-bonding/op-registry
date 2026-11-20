@@ -174,7 +174,7 @@ mod fixture {
         /// List concepts.
         "concept list" => { params: ListConcepts, item: Concept,
                             access: reads, audience: agent, list: concept_page,
-                            cap: 50, page_size: 10 },
+                            cap: 50, page_size: 10, text: true },
         /// Make a plan. Bare verb whose output type is named like its marker.
         "plan" => { params: PlanParams, output: Plan,
                     access: reads, audience: agent, op: plan },
@@ -257,8 +257,8 @@ fn list_entry_generates_pair_and_markers() {
     let page = r.get("concept_list_page").unwrap();
     assert_eq!(all.kind, OpKind::ListAll);
     assert_eq!(page.kind, OpKind::ListPage);
-    assert!(!all.text && all.exits.is_empty());
-    assert!(!page.text && page.exits.is_empty());
+    assert!(all.text && all.exits.is_empty());
+    assert!(page.text && page.exits.is_empty());
 
     let items = futures_executor::block_on(r.call_typed::<ops::ConceptList>(
         &Ctx,

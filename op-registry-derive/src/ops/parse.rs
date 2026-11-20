@@ -233,7 +233,6 @@ impl Parse for Entry {
         let mut exits = Vec::new();
         let mut exits_key: Option<Ident> = None;
         let (mut text, mut hidden, mut default) = (None, None, None);
-        let mut text_key: Option<Ident> = None;
         let mut default_key: Option<Ident> = None;
         let mut paths: Option<Vec<Ident>> = None;
         let (mut cursor, mut cap, mut page_size, mut unpaged) = (None, None, None, None);
@@ -329,7 +328,6 @@ impl Parse for Entry {
                     }
                 }
                 "text" => {
-                    text_key = Some(key.clone());
                     text = Some(body.parse::<LitBool>()?);
                 }
                 "hidden" => hidden = Some(body.parse::<LitBool>()?),
@@ -460,10 +458,10 @@ impl Parse for Entry {
         };
 
         if kind == Kind::List {
-            if let Some(key) = [&text_key, &exits_key].into_iter().flatten().next() {
+            if let Some(key) = &exits_key {
                 return Err(syn::Error::new(
                     key.span(),
-                    format!("`{key}:` is not allowed on a `list:` entry: a list pair has no text or extra exits"),
+                    format!("`{key}:` is not allowed on a `list:` entry: a list pair has no extra exits"),
                 ));
             }
         } else if let Some((key, _)) = &follow_page {

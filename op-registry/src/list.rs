@@ -2,8 +2,8 @@
 
 use crate::registry::{ignoring_registry as coerce, words};
 use crate::{
-    derive_name, FieldKind, FieldMeta, OpKind, OpParams, OpSpec, ParseCx, RefSlot, Registry,
-    Resolve,
+    derive_name, render_page, FieldKind, FieldMeta, OpKind, OpParams, OpSpec, ParseCx, RefSlot,
+    Registry, RenderText, Resolve,
 };
 use anyhow::Result;
 use coded_error::{CodedError, ErrorClass};
@@ -252,6 +252,44 @@ impl<C: Resolve + 'static> Registry<C> {
             + Sync
             + 'static,
     {
+        self.push_list_with(spec, f, None, None);
+    }
+
+    /// As [`Registry::push_list`], and both halves render `--text`: the
+    /// follow-all half one item per line, the page half its items and then
+    /// `next cursor: <c>` when there is one.
+    #[doc(hidden)]
+    pub fn push_list_text<P, T, F>(&mut self, spec: OpSpec<P, T>, f: F)
+    where
+        P: OpParams + Clone,
+        T: ListItem + RenderText + Send + 'static,
+        F: for<'a> Fn(&'a C, P, PageRequest) -> BoxFuture<'a, Result<Page<T>>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.push_list_with(
+            spec,
+            f,
+            Some(|all| RenderText::render_text(all)),
+            Some(|page| render_page(page)),
+        );
+    }
+
+    fn push_list_with<P, T, F>(
+        &mut self,
+        spec: OpSpec<P, T>,
+        f: F,
+        all_text: Option<fn(&Vec<T>) -> String>,
+        page_text: Option<fn(&Page<T>) -> String>,
+    ) where
+        P: OpParams + Clone,
+        T: ListItem + Send + 'static,
+        F: for<'a> Fn(&'a C, P, PageRequest) -> BoxFuture<'a, Result<Page<T>>>
+            + Send
+            + Sync
+            + 'static,
+    {
         let path = words(spec.path);
         assert!(!self.pillar().is_empty(), "set_pillar before push_list");
         assert!(spec.page_size > 0, "page_size must be > 0");
@@ -261,7 +299,8 @@ impl<C: Resolve + 'static> Registry<C> {
         let f = Arc::new(f);
         let (cap, follow_limit) = (spec.cap, spec.follow_page.unwrap_or(spec.page_size));
 
-        let all_spec = spec.respec::<P, Vec<T>>(spec.fields);
+        let mut all_spec = spec.respec::<P, Vec<T>>(spec.fields);
+        all_spec.render_text = all_text;
         let all_name = name.clone();
         let all_f = f.clone();
         let all = coerce(move |ctx: &C, params: P, _opts| {
@@ -276,6 +315,7 @@ impl<C: Resolve + 'static> Registry<C> {
 
         let mut page_spec = spec.respec::<PageParams<P>, Page<T>>(None);
         page_spec.group_default = false;
+        page_spec.render_text = page_text;
         let page_f = f.clone();
         let page = coerce(move |ctx: &C, params: PageParams<P>, _opts| {
             page_f(

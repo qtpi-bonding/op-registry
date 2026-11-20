@@ -171,3 +171,64 @@ fn notice_and_progress_lines_have_distinct_keys() {
     });
     assert_eq!(p["progress"]["total"], Value::Null);
 }
+
+// --- OUT-6: keys come out in declaration order ---
+
+#[derive(serde::Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct Keyed {
+    zeta: u8,
+    alpha: u8,
+}
+
+#[derive(op_registry::OpParams)]
+struct NoArgs {}
+
+#[derive(op_registry::OpGlobals)]
+struct NoGlobals {}
+
+struct KeyCtx;
+impl op_registry::Resolve for KeyCtx {}
+impl op_registry::CliContext for KeyCtx {
+    type Globals = NoGlobals;
+    fn from_globals(_globals: &NoGlobals) -> anyhow::Result<Self> {
+        Ok(KeyCtx)
+    }
+}
+
+fn keyed_registry() -> op_registry::Registry<KeyCtx> {
+    let mut r: op_registry::Registry<KeyCtx> = op_registry::Registry::new();
+    r.set_pillar("fix");
+    r.push_op(
+        op_registry::OpSpec::<NoArgs, Keyed>::new("keyed", "Keyed."),
+        |_c: &KeyCtx,
+         _p: NoArgs,
+         _o: op_registry::CallOptions|
+         -> futures_util::future::BoxFuture<'_, anyhow::Result<Keyed>> {
+            Box::pin(async { Ok(Keyed { zeta: 1, alpha: 2 }) })
+        },
+    );
+    r
+}
+
+#[test]
+fn output_keys_keep_declaration_order() {
+    let (io, cap) = op_registry::cli::Io::memory(b"", false, false);
+    let code = futures_executor::block_on(op_registry::cli::run_with_io(
+        &keyed_registry(),
+        vec!["app".into(), "keyed".into()],
+        &op_registry::cli::NoHooks,
+        io,
+    ));
+    assert_eq!(code, 0, "{}", cap.stderr());
+    assert_eq!(cap.stdout().trim(), r#"{"zeta":1,"alpha":2}"#);
+
+    let value = futures_executor::block_on(keyed_registry().call(
+        "keyed",
+        json!({}),
+        &KeyCtx,
+        op_registry::CallOptions::default(),
+    ))
+    .unwrap();
+    assert_eq!(render(&value, Style::Compact), r#"{"zeta":1,"alpha":2}"#);
+}

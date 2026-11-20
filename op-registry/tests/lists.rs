@@ -449,3 +449,53 @@ async fn value_output_array_is_wrapped() {
     let out = call(&r, &Ctx::default(), "dump", json!({})).await.unwrap();
     assert_eq!(out, json!({"items": [1, 2]}));
 }
+
+// --- OUT-3: `--text` on list pairs ---
+
+impl op_registry::RenderText for Concept {
+    fn render_text(&self) -> String {
+        format!("concept {}", self.id)
+    }
+}
+
+fn text_registry() -> Registry<Ctx> {
+    let mut r: Registry<Ctx> = Registry::new();
+    r.set_pillar("fix");
+    r.group("concept", "Concepts.");
+    let mut spec = OpSpec::<ListConcepts, Concept>::new("concept list", "List concepts.");
+    spec.page_size = 2;
+    r.push_list_text(spec, serve);
+    r
+}
+
+/// Runs the CLI over the fixed pages `[a, b]` and `[c]` (see `from_globals`).
+fn text_of(registry: &Registry<Ctx>, args: &[&str]) -> String {
+    let argv = ["app"].into_iter().chain(args.iter().copied()).map(std::ffi::OsString::from).collect();
+    let (io, cap) = op_registry::cli::Io::memory(b"", false, false);
+    let code = futures_executor::block_on(op_registry::cli::run_with_io(
+        registry,
+        argv,
+        &op_registry::cli::NoHooks,
+        io,
+    ));
+    assert_eq!(code, 0, "{}", cap.stderr());
+    cap.stdout()
+}
+
+#[test]
+fn list_text_follow_all_one_row_per_line() {
+    let out = text_of(&text_registry(), &["concept", "list", "--text"]);
+    assert_eq!(out, "concept a\nconcept b\nconcept c\n");
+}
+
+#[test]
+fn list_text_page_ends_with_next_cursor() {
+    let out = text_of(&text_registry(), &["concept", "list", "--limit", "2", "--text"]);
+    assert_eq!(out, "concept a\nconcept b\nnext cursor: c1\n");
+}
+
+#[test]
+fn list_text_page_without_cursor_has_no_cursor_line() {
+    let out = text_of(&text_registry(), &["concept", "list", "--limit", "2", "--cursor", "c1", "--text"]);
+    assert_eq!(out, "concept c\n");
+}

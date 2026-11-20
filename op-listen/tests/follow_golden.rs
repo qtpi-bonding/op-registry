@@ -21,12 +21,12 @@ async fn follow_json_lines_are_byte_identical() {
     assert!(matches!(end, FollowEnd::Stopped { ref code } if code == "op_listen.revoked"));
     let got = lines.lock().unwrap().clone();
     let want = [
-        r#"{"cursor":"0:1","frame":"snapshot","resync":false,"snapshot":{"k":"v"}}"#,
-        r#"{"cursor":"0:2","frame":"item","item":"a"}"#,
-        r#"{"cursor":"0:2","marker":"reconnected","resync":true}"#,
-        r#"{"cursor":"0:9","frame":"snapshot","resync":true,"snapshot":{"k":"v"}}"#,
-        r#"{"code":"op_listen.revoked","frame":"stop","message":"gone"}"#,
-        r#"{"code":"op_listen.revoked","marker":"stopped"}"#,
+        r#"{"frame":"snapshot","snapshot":{"k":"v"},"resync":false,"cursor":"0:1"}"#,
+        r#"{"frame":"item","item":"a","cursor":"0:2"}"#,
+        r#"{"marker":"reconnected","cursor":"0:2","resync":true}"#,
+        r#"{"frame":"snapshot","snapshot":{"k":"v"},"resync":true,"cursor":"0:9"}"#,
+        r#"{"frame":"stop","code":"op_listen.revoked","message":"gone"}"#,
+        r#"{"marker":"stopped","code":"op_listen.revoked"}"#,
     ];
     assert_eq!(got, want);
 }

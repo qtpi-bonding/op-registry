@@ -88,8 +88,9 @@ impl<P, O> OpSpec<P, O> {
 impl<P, O> OpSpec<P, O> {
     /// The same metadata over other parameter and output types: what a list
     /// pair's two ops share. The output hooks (`ok_exit`, `render_text`) are
-    /// typed by `O` and do not carry over, and a list pair has no text
-    /// rendering or extra exits (ruling R12), so `exits` is cleared.
+    /// typed by `O` and do not carry over (a list pair sets `render_text` on
+    /// each half itself), and a list pair has no extra exits, so `exits` is
+    /// cleared.
     pub(crate) fn respec<P2, O2>(&self, fields: Option<FieldsFn<P2>>) -> OpSpec<P2, O2> {
         OpSpec {
             path: self.path,

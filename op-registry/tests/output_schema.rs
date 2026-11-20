@@ -156,6 +156,13 @@ fn all_refs_resolve_rejects_dangling_and_handles_escapes() {
     assert!(!all_refs_resolve(&json!({"a": {"$ref": "other.json"}})));
 }
 
+/// The wrapped schema's keys, in the order `wrap_array_schema` writes them.
+fn assert_wrapped_key_order(schema: &Value, defs_key: &str) {
+    let keys: Vec<&str> = schema.as_object().unwrap().keys().map(String::as_str).collect();
+    let want = ["$schema", "title", "type", "properties", "required", "additionalProperties", defs_key];
+    assert_eq!(keys, want, "{schema}");
+}
+
 #[test]
 fn vec_output_schema_wrapped_with_root_defs() {
     let schema = schema_of(|| vec![Named { name: "a".into() }]);
@@ -168,12 +175,7 @@ fn vec_output_schema_wrapped_with_root_defs() {
     assert!(schema["properties"]["items"].get("$schema").is_none());
     assert!(refs_in(&schema) > 0, "{schema}");
     assert!(all_refs_resolve(&schema), "{schema}");
-    let mut keys: Vec<&str> = schema.as_object().unwrap().keys().map(String::as_str).collect();
-    let mut want = ["$schema", "title", "type", "properties", "required", "additionalProperties", "$defs"];
-    // serde_json keeps keys sorted, so only the set is observable.
-    keys.sort_unstable();
-    want.sort_unstable();
-    assert_eq!(keys, want);
+    assert_wrapped_key_order(&schema, "$defs");
 }
 
 #[test]
@@ -201,12 +203,7 @@ fn definitions_keyed_schema_hoisted() {
     assert!(schema["properties"]["items"].get("definitions").is_none());
     assert_eq!(schema["properties"]["items"]["items"]["$ref"], "#/definitions/Row");
     assert!(all_refs_resolve(&schema), "{schema}");
-    let mut keys: Vec<&str> = schema.as_object().unwrap().keys().map(String::as_str).collect();
-    let mut want = ["$schema", "title", "type", "properties", "required", "additionalProperties", "definitions"];
-    // serde_json keeps keys sorted, so only the set is observable.
-    keys.sort_unstable();
-    want.sort_unstable();
-    assert_eq!(keys, want);
+    assert_wrapped_key_order(&schema, "definitions");
 }
 
 #[test]

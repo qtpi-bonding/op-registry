@@ -12,7 +12,6 @@ fn ops_compile_failures() {
     tests.compile_fail("tests/ops_ui/ops_follow_page_on_non_list_is_a_compile_error.rs");
     tests.compile_fail("tests/ops_ui/ops_follow_page_zero_is_a_compile_error.rs");
     tests.compile_fail("tests/ops_ui/ops_default_on_one_word_path_is_a_compile_error.rs");
-    tests.compile_fail("tests/ops_ui/ops_text_on_list_is_a_compile_error.rs");
     tests.compile_fail("tests/ops_ui/ops_exits_on_list_is_a_compile_error.rs");
     tests.compile_fail("tests/ops_ui/ops_exits_without_ok_exit_is_a_compile_error.rs");
     tests.compile_fail("tests/ops_ui/ops_globals_mismatch_is_a_compile_error.rs");

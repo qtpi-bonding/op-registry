@@ -141,7 +141,8 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
             __spec.ok_exit = Some(|o: &#output| <#output as ::op_registry::OkExit>::exit_code(o));
         });
     }
-    if e.text.as_ref().is_some_and(|t| t.value) {
+    let text = e.text.as_ref().is_some_and(|t| t.value);
+    if text && e.kind != Kind::List {
         sets.push(quote! {
             __spec.render_text =
                 Some(|o: &#output| <#output as ::op_registry::RenderText>::render_text(o));
@@ -179,7 +180,7 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
         }
         Kind::Stream => (format_ident!("push_stream"), quote!(#func)),
         Kind::List => (
-            format_ident!("push_list"),
+            format_ident!("{}", if text { "push_list_text" } else { "push_list" }),
             quote! {
                 |__c: &#ctx, __p: #params, __r: ::op_registry::PageRequest|
                     -> #future<'_, #anyhow::Result<::op_registry::Page<#output>>> {

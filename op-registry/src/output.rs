@@ -10,6 +10,21 @@ pub trait RenderText {
     fn render_text(&self) -> String;
 }
 
+impl<T: RenderText> RenderText for Vec<T> {
+    /// One item per line.
+    fn render_text(&self) -> String {
+        self.iter().map(RenderText::render_text).collect::<Vec<_>>().join("\n")
+    }
+}
+
+/// The text of a list page: its items, then `next cursor: <c>` when there is one.
+#[doc(hidden)]
+pub fn render_page<T: RenderText>(page: &crate::Page<T>) -> String {
+    let mut lines: Vec<String> = page.items.iter().map(RenderText::render_text).collect();
+    lines.extend(page.next_cursor.as_ref().map(|c| format!("next cursor: {c}")));
+    lines.join("\n")
+}
+
 /// An output type's exit code on success (`exits:` in `ops!`). The code must
 /// be declared; see [`crate::exit::ok_exit`].
 pub trait OkExit {
