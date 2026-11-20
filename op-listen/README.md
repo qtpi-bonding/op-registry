@@ -37,7 +37,10 @@ cursor, caller)` no longer takes a `ListenOptions` argument; the type is gone.
 
 ## Frames
 
-A listen stream emits JSON objects tagged by `frame`.
+A listen stream emits JSON objects tagged by `frame`. Field names are camelCase
+(`ListenFrame` sets `rename_all_fields = "camelCase"`); today every frame field
+is one word, so the wire is the same as before 0.3.0. The `frame` values stay
+`snapshot`, `item` and `stop`.
 
 Snapshot frame:
 
@@ -211,20 +214,25 @@ Without default features the crate has no `detach` and no tokio `rt`.
 
 - `Opened::Snapshot` carries `seq`, the sequence the snapshot reflects. The
   snapshot frame's cursor is `epoch:seq`.
-- `Listener::Params` must implement `Serialize` and `Clone`. Serialize is used
-  to build the CLI hooks, and Clone is used to reopen the source on resnapshot.
-- `listen_entry` registers the listener with `push_stream_borrowed`. It leaks one
+- `Listener::Params` must implement `OpParams`, `Serialize` and `Clone`. Clone
+  is used to reopen the source on resnapshot.
+- `listen_entry(&mut registry, listener, spec)` takes an
+  `OpSpec<Params, ListenFrame<Snapshot, Item>>` and registers the listener as a
+  stream op (`spec.cursor` is set for you). It leaks one
   `Arc` reference per registered listener, so register each listener once.
-- A listen entry is CLI-only. It does not appear in the MCP tool list.
+- A listen entry is a streaming op and takes `--cursor`. Streams are not in the
+  MCP tool list.
 
 ## Example
+
+This mirrors `op-listen/tests/registry.rs`.
 
 ```rust,ignore
 use futures_util::future::BoxFuture;
 use futures_util::stream::{self, BoxStream};
-use futures_util::FutureExt;
+use futures_util::{FutureExt, StreamExt};
 use op_listen::{listen_entry, Grant, ListenCursor, Listener, Opened};
-use op_registry::{Caller, Descriptor, OpParams, Registry};
+use op_registry::{Caller, OpParams, OpSpec, Registry};
 use std::sync::Arc;
 
 struct Ctx;
@@ -232,6 +240,7 @@ impl op_registry::Resolve for Ctx {}
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, OpParams)]
 struct TopicParams {
+    /// Topic to follow.
     topic: String,
 }
 
@@ -276,9 +285,10 @@ impl Listener<Ctx> for Notes {
 }
 
 let mut registry: Registry<Ctx> = Registry::new();
+registry.group("notes", "Notes.");
 listen_entry(
     &mut registry,
     Arc::new(Notes),
-    Descriptor::new("notes", "listen"),
+    OpSpec::new("notes listen", "Follow a topic"),
 );
 ```

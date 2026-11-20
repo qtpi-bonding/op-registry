@@ -31,12 +31,14 @@ the old `StatusCursorRef` is gone. Parse a client string with
 |---------------------|--------------------|
 | `service`           | string             |
 | `version`           | string             |
-| `taken_at_unix_ms`  | i64                |
+| `takenAtUnixMs`      | i64                |
 | `epoch`             | u64                |
 | `components`        | array of Component |
 | `truncated`         | bool               |
 
-JSON output follows declaration order. `truncated` is `true` when more
+JSON output follows declaration order. Keys are camelCase on the wire (the
+Rust fields stay snake_case); state values keep their `SCREAMING_SNAKE_CASE`
+spelling. This changed in 0.3.0: consumers must read the new keys. `truncated` is `true` when more
 components matched than were returned.
 
 ### Component
@@ -49,10 +51,10 @@ components matched than were returned.
 4. `state`: State (see below)
 5. `ready`: bool
 6. `terminal`: bool
-7. `last_error_code`: string, empty when none
-8. `last_error_message`: string, empty when none
-9. `consecutive_failures`: u32 or `null`
-10. `changed_at_unix_ms`: i64
+7. `lastErrorCode`: string, empty when none
+8. `lastErrorMessage`: string, empty when none
+9. `consecutiveFailures`: u32 or `null`
+10. `changedAtUnixMs`: i64
 11. `attrs`: map of allow-listed scalar attributes
 
 There is no duration-since-failure field.
@@ -104,7 +106,9 @@ Implement `StatusSource`:
   return `true` and `seq_window()` to report `SeqWindow { oldest, newest }`: a
   cursor seq is retained iff `oldest <= seq <= newest`.
 
-Then register the operation and merge it into the app registry:
+Your context type must implement `op_registry::Resolve` (an empty impl is
+enough) because the registry is generic over it. Then register the operation
+and merge it into the app registry:
 
 ```rust,ignore
 use op_status::ops::{status_registry, StatusOptions};
@@ -115,8 +119,8 @@ app.merge(status_registry::<MyService>(
 ));
 ```
 
-`status_registry` registers `status get` (noun `status`, verb `get`, reads
-access, streaming off). `StatusOptions` defaults to `Audience::Agent` and
+`status_registry` registers the group `status` and `status get` (reads access,
+unary). `StatusOptions` defaults to `Audience::Agent` and
 `max_components` 1000.
 
 ## `status get`
@@ -195,8 +199,9 @@ an observed attribute key is not on the allow-list. Use it in source tests.
 
 ## Free-text fields
 
-`kind`, `id`, `last_error_code`, `last_error_message` (and the snapshot's
+`kind`, `id`, `lastErrorCode`, `lastErrorMessage` (and the snapshot's
 `service` and `version`) are bounded to 256 bytes too. Debug builds refuse a
-longer value with `op_status.field_too_long` (Logical, naming the field);
+longer value with `op_status.field_too_long` (Logical, naming the field by its
+Rust name, e.g. `last_error_message`);
 release builds truncate at a char boundary. A source must still keep message
 bodies, paths and other forbidden content out of them.

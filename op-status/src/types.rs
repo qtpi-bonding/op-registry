@@ -1,7 +1,8 @@
 //! Shared status types.
 //!
 //! These types form the wire contract for `status get`. Field order is part
-//! of the contract: JSON output follows declaration order.
+//! of the contract: JSON output follows declaration order. Keys are camelCase;
+//! enum values keep their own rename.
 
 use std::collections::BTreeMap;
 
@@ -79,6 +80,7 @@ impl From<bool> for AttrValue {
 /// Reference to a parent component by kind and id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "registry", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct ComponentRef {
     /// Kind of the referenced component.
     pub kind: String,
@@ -90,6 +92,7 @@ pub struct ComponentRef {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "registry", derive(schemars::JsonSchema))]
 #[non_exhaustive]
+#[serde(rename_all = "camelCase")]
 pub struct Component {
     /// Kind of the component.
     pub kind: String,
@@ -183,6 +186,7 @@ impl Component {
 /// A point-in-time view of a service's components.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "registry", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct StatusSnapshot {
     /// Service name.
     pub service: String,
@@ -201,6 +205,7 @@ pub struct StatusSnapshot {
 /// Filter applied when taking a snapshot.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "registry", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct StatusFilter {
     /// Only components of this kind.
     pub kind: Option<String>,
@@ -211,6 +216,7 @@ pub struct StatusFilter {
 /// Identity of a service.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "registry", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct ServiceInfo {
     /// Service name.
     pub name: String,

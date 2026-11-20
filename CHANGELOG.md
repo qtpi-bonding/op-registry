@@ -1,9 +1,86 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
-- op-listen: add `supervise` with structured `Opened` (fieldless and sent as
-  soon as `connect` succeeds), retry, stop, and session expiration events.
+op-registry v2. All four crates (op-registry, op-registry-derive, op-listen,
+op-status) move to 0.3.0. There is no backward compatibility: removed items are
+removed, with no shims, and consumers migrate once. op-registry has no auth,
+identity or signing; `Caller` is an opaque label the library never checks.
+
+### Breaking changes
+
+op-registry and op-registry-derive, removed:
+
+- the `registry!` macro, replaced by `ops!`;
+- the `Operation` type, replaced by `OpSpec` and the `push_op`, `push_local`,
+  `push_stream` and list entries;
+- `CliHooks`; a params type carries its own hooks;
+- the `name:` override: op names are always derived from the path;
+- `#[op(positional)]`: the subject is `--id <REF>` and other objects are flags
+  named by kind;
+- `#[op(short)]` and `#[op(long)]`: flags are long kebab-case only; the only
+  short flag is `-h`;
+- `#[op(value_delimiter)]`;
+- the descriptor fields `requires`, `since`, `deprecated` and `aliases`.
+
+op-registry, changed:
+
+- JSON keys are camelCase on every JSON path, input and output. CLI flags are
+  kebab-case (`--agent-id` sets `agentId`).
+- Usage errors exit 2 (they were 65). The exit table is 0 ok, 2 usage, 65
+  logical, 69 infrastructure, 70 unknown, 75 transient. Ops may declare extra
+  exits in 3 to 63.
+- Tool and route names follow the derived name (`concept get` is `concept_get`;
+  a hyphen in a noun becomes `_`).
+- `hidden`, `text` and `exits` are acted on, not only declared.
+- List ops come as a pair (`<name>` follows all pages, `<name>_page` returns
+  one page).
+- Extras and fallbacks return a `u8` exit code, not `ExitCode`.
+- Stdin may be read by one field per call. A second read fails at run time with
+  `op_registry.usage.stdin_twice`, not at build time.
+
+op-status and op-listen, wire change:
+
+- op-status JSON keys are camelCase: `takenAtUnixMs`, `lastErrorCode`,
+  `lastErrorMessage`, `consecutiveFailures`, `changedAtUnixMs`. Every consumer
+  of `status get`, `status watch` and the `StatusSnapshot` and `Component` types
+  must read the new keys. State values (`OK`, `DEGRADED`, ...) are unchanged.
+- op-listen's `ListenFrame` uses `rename_all_fields = "camelCase"`. Its current
+  fields are single words, so the frames on the wire are unchanged; the `frame`
+  tag values stay `snapshot`, `item` and `stop`.
+- `listen_entry` takes an `OpSpec<L::Params, ListenFrame<L::Snapshot, L::Item>>`
+  instead of a `Descriptor`.
+
+### Added
+
+- `ops!`: one block per binary; doc comments are the help text; kinds `op:`,
+  `local:`, `stream:` and `list:`; marker types per op for typed calls; `errors:`,
+  `fields:`, `exits:`, `text:`, `hidden:`, `default:`, `paths: [typed]`.
+- `OpParams` v2: help from doc comments, subject `--id`, `Ref`, `Json`, `Input`,
+  `SecretFile` (feature `secrets`), `Patch<T>`, `#[op(keys)]`, `#[op(value_enum)]`,
+  `#[op(secret)]`, shared param groups, `oneOf` and `requires_if` relations.
+- `OpGlobals`, `CliContext` and lazy contexts; `Resolve` for refs.
+- The runner `cli::run` and `run_with_io`, `RunHooks`, `Io::memory`, `--pretty`
+  and `--compact`, errors as JSON on stderr, notices and progress.
+- Group defaults, bare top-level verbs, extra subcommands and a root fallback
+  (`FlagsOnly`, `FreeText`).
+- `CallHook` and `CallInfo`; `Registry::call` and `call_typed` with the `Op`
+  marker trait; one pipeline for every path.
+- Paged lists: `Page`, `PageRequest`, `TooMany`, the follow-all-pages pair.
+- Secret redaction in the error line and notices.
+- The manual: `Registry::with_manual` and the `manual` op (feature `manual`).
+- The `rmcp` feature: `RegistryServer`, serving one audience.
+- The testing kit (feature `testing`): `assert_parity`, `assert_canonical`,
+  `assert_casing`, `assert_help_complete`, `assert_manual_snapshot`,
+  `assert_exit_table`, `assert_error_codes`, `strict_codes`,
+  `assert_unknown_ref_not_found`, `assert_local_ops_offline`,
+  `assert_secrets_not_echoed` and `sample_params`.
+- op-listen: `supervise` with structured `Opened` (fieldless and sent as soon
+  as `connect` succeeds), retry, stop, and session expiration events.
+- Cargo features of op-registry: `schema`, `manual` and `secrets` (default),
+  `testing` (dev-dependency only) and `rmcp`. `--no-default-features` builds.
+- Library error codes: `op_registry.usage.*`, `op_registry.cli.unknown_command`
+  and `op_registry.call.*`.
 
 ## 0.2.0
 

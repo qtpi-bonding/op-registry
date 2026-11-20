@@ -1,132 +1,281 @@
 # op-registry
 
-Declare operations once; derive CLI, tool-list and call adapters from the descriptors. MIT OR Apache-2.0.
+Declare each operation once; get the CLI, the tool list, a JSON call path and
+a typed call path from that one declaration. MIT OR Apache-2.0.
 
-The `op-listen` crate (`op-listen/`) adds a shared streaming listener on top of op-registry, with cursors, frames, a per-app gate and a reconnecting follower; see [op-listen/README.md](op-listen/README.md).
+op-registry has no auth, identity or signing. `Caller` is an opaque label the
+library passes through and never checks. Whoever hosts the registry decides who
+may call what.
 
-The `op-status` crate (`op-status/`) adds shared status types, a `StatusSource` trait and a `status get` operation; see [op-status/README.md](op-status/README.md).
+Two crates build on it: `op-listen` (`op-listen/`) adds a resumable streaming
+listener with cursors, frames and a reconnecting follower, see
+[op-listen/README.md](op-listen/README.md). `op-status` (`op-status/`) adds shared
+status types and a `status get` operation, see
+[op-status/README.md](op-status/README.md).
 
 ## Quick start
 
-Define parameter and output types, then register the operation. Parameter types must
-also implement `Serialize`: CLI parsing is converted to JSON before dispatch.
+An op is a function over a context, a params struct and an output type. One
+`ops!` block lists the ops of a binary. Doc comments on an entry are its help
+text. This example is compiled and run by `op-registry/tests/quickstart.rs`.
 
 ```rust,ignore
-use op_registry::{registry, Audience, CallOptions, OpParams};
-use serde::{Deserialize, Serialize};
-use schemars::JsonSchema;
+use op_registry::cli::{self, NoHooks};
+use op_registry::{Audience, CallOptions, OpGlobals, OpParams};
+use serde::Serialize;
 
-#[derive(OpParams, Serialize, Deserialize, JsonSchema)]
-struct ListParams {
+/// Process settings: the `--hub` flag of the binary.
+#[derive(OpGlobals)]
+pub struct Globals {
+    /// Hub to talk to.
+    pub hub: Option<String>,
+}
+
+/// The context every op receives. Built once per run from the globals.
+pub struct Context {
+    hub: Option<String>,
+}
+
+impl op_registry::Resolve for Context {}
+
+impl op_registry::CliContext for Context {
+    type Globals = Globals;
+    fn from_globals(globals: &Globals) -> anyhow::Result<Self> {
+        Ok(Context { hub: globals.hub.clone() })
+    }
+}
+
+#[derive(OpParams)]
+pub struct ListItems {
+    /// Largest number of items to return.
     #[op(default = 10)]
-    limit: u32,
+    pub limit: u32,
 }
 
-#[derive(Serialize, JsonSchema)]
-struct Item {
-    name: String,
+#[derive(Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Items {
+    pub item_names: Vec<String>,
 }
 
-async fn list(_: &Context, _: ListParams) -> anyhow::Result<Vec<Item>> {
-    Ok(Vec::new())
+async fn item_list(
+    ctx: &Context,
+    params: ListItems,
+    _opts: CallOptions,
+) -> anyhow::Result<Items> {
+    let hub = ctx.hub.as_deref().unwrap_or("local");
+    let item_names = (1..=params.limit).map(|n| format!("{hub}-{n}")).collect();
+    Ok(Items { item_names })
 }
 
-let registry = registry! {
-    Ctx = Context;
-    entries: [{
-        noun: "item", verb: "list", description: "List items",
-        access: reads, audience: Agent, params: ListParams, output: Vec<Item>,
-        op: list,
-        output_schema: serde_json::json!({"type": "array"}),
-    }]
-};
+mod app {
+    use super::*;
 
-let command = op_registry::cli::command(&registry, "app", "Example");
-let matches = command.get_matches();
-let result = op_registry::cli::dispatch(
-    &registry, &context, &matches, CallOptions::default(),
-).await?;
+    op_registry::ops! {
+        Ctx = Context;
+        globals = Globals;
+        pillar = "app";
+        bin = "app"; version = "0.1.0"; about = "Example app.";
+        groups = {
+            "item" => "Items.",
+        };
+        /// List items.
+        "item list" => { params: ListItems, output: Items,
+                         access: reads, audience: agent, op: item_list },
+    }
+}
+
+// main: `app::registry()` builds a `Registry<Context>`.
+let registry = app::registry();
+
+// 1. The CLI. `run` reads the process arguments' vector and returns the exit code.
+//    `app --hub h item list --limit 2` prints {"itemNames":["h-1","h-2"]}.
+let code = cli::run(&registry, std::env::args_os().collect(), &NoHooks).await;
+
+// 2. The tool list of one audience, and a call as a tool.
 let tools = op_registry::mcp::tool_list(&registry, Audience::Agent);
 let value = op_registry::mcp::call_tool(
     &registry, &context, Audience::Agent, "item_list",
-    serde_json::json!({}), CallOptions::default(),
+    serde_json::json!({"limit": 1}), CallOptions::default(),
 ).await?;
+
+// 3. The typed path: no JSON, the marker type names the op.
+let list = registry
+    .call_typed::<app::ops::ItemList>(&context, ListItems { limit: 3 }, CallOptions::default())
+    .await?;
 ```
 
-## Entry kinds
+`cli::run` never calls `process::exit`; `main` turns its `ExitCode` into the
+process exit. `cli::run_with_io` takes an `Io` (`Io::memory` for tests).
 
-A `registry!` entry names its function with one of four keys:
+A type used in an `ops!` block must be `pub` when the block sits in a `pub`
+module; a private type there gives rustc error E0446.
 
-- `op:` is `async fn(&Ctx, P) -> Result<O>`; the caller's `CallOptions` are not passed.
-- `op_with:` is `async fn(&Ctx, P, CallOptions) -> Result<O>`; the function sees
-  the caller.
-- `stream_op:` is `async fn(&Ctx, P, Option<Cursor>) -> Result<S>`; no `CallOptions`.
-- `stream_op_with:` is `async fn(&Ctx, P, Option<Cursor>, CallOptions) -> Result<S>`.
+## What `ops!` declares
 
-`Cursor` is an opaque string. Its field is private: build one with
-`Cursor::new("1:7")` and read it with `Cursor::as_str()` (it also implements
-`Display`). It serialises as the plain string.
+An entry is `"noun verb" => { ... }`. The last word of the path is the verb;
+words before it form nested CLI groups (`"concept get"`); one word is a bare
+top-level verb (`"index"`). The op name is derived, never overridden: the words
+joined with `_`, every `-` turned into `_` (`concept get` is `concept_get`). The
+CLI, the tool list and the typed path all use that one name. Each op also gets a
+marker type in the generated `ops` module (`ops::ConceptGet`).
 
-The `output_schema:` override comes after `op:` in a `registry!` entry. The
-parameter derive includes `Serialize` because CLI arguments pass through JSON.
+Entry keys:
 
-## Noun paths
+- Kind, one of: `op:` unary, `local:` unary and needing no connection, `stream:`
+  streaming, `list:` paged list. A function for `op:`, `local:` and `stream:`
+  takes `(&Ctx, Params, CallOptions)`; a stream function also takes the
+  `Option<Cursor>` before the options. A `list:` function takes
+  `(&Ctx, Params, PageRequest)` and returns `Page<Item>`.
+- `params:`, `output:` (or `item:` for a list), `access:` (`reads`, `writes`,
+  `network`, `spawns`, `destructive`, one word or a list) and `audience:`
+  (`agent`, `owner` or `dev`).
+- Optional: `errors: [ErrType]` (the coded error types the op may return, whose
+  codes are its contract), `fields:` (a function giving span fields from the
+  params), `exits: { 3 => "meaning" }` (extra exit codes, 3 to 63), `text: true`
+  (the output implements `RenderText` for text output), `hidden: true`,
+  `default: true` (runs when the group is named with no verb, at most one per
+  group), `paths: [typed]` (reachable only in process), and, for a `stream:`,
+  `cursor: true`; for a `list:`, `cap:` and `page_size:`. `unpaged: true` marks a non-list op
+  with the verb `list`, so `assert_help_complete` does not warn about it.
+- Header keys: `Ctx`, `globals`, `pillar`, `bin`/`version`/`about` (all three or
+  none), `groups` (every group needs a summary) and `resolve_server`.
 
-A `noun` may be a path of space-separated words, e.g.
-`noun: "agent dispatch-target", verb: "set"`. The derived operation name (and
-MCP tool name) joins the words with `_`, turns every `-` in the noun into `_`,
-and appends `_verb`: `agent_dispatch_target_set`. An explicit `name:` still
-wins. The CLI keeps the words as written (`agent dispatch-target set`) and
-`cli::command` builds one nested group per word, so `agent get` and
-`agent dispatch-target set` share one `agent` group; any depth. A word that is
-both a leaf (a verb or explicit name) and a group at the same level panics at
-construction, naming both operations. `parity::cli_surface` walks the whole
-tree and names each leaf by its path joined with `_` (hyphens kept);
-`assert_parity` matches those names to registry names after `-` becomes `_`,
-while the allow-lists stay exact strings. A hyphen in the verb also becomes `_` in
-the derived name (`action` + `set-parent` gives `action_set_parent`, CLI
-`action set-parent`); a single-word noun keeps its own hyphens.
+A `list:` entry makes two ops from one function: `concept_list` follows every
+page and prints a bare array, and `concept_list_page` takes `--limit` and
+`--cursor` and prints `{"items": [...], "nextCursor": "..."}`. On the CLI both
+are the one command `concept list`: with no paging flag it follows all pages,
+with `--limit` or `--cursor` it returns one. An unpaged call that passes `cap`
+(default 10,000) fails with `<pillar>.<object>.too_many` and tells the caller to
+page; it never truncates silently. A list entry cannot declare `text:` or
+`exits:`.
 
-`access: destructive` means writes plus destructive (`Access::destructive()`).
+Build-time checks panic naming the ops: duplicate names, a word that is both an
+op and a group (unless it is the group's default), a missing group summary, two
+defaults in a group, a flag clash between flattened param groups.
 
-## Output contract
+`Registry::merge`, `push_op`, `push_local`, `push_stream` and the list
+equivalents build entries in code; `op-status` and `op-listen` use them.
 
-For the CLI, stdout carries exactly one JSON value per call. A streaming
-operation prints one JSON value per line. Failures are formatted as
-`Code: message` on stderr by `cli::error_line`; the process exit code comes from the
-coded-error class table supplied to `cli::exit_code_for` (for example, a
-`coded_error::cli::ExitTable`). The library does not print or exit; the host does.
+## Params
 
-For MCP, `mcp::tool_error(err, source, fallback_message)` produces a
-transport-safe failure with its code, class, and fingerprint. Logical failures
-keep their message; the message of any other failure is replaced by the
-`fallback_message` you pass (for example `"request failed"`). Streaming
-operations are not exposed as MCP tools.
+`#[derive(OpParams)]` gives one params struct its clap command, its JSON
+decoder and its input schema. Doc comments become flag help. Field types decide
+the flag:
 
-## Pagination convention
+- Flags are long kebab-case only (`--agent-id`). The only short flag is `-h`.
+  JSON keys are camelCase (`agentId`) on every JSON path, input and output.
+- The subject of an op is `--id <REF>`, marked `#[op(subject = "concept")]` on a
+  `Ref` field. Other objects are flags named by kind (`--collection`). There are
+  no positional arguments.
+- `Option<T>` is optional, `bool` is a switch, `Vec<T>` repeats. `#[op(default = N)]`,
+  `#[op(keys = [...])]`, `#[op(value_enum)]` and `#[op(secret)]` adjust a field.
+- `Json` takes a JSON string, `@path` or `@-` (stdin); `Input` and `SecretFile`
+  take a path or `-` (stdin). On JSON paths `Json` is the value itself and
+  `Input` is a base64 string. Only one field per call may read stdin; a second
+  read fails with `op_registry.usage.stdin_twice` at run time.
+- `Patch<T>` (`#[op(clearable)]`) keeps, sets or clears a stored value.
+- Secrets (`#[op(secret)]`) are redacted from the error line and notices.
+  `SecretFile` needs the `secrets` feature.
+- `#[derive(OpGlobals)]` declares process-wide flags and environment variables
+  (`--hub`, `APP_HUB`). They may come before or after the verb and are not tool
+  params.
 
-List-like operations conventionally take `--limit N` and `--all`. Their output
-carries a `truncated` boolean, which is `true` when more results exist than
-were returned. `--cursor` exists only on streaming operations. This is a
-convention for the operation author; the library does not enforce it.
+Removed from v1 with no replacement: `registry!`, `Operation`, `CliHooks`, the
+`name:` override, `#[op(positional)]`, `#[op(short)]`, `#[op(long)]`,
+`#[op(value_delimiter)]`, and the descriptor fields `requires`, `since`,
+`deprecated` and `aliases`.
 
-## Declared but not acted on
+## Output
 
-Descriptors record and expose these fields, but the library does not itself act
-on them: `access`, `renders_text`, `exit_code_on_ok`, `requires`, `hidden`,
-`since`, `deprecated`, and `aliases`. The host decides what to do with this
-metadata.
+- stdout carries one JSON value per call. A stream prints one JSON value per
+  line. The output is pretty when stdout or stderr is a terminal and compact when
+  both are piped; `--pretty` and `--compact` force it.
+- The library does not rewrite output keys. Output types should say
+  `#[serde(rename_all = "camelCase")]`; `testing::assert_casing` checks every
+  input and output schema.
+- stderr carries notices, progress and the error. When piped, each library write
+  is one compact JSON line with its own key (`{"notice": ...}`,
+  `{"progress": ...}`, `{"error": {"code", "class", "message"}}`). The error line
+  is the last line on stderr. On a terminal, notices print as text.
+- Output types may implement `RenderText` and set `text: true` to give a text
+  form; `OkExit` lets a successful op choose a declared exit code.
 
-## Parity and composition
+## Exit codes
 
-Use `cli::command` and `mcp::tool_list` to build the two frontend surfaces.
-`parity::cli_surface` collects the CLI names, and `parity::assert_parity`
-checks them against the MCP tools and registry. It supports explicit
-`allow_cli_only` and `allow_mcp_only` lists, applies the selected audience
-rule, and treats streaming operations as CLI-only.
+| code | meaning |
+|---|---|
+| 0 | ok |
+| 2 | usage error (bad flag, missing value, unknown command) |
+| 65 | logical error (the call was understood and refused) |
+| 69 | infrastructure error |
+| 70 | unknown (an error with no code) |
+| 75 | transient, retry may help |
 
-Another crate can contribute entries with `Registry::merge`, or directly with
-`push_unary` and `push_stream` (including `CliHooks`). These operations panic
-at the call, not later, when an operation name is duplicated or when the CLI
-words of two operations collide (a CLI path used both as a leaf and a group).
-`Registry::find_cli` looks an operation up by its CLI name.
+Ops declare extra exits with `exits:` in the range 3 to 63. Usage errors carry
+library codes: `op_registry.usage.{missing, invalid, unknown_key, repeated_key,
+one_of, requires_if, stdin_twice}`, `op_registry.cli.unknown_command`, and for
+calls `op_registry.call.{unknown_operation, wrong_shape, outside_audience,
+wrong_path}`. `get` and `delete` of a missing object are
+`<pillar>.<object>.not_found`, never a null or a success.
+
+## Contexts, hooks and the call pipeline
+
+- `CliContext::from_globals` builds the context lazily, so a `local:` op and
+  `--help` never connect. `Resolve` maps a `Ref` to an id for ops that take
+  one; the default does nothing.
+- Every call path (CLI, `mcp::call_tool`, `Registry::call`, `call_typed`) runs
+  one pipeline: decode, validate, resolve refs, run, redact. An op marked
+  `paths: [typed]` is reachable only in process.
+- `Registry::set_call_hook` takes a `CallHook` (`around` wraps the call,
+  `on_error` sees a failure). `CallInfo` carries the op name, the path
+  (`Cli`, `Mcp`, ...) and the span fields. Errors that happen before the call
+  info exists (unknown op, wrong shape, decode failure, ref resolution) do not
+  reach `on_error`.
+- `cli::RunHooks` (`pre_parse`, `on_usage_error`, `post_run`) wraps the runner;
+  flush logs in `post_run`.
+- The root can hold extra non-registry subcommands and one fallback
+  (`FlagsOnly` or `FreeText`) that receives raw arguments when no command
+  matches. Extras and fallbacks return a plain `u8` exit code.
+  `-h`, `--help` and `--version` as the first token never reach a fallback.
+
+## Manual
+
+With the `manual` feature, `Registry::with_manual(manual, audience)` adds a
+`manual` op that renders every op the registry holds into one document;
+`manual --json` gives the descriptors, `--out` writes a file.
+
+## Tool lists and other transports
+
+`mcp::tool_list(&registry, audience)` lists the ops of one audience: not
+hidden, not a stream, not typed-only. Annotations say whether an op only reads
+or is destructive. `mcp::call_tool` runs one. The `rmcp` feature adds
+`RegistryServer`, an rmcp `ServerHandler` for one audience. Other transports
+(REST and so on) are mounted by the app over `Registry::call`.
+
+## Tests the library gives you
+
+Enable `op-registry` with `features = ["testing"]` as a dev-dependency (it
+implies `manual`). The checks panic with every problem they find:
+
+- `assert_parity(&registry, &mounts)`: every op reaches the CLI, the tool list
+  and each mount, or says why not. Streams are exempt from mounts.
+- `assert_canonical`, `assert_casing(&registry, Casing::Camel)`,
+  `assert_help_complete`, `assert_manual_snapshot`.
+- `assert_exit_table`, `assert_error_codes`, `strict_codes`,
+  `assert_unknown_ref_not_found`, `assert_local_ops_offline`.
+- `assert_secrets_not_echoed`, `sample_params`.
+
+## Cargo features
+
+| feature | adds | default |
+|---|---|---|
+| (core) | registry, derive, runner, output, exits, help | yes |
+| `schema` | output schemas via schemars 1 | yes |
+| `manual` | the manual and the `manual` op | yes |
+| `secrets` | `SecretFile` (zeroize) | yes |
+| `testing` | the test kit above (implies `manual`) | no, dev-dependency |
+| `rmcp` | `RegistryServer` | no |
+
+`op-registry` builds with `default-features = false`; `features = ["manual"]`
+is the smallest useful build. The one lib dependency is `coded-error`.

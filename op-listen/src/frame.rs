@@ -3,7 +3,11 @@
 use crate::ListenCursor;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-#[serde(tag = "frame", rename_all = "snake_case")]
+#[serde(
+    tag = "frame",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 #[non_exhaustive]
 pub enum ListenFrame<S, I> {
     Snapshot {

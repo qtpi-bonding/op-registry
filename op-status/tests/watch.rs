@@ -259,7 +259,7 @@ async fn error_message_cannot_carry_a_long_payload_through_status_watch() {
         let err = out[1].as_ref().err().expect("debug refuses");
         assert_eq!(code_of(err), "op_status.field_too_long");
     } else {
-        let msg = ok(&out, 1)["item"]["last_error_message"].as_str().unwrap();
+        let msg = ok(&out, 1)["item"]["lastErrorMessage"].as_str().unwrap();
         assert!(msg.len() <= 256, "{}", msg.len());
     }
 }

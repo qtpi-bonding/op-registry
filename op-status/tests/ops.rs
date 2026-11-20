@@ -248,11 +248,10 @@ fn status_registry_merges_into_an_app_registry_and_cli_and_mcp_parity_holds() {
 
     // CLI flags --kind --limit select the op; its JSON call matches MCP.
     let src = ToySource::new(many(5));
-    let argv: Vec<std::ffi::OsString> =
-        ["app", "status", "get", "--kind", "room", "--limit", "2"]
-            .into_iter()
-            .map(Into::into)
-            .collect();
+    let argv: Vec<std::ffi::OsString> = ["app", "status", "get", "--kind", "room", "--limit", "2"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
     let (Parsed::Op { name, .. }, _) = cli::parse(&app, &argv).ok().expect("parse") else {
         panic!("expected an op");
     };
@@ -305,24 +304,24 @@ fn status_get_json_shape_is_pinned() {
     let expected = json!({
         "service": "toy",
         "version": "0.9.1",
-        "taken_at_unix_ms": NOW,
+        "takenAtUnixMs": NOW,
         "epoch": 7,
         "components": [
             {
                 "kind": "room", "id": "r1",
                 "parent": {"kind": "service", "id": "main"},
                 "state": "DEGRADED", "ready": true, "terminal": false,
-                "last_error_code": "net.timeout",
-                "last_error_message": "timed out",
-                "consecutive_failures": 3,
-                "changed_at_unix_ms": 1_699_999_999_000i64,
+                "lastErrorCode": "net.timeout",
+                "lastErrorMessage": "timed out",
+                "consecutiveFailures": 3,
+                "changedAtUnixMs": 1_699_999_999_000i64,
                 "attrs": {"count": 2, "name": "alpha"}
             },
             {
                 "kind": "node", "id": "n1", "parent": null,
                 "state": "STOPPED", "ready": false, "terminal": true,
-                "last_error_code": "", "last_error_message": "",
-                "consecutive_failures": null, "changed_at_unix_ms": 0,
+                "lastErrorCode": "", "lastErrorMessage": "",
+                "consecutiveFailures": null, "changedAtUnixMs": 0,
                 "attrs": {}
             }
         ],
@@ -347,7 +346,7 @@ fn error_message_cannot_carry_a_long_payload_through_status_get_or_watch() {
         assert!(format!("{err:#}").contains("last_error_message"));
     } else {
         let v = result.unwrap();
-        let msg = v["components"][0]["last_error_message"].as_str().unwrap();
+        let msg = v["components"][0]["lastErrorMessage"].as_str().unwrap();
         assert!(msg.len() <= 256, "{}", msg.len());
     }
 }

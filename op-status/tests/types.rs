@@ -81,10 +81,10 @@ fn component_has_no_failing_for_secs_and_serialises_stable_field_order() {
         "state": "DEGRADED",
         "ready": true,
         "terminal": false,
-        "last_error_code": "net.timeout",
-        "last_error_message": "timed out",
-        "consecutive_failures": 4,
-        "changed_at_unix_ms": 1_700_000_000_000i64,
+        "lastErrorCode": "net.timeout",
+        "lastErrorMessage": "timed out",
+        "consecutiveFailures": 4,
+        "changedAtUnixMs": 1_700_000_000_000i64,
         "attrs": {"count": 3, "name": "alpha"}
     });
     assert_eq!(serde_json::to_value(&c).unwrap(), expected);
@@ -98,10 +98,10 @@ fn component_has_no_failing_for_secs_and_serialises_stable_field_order() {
         "\"state\"",
         "\"ready\"",
         "\"terminal\"",
-        "\"last_error_code\"",
-        "\"last_error_message\"",
-        "\"consecutive_failures\"",
-        "\"changed_at_unix_ms\"",
+        "\"lastErrorCode\"",
+        "\"lastErrorMessage\"",
+        "\"consecutiveFailures\"",
+        "\"changedAtUnixMs\"",
         "\"attrs\"",
     ];
     let mut last = 0usize;
@@ -119,8 +119,8 @@ fn component_has_no_failing_for_secs_and_serialises_stable_field_order() {
         json!({
             "kind": "k", "id": "i", "parent": null, "state": "UNKNOWN",
             "ready": false, "terminal": false,
-            "last_error_code": "", "last_error_message": "",
-            "consecutive_failures": null, "changed_at_unix_ms": 0, "attrs": {}
+            "lastErrorCode": "", "lastErrorMessage": "",
+            "consecutiveFailures": null, "changedAtUnixMs": 0, "attrs": {}
         })
     );
 
@@ -141,14 +141,14 @@ fn component_has_no_failing_for_secs_and_serialises_stable_field_order() {
     let v: Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(
         v,
-        json!({"service":"s","version":"1","taken_at_unix_ms":5,"epoch":2,
+        json!({"service":"s","version":"1","takenAtUnixMs":5,"epoch":2,
                "components":[],"truncated":false})
     );
     let mut last = 0usize;
     for key in [
         "\"service\"",
         "\"version\"",
-        "\"taken_at_unix_ms\"",
+        "\"takenAtUnixMs\"",
         "\"epoch\"",
         "\"components\"",
         "\"truncated\"",
