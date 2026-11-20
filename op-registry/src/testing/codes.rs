@@ -79,6 +79,16 @@ impl Called {
     }
 }
 
+/// Whether the caller runs inside a tokio runtime with its time driver.
+///
+/// `Handle::try_current` needs tokio's `rt` feature, which the `testing`
+/// feature does not enable (only `time`), so this probes instead: tokio looks
+/// up the time driver when it builds a `Sleep` and panics when there is no
+/// runtime.
+fn in_tokio_runtime() -> bool {
+    std::panic::catch_unwind(|| drop(tokio::time::sleep(std::time::Duration::ZERO))).is_ok()
+}
+
 /// The errors one call of `d` produced: the call's own, and for a stream the
 /// error of its first item. A stream is read to its first item (`Ok` or
 /// `Err`) or its end, under a 10 s timeout that covers opening it.
@@ -89,7 +99,7 @@ pub(crate) async fn call_errors<C: Resolve>(
     args: Value,
 ) -> Called {
     if d.kind == OpKind::Stream {
-        if tokio::runtime::Handle::try_current().is_err() {
+        if !in_tokio_runtime() {
             return Called::NoRuntime;
         }
         let call = async {
