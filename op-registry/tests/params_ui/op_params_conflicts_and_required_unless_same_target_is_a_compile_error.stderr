@@ -1,0 +1,5 @@
+error: field `x`: conflicts_with and required_unless both name `y`
+ --> tests/params_ui/op_params_conflicts_and_required_unless_same_target_is_a_compile_error.rs:5:27
+  |
+5 |     #[op(conflicts_with = "y", required_unless = "y")]
+  |                           ^^^

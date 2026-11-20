@@ -1,0 +1,5 @@
+error: group `g` is used with two kinds (one_of and at_least_one)
+  --> tests/params_ui/op_params_group_two_kinds_is_a_compile_error.rs:10:5
+   |
+10 |     z: Option<String>,
+   |     ^

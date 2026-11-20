@@ -90,24 +90,80 @@ fn check_relations(fields: &[Field]) -> syn::Result<()> {
         }
     }
     check_refs(fields)?;
+    for (name, members) in schema::at_least_one_groups(fields) {
+        if members.len() < 2 {
+            return Err(syn::Error::new(
+                members[0].ident.span(),
+                format!("at_least_one group `{name}` needs two members"),
+            ));
+        }
+        if let Some((_, _, one_of)) = schema::one_of_groups(fields)
+            .into_iter()
+            .find(|g| g.0 == name)
+        {
+            return Err(syn::Error::new(
+                one_of[0].ident.span(),
+                format!("group `{name}` is used with two kinds (one_of and at_least_one)"),
+            ));
+        }
+    }
     for f in fields {
-        for other in &f.requires_if {
-            let target = fields.iter().find(|o| &o.rust_name == other);
-            let Some(target) = target else {
-                return Err(syn::Error::new(
-                    f.ident.span(),
-                    format!("requires_if names `{other}`, which must be a field of this struct"),
-                ));
-            };
-            if target.present().is_none() {
-                return Err(syn::Error::new(
-                    f.ident.span(),
-                    attrs::plain_in_relation(other),
-                ));
+        for list in [&f.requires_if, &f.conflicts_with, &f.required_unless] {
+            for target in list {
+                check_target(fields, f, target)?;
             }
+        }
+        if let Some(both) = f
+            .conflicts_with
+            .iter()
+            .find(|c| f.required_unless.iter().any(|u| u.path == c.path))
+        {
+            return Err(syn::Error::new(
+                both.span,
+                format!(
+                    "field `{}`: conflicts_with and required_unless both name `{}`",
+                    f.rust_name, both.path
+                ),
+            ));
         }
     }
     Ok(())
+}
+
+/// A relation target is another field of this struct that can be absent, or
+/// a dotted path starting at one of its flattened groups.
+fn check_target(fields: &[Field], f: &Field, target: &attrs::ScopeName) -> syn::Result<()> {
+    let err = |msg: String| {
+        Err(syn::Error::new(
+            target.span,
+            format!("field `{}`: {msg}", f.rust_name),
+        ))
+    };
+    let path = &target.path;
+    let segments = target.segments();
+    if segments.iter().any(|s| s.is_empty()) {
+        return err(format!("`{path}` has an empty segment"));
+    }
+    let head = fields.iter().find(|o| o.rust_name == segments[0]);
+    if segments.len() > 1 {
+        return match head {
+            Some(h) if matches!(h.shape, types::Shape::Flatten(_)) => Ok(()),
+            _ => err(format!(
+                "`{}` in `{path}` is not a #[op(flatten)] field",
+                segments[0]
+            )),
+        };
+    }
+    match head {
+        None => err(format!("unknown target `{path}`")),
+        Some(h) if h.rust_name == f.rust_name => {
+            err("a relation cannot name the field itself".into())
+        }
+        Some(h) if h.present().is_none() => err(format!(
+            "target `{path}` cannot be absent, so it cannot be a relation target"
+        )),
+        Some(_) => Ok(()),
+    }
 }
 
 /// One subject at most, and every scope name is a field of this struct or a

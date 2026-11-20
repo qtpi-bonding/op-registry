@@ -53,8 +53,8 @@ pub(crate) fn args(f: &Field) -> Vec<TokenStream> {
             ]
         }
         Shape::Plain(b) => vec![valued(b, None, f.required())],
-        Shape::Optional(b) => vec![valued(b, None, false)],
-        Shape::Repeated(b) => vec![valued(b, append, false)],
+        Shape::Optional(b) => vec![valued(b, None, f.explicit_required)],
+        Shape::Repeated(b) => vec![valued(b, append, f.explicit_required)],
         Shape::Switch => vec![quote! {
             #clap::Arg::new(#id).long(#flag) #help.action(#clap::ArgAction::SetTrue)
         }],
@@ -84,7 +84,7 @@ pub(crate) fn args(f: &Field) -> Vec<TokenStream> {
 
 /// The clap arg ids of a relation member: a tri-state also has `no_x`, a
 /// `Patch` also `clear_x`.
-fn group_ids(f: &Field) -> Vec<String> {
+pub(crate) fn group_ids(f: &Field) -> Vec<String> {
     let mut ids = vec![f.rust_name.clone()];
     match f.shape {
         Shape::TriState => ids.push(format!("no_{}", f.rust_name)),
@@ -94,15 +94,68 @@ fn group_ids(f: &Field) -> Vec<String> {
     ids
 }
 
+/// A `Vec<String>` expression: the clap arg ids of every target, then `extra`.
+fn target_ids(
+    fields: &[Field],
+    targets: &[super::attrs::ScopeName],
+    extra: &[String],
+) -> TokenStream {
+    let ids = targets
+        .iter()
+        .map(|t| super::schema::resolve(fields, t).arg_ids());
+    quote! {{
+        let mut ids: ::std::vec::Vec<::std::string::String> = ::std::vec::Vec::new();
+        #(ids.extend(#ids);)*
+        #(ids.push(#extra.to_owned());)*
+        ids
+    }}
+}
+
 pub fn add_args_fn(fields: &[Field]) -> TokenStream {
     let clap = clap();
     let steps = fields.iter().map(|f| match &f.shape {
         Shape::Flatten(ty) => quote!(cmd = <#ty as ::op_registry::OpParams>::add_args(cmd);),
         _ => {
-            let args = args(f);
-            quote!(#(cmd = cmd.arg(#args);)*)
+            let conflicts = (!f.conflicts_with.is_empty()).then(|| {
+                let ids = target_ids(fields, &f.conflicts_with, &[]);
+                quote!(.conflicts_with_all(#ids))
+            });
+            let own_extra: Vec<String> = group_ids(f).into_iter().skip(1).collect();
+            let unless = (!f.required_unless.is_empty()).then(|| {
+                let ids = target_ids(fields, &f.required_unless, &own_extra);
+                quote!(.required_unless_present_any(#ids))
+            });
+            let args = args(f).into_iter().enumerate().map(|(i, arg)| {
+                let unless = if i == 0 { unless.clone() } else { None };
+                quote!(cmd = cmd.arg(#arg #conflicts #unless);)
+            });
+            quote!(#(#args)*)
         }
     });
+    // A required tri-state: one of `--x` / `--no-x`.
+    let required_tri = fields
+        .iter()
+        .filter(|f| f.explicit_required && matches!(f.shape, Shape::TriState))
+        .map(|f| {
+            let name = format!("{}:required", f.rust_name);
+            let ids = group_ids(f);
+            quote! {
+                cmd = cmd.group(
+                    #clap::ArgGroup::new(#name).args([#(#ids),*]).required(true).multiple(false),
+                );
+            }
+        });
+    let at_least_one =
+        super::schema::at_least_one_groups(fields)
+            .into_iter()
+            .map(|(name, members)| {
+                let ids = members.iter().flat_map(|f| group_ids(f));
+                quote! {
+                    cmd = cmd.group(
+                        #clap::ArgGroup::new(#name).args([#(#ids),*]).required(true).multiple(true),
+                    );
+                }
+            });
     let groups = super::schema::one_of_groups(fields).into_iter().map(|(name, optional, members)| {
         let ids = members.iter().flat_map(|f| group_ids(f));
         let required = !optional;
@@ -116,6 +169,8 @@ pub fn add_args_fn(fields: &[Field]) -> TokenStream {
         fn add_args(mut cmd: #clap::Command) -> #clap::Command {
             #(#steps)*
             #(#groups)*
+            #(#required_tri)*
+            #(#at_least_one)*
             cmd
         }
     }

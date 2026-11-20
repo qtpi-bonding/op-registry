@@ -613,6 +613,31 @@ fn schema_agrees_with_validate() {
         ("labels", some(&[json!({}), json!({"k": "v"}), Value::Null])),
         ("flag", some(&[json!(true), json!(false), Value::Null])),
     ]);
+    assert_agrees::<ReqVec>(&[("to", list.clone())]);
+    assert_agrees::<ReqOptBool>(&[("visible", some(&[json!(true), json!(false), Value::Null]))]);
+    assert_agrees::<ReqOptStr>(&[("name", option.clone())]);
+    assert_agrees::<ReqJson>(&[("data", some(&[json!({"a": 1}), Value::Null]))]);
+    assert_agrees::<MessageSubmit>(&[("to", list.clone()), ("signedFile", option.clone())]);
+    assert_agrees::<Confirm>(&[
+        ("dryRun", switch.clone()),
+        ("confirmFingerprint", option.clone()),
+    ]);
+    assert_agrees::<GraphSearch>(&[
+        ("name", option.clone()),
+        ("file", option.clone()),
+        ("nodeKind", option.clone()),
+    ]);
+    assert_agrees::<AddDevice>(&[
+        ("confirmFingerprint", option.clone()),
+        ("ownerKeyFile", option.clone()),
+        ("dryRun", switch.clone()),
+    ]);
+    assert_agrees::<Forced>(&[
+        ("force", option.clone()),
+        ("note", some(&[json!("x"), Value::Null])),
+        ("flag", some(&[json!(true), json!(false), Value::Null])),
+    ]);
+    assert_agrees::<ConflictsOnly>(&[("a", option.clone()), ("b", list.clone())]);
 }
 
 #[test]
@@ -685,4 +710,381 @@ fn flattened_any_of_survives_absorb() {
         json!({"if": {"required": ["a"]}, "then": {"required": ["b"]}})
     );
     assert_eq!(all[3], json!({"required": ["d"]}));
+}
+
+// ---- required, conflicts_with, required_unless, at_least_one, dotted targets ----
+
+/// The exit code `go` returns on `args`.
+fn exit_of<P: OpParams + Send + 'static>(args: &[&str]) -> u8 {
+    let argv: Vec<OsString> = ["app", "go"]
+        .iter()
+        .chain(args)
+        .map(OsString::from)
+        .collect();
+    let (io, _cap) = Io::memory(b"", false, false);
+    futures_executor::block_on(cli::run_with_io(&registry_of::<P>(), argv, &NoHooks, io))
+}
+
+#[derive(Debug, OpParams)]
+struct ReqVec {
+    #[op(required)]
+    to: Vec<String>,
+}
+
+#[derive(Debug, OpParams)]
+struct ReqOptBool {
+    #[op(required)]
+    visible: Option<bool>,
+}
+
+#[derive(Debug, OpParams)]
+struct ReqOptStr {
+    #[op(required)]
+    name: Option<String>,
+}
+
+#[derive(Debug, OpParams)]
+struct ReqJson {
+    #[op(required)]
+    data: Option<op_registry::Json>,
+}
+
+#[test]
+fn required_vec_shapes() {
+    assert_eq!(exit_of::<ReqVec>(&[]), 2);
+    assert_eq!(exit_of::<ReqVec>(&["--to", "a"]), 0);
+    assert!(on_cli::<ReqVec>(&["--to", "a", "--to", "b"]));
+    assert_eq!(
+        cli::<ReqVec>(&[]).unwrap_err().kind(),
+        ErrorKind::MissingRequiredArgument
+    );
+    for input in [json!({}), json!({"to": []}), json!({"to": null})] {
+        assert_eq!(
+            code(json_of::<ReqVec>(input.clone())),
+            "op_registry.usage.missing",
+            "{input}"
+        );
+        assert!(!on_json::<ReqVec>(input));
+    }
+    assert!(on_json::<ReqVec>(json!({"to": ["a"]})));
+    assert!(!on_typed(ReqVec { to: vec![] }));
+    assert!(on_typed(ReqVec {
+        to: vec!["a".into()]
+    }));
+    let schema = ReqVec::input_schema();
+    assert_eq!(schema["required"], json!(["to"]));
+    assert_eq!(schema["properties"]["to"]["minItems"], json!(1));
+    assert!(ReqVec::fields()[0].required);
+}
+
+#[test]
+fn required_option_shapes() {
+    assert_eq!(exit_of::<ReqOptStr>(&[]), 2);
+    assert_eq!(exit_of::<ReqOptStr>(&["--name", "n"]), 0);
+    assert!(!on_json::<ReqOptStr>(json!({})));
+    assert!(!on_json::<ReqOptStr>(json!({"name": null})));
+    assert!(on_json::<ReqOptStr>(json!({"name": "n"})));
+    assert!(!on_typed(ReqOptStr { name: None }));
+    assert!(on_typed(ReqOptStr {
+        name: Some("n".into())
+    }));
+    // Any JSON value, but not `null`.
+    assert!(!on_json::<ReqJson>(json!({"data": null})));
+    assert!(on_json::<ReqJson>(json!({"data": [1]})));
+    assert!(ReqOptStr::fields()[0].required);
+}
+
+#[test]
+fn required_option_bool_missing_on_mcp_is_missing() {
+    // Today an omitted `Option<bool>` silently became `false`.
+    assert_eq!(
+        code(json_of::<ReqOptBool>(json!({}))),
+        "op_registry.usage.missing"
+    );
+    assert_eq!(
+        code(json_of::<ReqOptBool>(json!({"visible": null}))),
+        "op_registry.usage.missing"
+    );
+    assert!(!on_json::<ReqOptBool>(json!({})));
+    assert!(on_json::<ReqOptBool>(json!({"visible": false})));
+    assert!(on_json::<ReqOptBool>(json!({"visible": true})));
+    // CLI: a required group of --visible / --no-visible.
+    assert_eq!(exit_of::<ReqOptBool>(&[]), 2);
+    assert_eq!(exit_of::<ReqOptBool>(&["--visible"]), 0);
+    assert_eq!(exit_of::<ReqOptBool>(&["--no-visible"]), 0);
+    assert_eq!(exit_of::<ReqOptBool>(&["--visible", "--no-visible"]), 2);
+    assert!(!on_typed(ReqOptBool { visible: None }));
+    assert!(on_typed(ReqOptBool {
+        visible: Some(false)
+    }));
+}
+
+#[derive(Debug, OpParams)]
+struct MessageSubmit {
+    #[op(required_unless = "signed_file")]
+    to: Vec<String>,
+    #[op(conflicts_with = "to")]
+    signed_file: Option<PathBuf>,
+}
+
+fn submit(to: &[&str], signed: Option<&str>) -> MessageSubmit {
+    MessageSubmit {
+        to: to.iter().map(|t| (*t).to_owned()).collect(),
+        signed_file: signed.map(PathBuf::from),
+    }
+}
+
+#[test]
+fn message_submit_shape() {
+    // CLI
+    assert_eq!(exit_of::<MessageSubmit>(&["--to", "a"]), 0);
+    assert_eq!(exit_of::<MessageSubmit>(&["--signed-file", "f"]), 0);
+    assert_eq!(exit_of::<MessageSubmit>(&[]), 2);
+    assert_eq!(
+        exit_of::<MessageSubmit>(&["--to", "a", "--signed-file", "f"]),
+        2
+    );
+    // JSON
+    assert!(on_json::<MessageSubmit>(json!({"to": ["a"]})));
+    assert!(on_json::<MessageSubmit>(json!({"signedFile": "f"})));
+    assert!(on_json::<MessageSubmit>(
+        json!({"to": [], "signedFile": "f"})
+    ));
+    assert_eq!(
+        code(json_of::<MessageSubmit>(json!({}))),
+        "op_registry.usage.missing"
+    );
+    assert_eq!(
+        code(json_of::<MessageSubmit>(
+            json!({"to": ["a"], "signedFile": "f"})
+        )),
+        "op_registry.usage.conflicts"
+    );
+    // typed
+    assert!(on_typed(submit(&["a"], None)));
+    assert!(on_typed(submit(&[], Some("f"))));
+    assert!(!on_typed(submit(&[], None)));
+    assert!(!on_typed(submit(&["a"], Some("f"))));
+    // The messages name the fields.
+    let err = json_of::<MessageSubmit>(json!({"to": ["a"], "signedFile": "f"})).unwrap_err();
+    assert_eq!(err.to_string(), "signedFile conflicts with to");
+    let err = json_of::<MessageSubmit>(json!({})).unwrap_err();
+    assert_eq!(err.to_string(), "to is required unless signedFile is given");
+}
+
+#[derive(Debug, OpParams)]
+struct Confirm {
+    dry_run: bool,
+    #[op(required_unless = "dry_run")]
+    confirm_fingerprint: Option<String>,
+}
+
+#[test]
+fn confirm_fingerprint_required_unless_dry_run() {
+    assert_eq!(exit_of::<Confirm>(&["--dry-run"]), 0);
+    assert_eq!(exit_of::<Confirm>(&["--confirm-fingerprint", "f"]), 0);
+    assert_eq!(exit_of::<Confirm>(&[]), 2);
+    assert!(on_json::<Confirm>(json!({"dryRun": true})));
+    assert!(on_json::<Confirm>(json!({"confirmFingerprint": "f"})));
+    // `false` is absent, so it does not excuse the fingerprint.
+    assert!(!on_json::<Confirm>(json!({"dryRun": false})));
+    assert!(!on_json::<Confirm>(json!({})));
+    assert!(on_typed(Confirm {
+        dry_run: true,
+        confirm_fingerprint: None
+    }));
+    assert!(!on_typed(Confirm {
+        dry_run: false,
+        confirm_fingerprint: None
+    }));
+}
+
+#[derive(Debug, OpParams)]
+struct GraphSearch {
+    #[op(at_least_one = "query")]
+    name: Option<String>,
+    #[op(at_least_one = "query")]
+    file: Option<PathBuf>,
+    #[op(at_least_one = "query")]
+    node_kind: Option<String>,
+}
+
+#[test]
+fn at_least_one_graph_search() {
+    assert_eq!(exit_of::<GraphSearch>(&[]), 2);
+    assert_eq!(exit_of::<GraphSearch>(&["--name", "n"]), 0);
+    assert_eq!(
+        exit_of::<GraphSearch>(&["--node-kind", "k", "--file", "f"]),
+        0
+    );
+    assert_eq!(
+        exit_of::<GraphSearch>(&["--name", "n", "--file", "f", "--node-kind", "k"]),
+        0
+    );
+    assert_eq!(
+        code(json_of::<GraphSearch>(json!({}))),
+        "op_registry.usage.at_least_one"
+    );
+    assert_eq!(
+        code(json_of::<GraphSearch>(json!({"name": null}))),
+        "op_registry.usage.at_least_one"
+    );
+    assert!(on_json::<GraphSearch>(json!({"file": "f"})));
+    assert!(on_json::<GraphSearch>(
+        json!({"name": "n", "nodeKind": "k"})
+    ));
+    assert!(on_typed(GraphSearch {
+        name: None,
+        file: None,
+        node_kind: Some("k".into())
+    }));
+    assert!(!on_typed(GraphSearch {
+        name: None,
+        file: None,
+        node_kind: None
+    }));
+    let schema = GraphSearch::input_schema();
+    assert_eq!(schema["anyOf"].as_array().unwrap().len(), 3, "{schema}");
+}
+
+#[derive(Debug, OpParams)]
+struct EditCommon {
+    #[op(required_unless = "dry_run")]
+    owner_key_file: Option<PathBuf>,
+    dry_run: bool,
+}
+
+#[derive(Debug, OpParams)]
+struct AddDevice {
+    #[op(required_unless = "common.dry_run")]
+    confirm_fingerprint: Option<String>,
+    #[op(flatten)]
+    common: EditCommon,
+}
+
+fn add_device(confirm: Option<&str>, owner: Option<&str>, dry_run: bool) -> AddDevice {
+    AddDevice {
+        confirm_fingerprint: confirm.map(str::to_owned),
+        common: EditCommon {
+            owner_key_file: owner.map(PathBuf::from),
+            dry_run,
+        },
+    }
+}
+
+#[test]
+fn dotted_required_unless_across_flatten() {
+    // CLI
+    assert_eq!(exit_of::<AddDevice>(&["--dry-run"]), 0);
+    assert_eq!(
+        exit_of::<AddDevice>(&["--confirm-fingerprint", "f", "--owner-key-file", "k"]),
+        0
+    );
+    assert_eq!(exit_of::<AddDevice>(&["--owner-key-file", "k"]), 2);
+    assert_eq!(exit_of::<AddDevice>(&["--confirm-fingerprint", "f"]), 2);
+    assert_eq!(exit_of::<AddDevice>(&[]), 2);
+    // JSON
+    assert!(on_json::<AddDevice>(json!({"dryRun": true})));
+    assert!(on_json::<AddDevice>(
+        json!({"confirmFingerprint": "f", "ownerKeyFile": "k"})
+    ));
+    assert!(!on_json::<AddDevice>(json!({"ownerKeyFile": "k"})));
+    assert!(!on_json::<AddDevice>(json!({"dryRun": false})));
+    assert_eq!(
+        json_of::<AddDevice>(json!({"ownerKeyFile": "k"}))
+            .unwrap_err()
+            .to_string(),
+        "confirmFingerprint is required unless dryRun is given"
+    );
+    // typed
+    assert!(on_typed(add_device(None, None, true)));
+    assert!(on_typed(add_device(Some("f"), Some("k"), false)));
+    assert!(!on_typed(add_device(None, Some("k"), false)));
+    assert!(!on_typed(add_device(Some("f"), None, false)));
+    // Both relations survive absorb.
+    let schema = AddDevice::input_schema();
+    assert_eq!(schema["allOf"].as_array().unwrap().len(), 2, "{schema}");
+    // `null` is absent in validate, so the dotted target admits it.
+    assert!(jsonschema::is_valid(
+        &schema,
+        &json!({"confirmFingerprint": "f", "ownerKeyFile": "k", "dryRun": null})
+    ));
+}
+
+#[derive(Debug, OpParams)]
+struct Mode {
+    #[op(clearable)]
+    note: Patch<String>,
+    flag: Option<bool>,
+}
+
+#[derive(Debug, OpParams)]
+struct Forced {
+    #[op(conflicts_with = ["mode.flag", "mode.note"])]
+    force: Option<String>,
+    #[op(flatten)]
+    mode: Mode,
+}
+
+#[test]
+fn dotted_conflicts_use_the_leafs_own_arg_ids() {
+    // A tri-state and a Patch leaf: `--no-flag` and `--clear-note` count.
+    assert_eq!(exit_of::<Forced>(&["--force", "x"]), 0);
+    assert_eq!(exit_of::<Forced>(&["--flag", "--no-flag"]), 2);
+    assert_eq!(exit_of::<Forced>(&["--force", "x", "--flag"]), 2);
+    assert_eq!(exit_of::<Forced>(&["--force", "x", "--no-flag"]), 2);
+    assert_eq!(exit_of::<Forced>(&["--force", "x", "--clear-note"]), 2);
+    assert_eq!(exit_of::<Forced>(&["--force", "x", "--note", "n"]), 2);
+    assert_eq!(exit_of::<Forced>(&["--no-flag", "--clear-note"]), 0);
+    assert!(on_json::<Forced>(json!({"force": "x"})));
+    assert!(on_json::<Forced>(json!({"force": "x", "flag": null})));
+    assert!(!on_json::<Forced>(json!({"force": "x", "flag": false})));
+    assert!(!on_json::<Forced>(json!({"force": "x", "note": null})));
+    assert_eq!(
+        json_of::<Forced>(json!({"force": "x", "flag": true}))
+            .unwrap_err()
+            .to_string(),
+        "force conflicts with flag"
+    );
+}
+
+#[derive(Debug, OpParams)]
+struct ConflictsOnly {
+    #[op(conflicts_with = "b")]
+    a: Option<String>,
+    b: Vec<String>,
+}
+
+#[test]
+fn a_lone_conflicts_with_is_a_valid_schema() {
+    let schema = ConflictsOnly::input_schema();
+    assert!(jsonschema::meta::is_valid(&schema), "{schema}");
+    assert!(schema["not"].is_object());
+    assert!(!jsonschema::is_valid(
+        &schema,
+        &json!({"a": "x", "b": ["y"]})
+    ));
+    assert!(jsonschema::is_valid(&schema, &json!({"a": "x", "b": []})));
+}
+
+#[test]
+fn every_shape_clap_group_ids_are_valid() {
+    // clap panics on a bad group id: drive tri-state and Patch members.
+    for args in [
+        &["--clear-note"][..],
+        &["--note", "n"],
+        &["--flag"],
+        &["--no-flag"],
+        &["--labels", "k=v"],
+        &[],
+    ] {
+        assert_eq!(exit_of::<EveryShape>(args), 0, "{args:?}");
+    }
+    for args in [
+        &["--clear-note", "--flag"][..],
+        &["--no-flag", "--labels", "k=v"],
+        &["--flag", "--no-flag"],
+    ] {
+        assert_eq!(exit_of::<EveryShape>(args), 2, "{args:?}");
+    }
 }

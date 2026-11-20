@@ -1,0 +1,5 @@
+error: at_least_one group `g` needs two members
+ --> tests/params_ui/op_params_at_least_one_needs_two_members_is_a_compile_error.rs:6:5
+  |
+6 |     x: Option<String>,
+  |     ^

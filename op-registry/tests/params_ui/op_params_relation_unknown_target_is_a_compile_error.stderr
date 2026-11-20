@@ -1,0 +1,5 @@
+error: field `x`: unknown target `y`
+ --> tests/params_ui/op_params_relation_unknown_target_is_a_compile_error.rs:5:27
+  |
+5 |     #[op(conflicts_with = "y")]
+  |                           ^^^

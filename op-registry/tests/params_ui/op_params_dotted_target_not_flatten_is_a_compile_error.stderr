@@ -1,0 +1,5 @@
+error: field `x`: `y` in `y.z` is not a #[op(flatten)] field
+ --> tests/params_ui/op_params_dotted_target_not_flatten_is_a_compile_error.rs:5:28
+  |
+5 |     #[op(required_unless = "y.z")]
+  |                            ^^^^^

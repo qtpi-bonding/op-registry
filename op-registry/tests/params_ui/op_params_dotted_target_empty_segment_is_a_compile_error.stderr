@@ -1,0 +1,5 @@
+error: field `x`: `y..z` has an empty segment
+  --> tests/params_ui/op_params_dotted_target_empty_segment_is_a_compile_error.rs:10:28
+   |
+10 |     #[op(required_unless = "y..z")]
+   |                            ^^^^^^

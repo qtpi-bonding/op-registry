@@ -1,0 +1,5 @@
+error: field `x`: required_unless needs an Option, Vec or map field
+ --> tests/params_ui/op_params_required_unless_on_plain_is_a_compile_error.rs:6:8
+  |
+6 |     x: String,
+  |        ^^^^^^

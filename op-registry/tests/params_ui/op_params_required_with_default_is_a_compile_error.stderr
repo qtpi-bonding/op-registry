@@ -1,0 +1,5 @@
+error: field `x`: required cannot take default, required_unless or a one_of/at_least_one group
+ --> tests/params_ui/op_params_required_with_default_is_a_compile_error.rs:6:8
+  |
+6 |     x: Option<String>,
+  |        ^^^^^^^^^^^^^^

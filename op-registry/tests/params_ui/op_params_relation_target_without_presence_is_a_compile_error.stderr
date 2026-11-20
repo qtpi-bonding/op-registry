@@ -1,0 +1,5 @@
+error: field `x`: target `y` cannot be absent, so it cannot be a relation target
+ --> tests/params_ui/op_params_relation_target_without_presence_is_a_compile_error.rs:5:28
+  |
+5 |     #[op(required_unless = "y")]
+  |                            ^^^

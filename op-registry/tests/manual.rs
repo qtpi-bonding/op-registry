@@ -161,6 +161,25 @@ fn front_matter_rendered() {
 }
 
 #[test]
+fn library_code_table_lists_each_code_once() {
+    let text = render_fixture();
+    let library = text
+        .split("## Library codes")
+        .nth(1)
+        .expect("library codes section");
+    let library = library.split("\n## ").next().unwrap();
+    let mut seen = std::collections::BTreeSet::new();
+    for line in library.lines().filter(|l| l.starts_with("| op_registry.")) {
+        let code = line.split('|').nth(1).unwrap().trim();
+        assert!(seen.insert(code.to_owned()), "{code} is listed twice");
+    }
+    // `MissingField` and `MissingUnless` share one code.
+    assert!(seen.contains("op_registry.usage.missing"));
+    assert!(seen.contains("op_registry.usage.conflicts"));
+    assert!(seen.contains("op_registry.usage.at_least_one"));
+}
+
+#[test]
 fn codes_listed_with_class_and_exit() {
     let text = render_fixture();
     assert!(text.contains("| fix.concept.not_found | logical | 65 |"));

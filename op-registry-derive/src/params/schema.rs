@@ -3,7 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use super::attrs::Field;
+use super::attrs::{Field, ScopeName};
 use super::types::{Base, Shape};
 
 fn json_path() -> TokenStream {
@@ -98,7 +98,10 @@ pub fn input_schema_fn(fields: &[Field]) -> TokenStream {
         }
         let key = &f.key;
         let schema = shape_schema(f);
-        let schema = if in_relation(fields, f) && !matches!(f.shape, Shape::Patch(_)) {
+        let schema = if in_relation(fields, f)
+            && !f.explicit_required
+            && !matches!(f.shape, Shape::Patch(_))
+        {
             quote!(::op_registry::__private::rt::nullable(#schema))
         } else {
             schema
@@ -125,11 +128,22 @@ pub fn input_schema_fn(fields: &[Field]) -> TokenStream {
             description
         };
         let require = f.required().then(|| quote!(builder.require(#key);));
+        // A required `Vec` is non-empty, a required any-JSON `Option` non-null.
+        let required_bounds = match (&f.shape, f.explicit_required) {
+            (Shape::Repeated(_), true) => {
+                quote!(object.insert("minItems".to_owned(), #json::json!(1));)
+            }
+            (Shape::Optional(Base::Json), true) => {
+                quote!(object.insert("not".to_owned(), #json::json!({"type": "null"}));)
+            }
+            _ => quote!(),
+        };
         quote! {
             let mut property = #schema;
             if let Some(object) = property.as_object_mut() {
                 #description
                 #default
+                #required_bounds
             }
             builder.property(#key, property);
             #require
@@ -141,20 +155,60 @@ pub fn input_schema_fn(fields: &[Field]) -> TokenStream {
             let members = members.iter().map(|f| member(f));
             quote!(builder.one_of(&[#(#members),*], #optional);)
         });
-    let requires = fields
+    let at_least_one = at_least_one_groups(fields).into_iter().map(|(_, members)| {
+        let members = members.iter().map(|f| member(f));
+        quote!(builder.at_least_one(&[#(#members),*]);)
+    });
+    let mut relations = Vec::new();
+    for f in fields
         .iter()
-        .filter(|f| !f.requires_if.is_empty())
-        .map(|f| {
-            let field = member(f);
-            let others = others_of(fields, f).into_iter().map(member);
-            quote!(builder.requires_if(#field, &[#(#others),*]);)
+        .filter(|f| !matches!(f.shape, Shape::Flatten(_)))
+    {
+        let own = member(f);
+        if !f.requires_if.is_empty() {
+            let when = keyed_list(fields, &f.requires_if);
+            relations.push(quote!({
+                #when
+                builder.requires_if(#own, &when);
+            }));
+        }
+        for t in &f.conflicts_with {
+            let other = resolve(fields, t).keyed();
+            relations.push(quote!({
+                let other = #other;
+                builder.conflicts_with(#own, (other.0.as_str(), other.1));
+            }));
+        }
+        if !f.required_unless.is_empty() {
+            let when = keyed_list(fields, &f.required_unless);
+            relations.push(quote!({
+                #when
+                builder.required_unless(#own, &when);
+            }));
+        }
+    }
+    // A leaf of a flattened group that a relation names admits `null`.
+    let dotted_nullable = fields
+        .iter()
+        .flat_map(|f| {
+            f.requires_if
+                .iter()
+                .chain(&f.conflicts_with)
+                .chain(&f.required_unless)
+        })
+        .filter(|t| t.segments().len() > 1)
+        .map(|t| {
+            let key = resolve(fields, t).key();
+            quote!(builder.nullable(&#key);)
         });
     quote! {
         fn input_schema() -> #json::Value {
             let mut builder = ::op_registry::__private::rt::SchemaBuilder::default();
             #(#steps)*
+            #(#dotted_nullable)*
             #(#groups)*
-            #(#requires)*
+            #(#at_least_one)*
+            #(#relations)*
             builder.build()
         }
     }
@@ -175,12 +229,122 @@ pub fn one_of_groups(fields: &[Field]) -> Vec<(String, bool, Vec<&Field>)> {
     groups
 }
 
-/// The fields a `requires_if` field depends on.
-pub fn others_of<'a>(fields: &'a [Field], f: &Field) -> Vec<&'a Field> {
-    f.requires_if
+/// The groups named by `at_least_one`: `(name, members)`.
+pub fn at_least_one_groups(fields: &[Field]) -> Vec<(String, Vec<&Field>)> {
+    let mut groups: Vec<(String, Vec<&Field>)> = Vec::new();
+    for f in fields {
+        let Some(name) = &f.at_least_one else {
+            continue;
+        };
+        match groups.iter_mut().find(|g| &g.0 == name) {
+            Some(g) => g.1.push(f),
+            None => groups.push((name.clone(), vec![f])),
+        }
+    }
+    groups
+}
+
+/// A relation target: a field of this struct, or a leaf behind a flatten.
+pub enum Target<'a> {
+    Local(&'a Field),
+    Dotted {
+        /// The field path from `self` to the leaf.
+        path: Vec<syn::Ident>,
+        /// The type of the flatten field the path starts at.
+        group: &'a syn::Type,
+        /// The leaf's rust name.
+        leaf: String,
+    },
+}
+
+/// Resolves a target that `check_relations` already accepted.
+pub fn resolve<'a>(fields: &'a [Field], name: &ScopeName) -> Target<'a> {
+    let segments = name.segments();
+    let head = fields
         .iter()
-        .filter_map(|name| fields.iter().find(|o| &o.rust_name == name))
-        .collect()
+        .find(|f| f.rust_name == segments[0])
+        .expect("relation target checked by the derive");
+    if segments.len() == 1 {
+        return Target::Local(head);
+    }
+    let Shape::Flatten(group) = &head.shape else {
+        unreachable!("relation target checked by the derive")
+    };
+    let path = segments
+        .iter()
+        .map(|seg| {
+            // A keyword field is a raw identifier.
+            syn::parse_str::<syn::Ident>(seg)
+                .unwrap_or_else(|_| syn::Ident::new_raw(seg, name.span))
+        })
+        .collect();
+    Target::Dotted {
+        path,
+        group,
+        leaf: name.leaf().to_owned(),
+    }
+}
+
+impl Target<'_> {
+    /// Whether the target is given, as an expression over `self`.
+    pub fn present(&self) -> TokenStream {
+        let rt = quote!(::op_registry::__private::rt);
+        match self {
+            Target::Local(f) => {
+                let ident = &f.ident;
+                quote!(#rt::Presence::present(&self.#ident))
+            }
+            Target::Dotted { path, .. } => quote!(#rt::Presence::present(&self.#(#path).*)),
+        }
+    }
+
+    /// The target's JSON key, as a `String` expression.
+    pub fn key(&self) -> TokenStream {
+        let rt = quote!(::op_registry::__private::rt);
+        match self {
+            Target::Local(f) => {
+                let key = &f.key;
+                quote!(#key.to_owned())
+            }
+            Target::Dotted { group, leaf, .. } => quote!(#rt::leaf_of::<#group>(#leaf).0),
+        }
+    }
+
+    /// `(key, kind)` as a `(String, FieldKind)` expression.
+    pub fn keyed(&self) -> TokenStream {
+        let rt = quote!(::op_registry::__private::rt);
+        match self {
+            Target::Local(f) => {
+                let (key, kind) = (&f.key, kind_name(f));
+                quote!((#key.to_owned(), ::op_registry::FieldKind::#kind))
+            }
+            Target::Dotted { group, leaf, .. } => quote!(#rt::leaf_of::<#group>(#leaf)),
+        }
+    }
+
+    /// The clap arg ids of the target, as a `Vec<String>` expression.
+    pub fn arg_ids(&self) -> TokenStream {
+        let rt = quote!(::op_registry::__private::rt);
+        match self {
+            Target::Local(f) => {
+                let ids = super::clap_gen::group_ids(f);
+                quote!(::std::vec![#(#ids.to_owned()),*])
+            }
+            Target::Dotted { group, leaf, .. } => {
+                quote!(#rt::arg_ids(#leaf, #rt::leaf_of::<#group>(#leaf).1))
+            }
+        }
+    }
+}
+
+/// `let when = [(String, FieldKind) ...]` as `(&str, FieldKind)` pairs.
+fn keyed_list(fields: &[Field], names: &[ScopeName]) -> TokenStream {
+    let keyed = names.iter().map(|t| resolve(fields, t).keyed());
+    quote! {
+        let owned = [#(#keyed),*];
+        let when: ::std::vec::Vec<(&str, ::op_registry::FieldKind)> =
+            owned.iter().map(|t| (t.0.as_str(), t.1)).collect();
+    }
 }
 
 /// The `FieldKind` variant name of a field (never a flattened group).
@@ -210,9 +374,15 @@ fn member(f: &Field) -> TokenStream {
 /// Whether a relation names the field, so its property must admit `null`
 /// (which `from_json` reads as absent).
 fn in_relation(fields: &[Field], f: &Field) -> bool {
+    let names = |list: &[ScopeName]| list.iter().any(|t| t.path == f.rust_name);
     f.one_of.is_some()
+        || f.at_least_one.is_some()
         || !f.requires_if.is_empty()
-        || fields.iter().any(|o| o.requires_if.contains(&f.rust_name))
+        || !f.conflicts_with.is_empty()
+        || !f.required_unless.is_empty()
+        || fields
+            .iter()
+            .any(|o| names(&o.requires_if) || names(&o.conflicts_with) || names(&o.required_unless))
 }
 
 pub fn fields_fn(fields: &[Field]) -> TokenStream {
@@ -279,15 +449,59 @@ pub fn validate_fn(fields: &[Field]) -> TokenStream {
                 )?;
             }
         });
-    let mut requires = Vec::new();
+    let required = fields
+        .iter()
+        .filter(|f| f.explicit_required)
+        .filter_map(|f| {
+            let (present, key) = (f.present()?, &f.key);
+            Some(quote!(#rt::check_required(#present, #key)?;))
+        });
+    let at_least_one = at_least_one_groups(fields)
+        .into_iter()
+        .map(|(name, members)| {
+            let present = members.iter().filter_map(|f| f.present());
+            quote! {
+                #rt::check_at_least_one(
+                    #name,
+                    [#(#present),*].into_iter().filter(|p| *p).count(),
+                )?;
+            }
+        });
+    let mut relations = Vec::new();
     for f in fields {
-        for other in others_of(fields, f) {
-            let (Some(present), Some(other_present)) = (f.present(), other.present()) else {
-                continue;
-            };
-            let (key, other_key) = (&f.key, &other.key);
-            requires
-                .push(quote!(#rt::check_requires_if(#present, #other_present, #key, #other_key)?;));
+        let Some(present) = f.present() else { continue };
+        let key = &f.key;
+        for t in &f.requires_if {
+            let other = resolve(fields, t);
+            let (other_present, other_key) = (other.present(), other.key());
+            relations.push(quote! {
+                if #other_present && !#present {
+                    return Err(#rt::requires_if_error(#key, #other_key));
+                }
+            });
+        }
+        for t in &f.conflicts_with {
+            let other = resolve(fields, t);
+            let (other_present, other_key) = (other.present(), other.key());
+            relations.push(quote! {
+                if #present && #other_present {
+                    return Err(#rt::conflicts_error(#key, #other_key));
+                }
+            });
+        }
+        if !f.required_unless.is_empty() {
+            let others: Vec<_> = f
+                .required_unless
+                .iter()
+                .map(|t| resolve(fields, t))
+                .collect();
+            let other_present = others.iter().map(Target::present);
+            let other_keys = others.iter().map(Target::key);
+            relations.push(quote! {
+                if !(#present #(|| #other_present)*) {
+                    return Err(#rt::missing_unless_error(#key, ::std::vec![#(#other_keys),*]));
+                }
+            });
         }
     }
     let nested = fields.iter().filter_map(|f| match &f.shape {
@@ -299,8 +513,10 @@ pub fn validate_fn(fields: &[Field]) -> TokenStream {
     });
     quote! {
         fn validate(&self) -> ::op_registry::__private::anyhow::Result<()> {
+            #(#required)*
             #(#groups)*
-            #(#requires)*
+            #(#at_least_one)*
+            #(#relations)*
             #(#nested)*
             ::std::result::Result::Ok(())
         }

@@ -20,4 +20,26 @@ fn op_params_compile_failures() {
     tests.compile_fail(
         "tests/params_ui/op_params_secret_inline_needs_secret_file_is_a_compile_error.rs",
     );
+    tests.compile_fail("tests/params_ui/op_params_required_on_plain_is_a_compile_error.rs");
+    tests.compile_fail(
+        "tests/params_ui/op_params_required_on_switch_map_or_patch_is_a_compile_error.rs",
+    );
+    tests.compile_fail("tests/params_ui/op_params_required_with_default_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_relation_unknown_target_is_a_compile_error.rs");
+    tests.compile_fail(
+        "tests/params_ui/op_params_relation_target_without_presence_is_a_compile_error.rs",
+    );
+    tests.compile_fail("tests/params_ui/op_params_relation_names_itself_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_required_unless_on_plain_is_a_compile_error.rs");
+    tests.compile_fail(
+        "tests/params_ui/op_params_conflicts_and_required_unless_same_target_is_a_compile_error.rs",
+    );
+    tests.compile_fail(
+        "tests/params_ui/op_params_at_least_one_needs_two_members_is_a_compile_error.rs",
+    );
+    tests.compile_fail("tests/params_ui/op_params_group_two_kinds_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_dotted_target_not_flatten_is_a_compile_error.rs");
+    tests.compile_fail(
+        "tests/params_ui/op_params_dotted_target_empty_segment_is_a_compile_error.rs",
+    );
 }

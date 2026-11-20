@@ -328,9 +328,56 @@ pub enum UsageError {
     #[error("{field} is required when {other} is given")]
     #[coded(code = "requires_if", class = Logical)]
     RequiresIf { field: String, other: String },
+    #[error("{field} conflicts with {other}")]
+    #[coded(code = "conflicts", class = Logical)]
+    Conflicts { field: String, other: String },
+    /// A `required_unless` field with every target absent. It shares the code
+    /// of [`UsageError::MissingField`], which the derive does not allow within
+    /// one enum, so the variant forwards to [`MissingUnless`].
+    #[error(transparent)]
+    #[coded(transparent, catalog)]
+    MissingUnless(MissingUnless),
+    #[error("at least one of the {group} fields is required")]
+    #[coded(code = "at_least_one", class = Logical)]
+    AtLeastOne { group: String },
     #[error("{first} and {second} both read stdin")]
     #[coded(code = "stdin_twice", class = Logical)]
     StdinTwice { first: String, second: String },
+}
+
+/// The error of a `required_unless` field that is absent with every target
+/// absent. Its code is `op_registry.usage.missing`, the code of
+/// [`UsageError::MissingField`]; the manual lists the code once.
+#[derive(Debug, thiserror::Error)]
+#[error("{name} is required unless {unless} is given")]
+pub struct MissingUnless {
+    pub name: String,
+    pub unless: String,
+}
+
+impl MissingUnless {
+    const CODE: &'static str = "op_registry.usage.missing";
+}
+
+impl coded_error::CodedError for MissingUnless {
+    fn code(&self) -> &'static str {
+        Self::CODE
+    }
+    fn class(&self) -> coded_error::ErrorClass {
+        coded_error::ErrorClass::Logical
+    }
+    fn type_name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+}
+
+impl coded_error::CodeCatalog for MissingUnless {
+    fn codes() -> Vec<coded_error::CodeEntry> {
+        vec![coded_error::CodeEntry {
+            code: Self::CODE,
+            class: Some(coded_error::ErrorClass::Logical),
+        }]
+    }
 }
 
 #[doc(hidden)]

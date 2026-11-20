@@ -164,10 +164,35 @@ pub fn nullable(mut schema: Value) -> Value {
             object.insert("type".to_owned(), serde_json::json!([ty, "null"]));
         }
         if let Some(Value::Array(values)) = object.get_mut("enum") {
-            values.push(Value::Null);
+            if !values.contains(&Value::Null) {
+                values.push(Value::Null);
+            }
         }
     }
     schema
+}
+
+/// The key and kind of the leaf `rust_name` of a flattened group `G`
+/// (a relation's dotted target). The derive checks the path itself, so a
+/// missing leaf is a bug in the derive.
+pub fn leaf_of<G: crate::OpParams>(rust_name: &str) -> (String, FieldKind) {
+    G::fields()
+        .into_iter()
+        .find(|f| f.rust_name == rust_name)
+        .map(|f| (f.key, f.kind))
+        .unwrap_or_else(|| panic!("op-registry: no field `{rust_name}` in the flattened group"))
+}
+
+/// The clap arg ids of a relation target: a tri-state also has `no_x`, a
+/// `Patch` also `clear_x`.
+pub fn arg_ids(rust_name: &str, kind: FieldKind) -> Vec<String> {
+    let mut ids = vec![rust_name.to_owned()];
+    match kind {
+        FieldKind::TriState => ids.push(format!("no_{rust_name}")),
+        FieldKind::Patch => ids.push(format!("clear_{rust_name}")),
+        _ => {}
+    }
+    ids
 }
 
 /// Whether a field is given, in the one sense every surface shares: an
@@ -280,6 +305,36 @@ impl SchemaBuilder {
         }));
     }
 
+    /// `a` and `b` are not both present.
+    pub fn conflicts_with(&mut self, a: (&str, FieldKind), b: (&str, FieldKind)) {
+        self.constraint(serde_json::json!({
+            "not": { "allOf": [present_schema(a.0, a.1), present_schema(b.0, b.1)] }
+        }));
+    }
+
+    /// `field` or any of `others` is present.
+    pub fn required_unless(&mut self, field: (&str, FieldKind), others: &[(&str, FieldKind)]) {
+        let mut alternatives = vec![present_schema(field.0, field.1)];
+        alternatives.extend(any_present(others));
+        self.constraint(serde_json::json!({ "anyOf": alternatives }));
+    }
+
+    /// At least one of `members` is present.
+    pub fn at_least_one(&mut self, members: &[(&str, FieldKind)]) {
+        self.constraint(serde_json::json!({ "anyOf": any_present(members) }));
+    }
+
+    /// Lets an absorbed property admit `null`, which `from_json` reads as
+    /// absent: a relation of this struct names a leaf of a flattened group.
+    pub fn nullable(&mut self, key: &str) {
+        if self.required.iter().any(|r| r == key) {
+            return;
+        }
+        if let Some(property) = self.properties.get_mut(key) {
+            *property = nullable(property.take());
+        }
+    }
+
     /// Merges the schema of a flattened group.
     pub fn absorb(&mut self, schema: Value) {
         let Value::Object(mut schema) = schema else {
@@ -350,19 +405,46 @@ pub fn check_one_of(group: &str, given: usize, optional: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn check_requires_if(
-    present: bool,
-    other_present: bool,
-    field: &str,
-    other: &str,
-) -> Result<()> {
-    if other_present && !present {
-        return Err(usage(UsageError::RequiresIf {
-            field: field.to_owned(),
-            other: other.to_owned(),
+/// `field` is required when `other` is given.
+pub fn requires_if_error(field: &str, other: String) -> anyhow::Error {
+    usage(UsageError::RequiresIf {
+        field: field.to_owned(),
+        other,
+    })
+}
+
+/// `field` cannot be given with `other`.
+pub fn conflicts_error(field: &str, other: String) -> anyhow::Error {
+    usage(UsageError::Conflicts {
+        field: field.to_owned(),
+        other,
+    })
+}
+
+/// `name` is required unless one of `unless` is given.
+pub fn missing_unless_error(name: &str, unless: Vec<String>) -> anyhow::Error {
+    usage(UsageError::MissingUnless(super::MissingUnless {
+        name: name.to_owned(),
+        unless: unless.join(" or "),
+    }))
+}
+
+pub fn check_at_least_one(group: &str, given: usize) -> Result<()> {
+    if given == 0 {
+        return Err(usage(UsageError::AtLeastOne {
+            group: group.to_owned(),
         }));
     }
     Ok(())
+}
+
+/// A `required` Vec or Option that is absent (or empty).
+pub fn check_required(present: bool, key: &str) -> Result<()> {
+    if present {
+        Ok(())
+    } else {
+        Err(missing(key))
+    }
 }
 
 /// Two fields of one op that share a flag or key.

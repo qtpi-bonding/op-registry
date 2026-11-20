@@ -107,6 +107,8 @@ Access: reads
 | op_registry.usage.repeated_key | logical | 2 |
 | op_registry.usage.one_of | logical | 2 |
 | op_registry.usage.requires_if | logical | 2 |
+| op_registry.usage.conflicts | logical | 2 |
+| op_registry.usage.at_least_one | logical | 2 |
 | op_registry.usage.stdin_twice | logical | 2 |
 | op_registry.cli.unknown_command | logical | 2 |
 | op_registry.call.unknown_operation | logical | 65 |

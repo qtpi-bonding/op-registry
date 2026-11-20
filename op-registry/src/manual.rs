@@ -117,7 +117,13 @@ fn library_codes() -> Vec<CodeRow> {
         code: e.code.to_owned(),
         class: e.class,
     })
-    .collect()
+    // Two variants may share a code (`MissingField`, `MissingUnless`): list it once.
+    .fold(Vec::new(), |mut rows: Vec<CodeRow>, row| {
+        if !rows.iter().any(|r| r.code == row.code) {
+            rows.push(row);
+        }
+        rows
+    })
 }
 
 fn access_words(access: &Access) -> String {

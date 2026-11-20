@@ -1,0 +1,5 @@
+error: field `x`: a relation cannot name the field itself
+ --> tests/params_ui/op_params_relation_names_itself_is_a_compile_error.rs:5:27
+  |
+5 |     #[op(conflicts_with = "x")]
+  |                           ^^^

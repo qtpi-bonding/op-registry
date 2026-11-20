@@ -1,0 +1,5 @@
+error: field `x`: already required
+ --> tests/params_ui/op_params_required_on_plain_is_a_compile_error.rs:6:8
+  |
+6 |     x: String,
+  |        ^^^^^^

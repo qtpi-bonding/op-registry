@@ -1,0 +1,5 @@
+error: field `x`: required applies to a plain value, Vec or Option
+ --> tests/params_ui/op_params_required_on_switch_map_or_patch_is_a_compile_error.rs:6:8
+  |
+6 |     x: bool,
+  |        ^^^^

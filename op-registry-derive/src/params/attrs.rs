@@ -22,9 +22,17 @@ pub struct Field {
     pub secret_inline: bool,
     /// `(group, optional)` from `one_of` / `one_of_optional`.
     pub one_of: Option<(String, bool)>,
-    /// The Rust names of the fields that make this one required: it is
-    /// required when any of them is present.
-    pub requires_if: Vec<String>,
+    /// The fields that make this one required: it is required when any of
+    /// them is present. Rust names, or dotted paths through a flatten.
+    pub requires_if: Vec<ScopeName>,
+    /// The fields this one cannot be given with.
+    pub conflicts_with: Vec<ScopeName>,
+    /// This one is required unless any of these is present.
+    pub required_unless: Vec<ScopeName>,
+    /// The group from `at_least_one`.
+    pub at_least_one: Option<String>,
+    /// `#[op(required)]` on a `Vec` or `Option`.
+    pub explicit_required: bool,
     /// Set on a `Ref` field.
     pub reference: Option<RefInfo>,
     /// The environment variable a global falls back to (`OpGlobals` only).
@@ -33,8 +41,8 @@ pub struct Field {
     pub group_scope: Vec<ScopeName>,
 }
 
-/// One `scope = [..]` entry: a field name or a dotted path through flattened
-/// groups, with the span of its string literal.
+/// One `scope = [..]` or relation target entry: a field name or a dotted path
+/// through flattened groups, with the span of its string literal.
 #[derive(Clone)]
 pub struct ScopeName {
     pub path: String,
@@ -85,7 +93,11 @@ impl Field {
         let mut secret = false;
         let mut secret_inline = false;
         let mut one_of: Option<(String, bool)> = None;
-        let mut requires_if: Vec<String> = Vec::new();
+        let mut requires_if: Vec<ScopeName> = Vec::new();
+        let mut conflicts_with: Vec<ScopeName> = Vec::new();
+        let mut required_unless: Vec<ScopeName> = Vec::new();
+        let mut at_least_one: Option<String> = None;
+        let mut explicit_required = false;
         let mut clearable = false;
         let mut flatten = false;
         let mut subject: Option<String> = None;
@@ -127,33 +139,23 @@ impl Field {
                         }
                         scope = Some(names);
                     }
-                    "one_of" | "one_of_optional" => {
+                    "one_of" | "one_of_optional" | "at_least_one" => {
                         let group: syn::LitStr = m.value()?.parse()?;
-                        if one_of.is_some() {
-                            return Err(m.error("one field takes one one_of group"));
+                        if one_of.is_some() || at_least_one.is_some() {
+                            return Err(m.error(
+                                "one field takes one group of one_of, one_of_optional or at_least_one",
+                            ));
                         }
-                        one_of = Some((group.value(), key == "one_of_optional"));
-                    }
-                    "requires_if" => {
-                        let value: Expr = m.value()?.parse()?;
-                        let names = match &value {
-                            Expr::Array(array) => array.elems.iter().collect(),
-                            single => vec![single],
-                        };
-                        for e in names {
-                            match e {
-                                Expr::Lit(ExprLit {
-                                    lit: Lit::Str(s), ..
-                                }) => requires_if.push(s.value()),
-                                _ => {
-                                    return Err(syn::Error::new_spanned(
-                                        e,
-                                        "requires_if takes a string or a list of strings",
-                                    ))
-                                }
-                            }
+                        if key == "at_least_one" {
+                            at_least_one = Some(group.value());
+                        } else {
+                            one_of = Some((group.value(), key == "one_of_optional"));
                         }
                     }
+                    "requires_if" => requires_if.extend(targets(&m, "requires_if")?),
+                    "conflicts_with" => conflicts_with.extend(targets(&m, "conflicts_with")?),
+                    "required_unless" => required_unless.extend(targets(&m, "required_unless")?),
+                    "required" => explicit_required = true,
                     "keys" => {
                         let array: ExprArray = m.value()?.parse()?;
                         let mut out = Vec::new();
@@ -196,7 +198,11 @@ impl Field {
                     || keys.is_some()
                     || clearable
                     || one_of.is_some()
+                    || at_least_one.is_some()
+                    || explicit_required
                     || !requires_if.is_empty()
+                    || !conflicts_with.is_empty()
+                    || !required_unless.is_empty()
                     || subject.is_some()
                     || kind.is_some()
                     || id_only,
@@ -247,7 +253,44 @@ impl Field {
             scope,
             default.is_some(),
         )?;
-        if (one_of.is_some() || !requires_if.is_empty()) && matches!(shape, Shape::Plain(_)) {
+        if explicit_required {
+            let err = |msg: &str| {
+                Err(syn::Error::new_spanned(
+                    &f.ty,
+                    format!("field `{rust_name}`: {msg}"),
+                ))
+            };
+            match shape {
+                Shape::Plain(_) => return err("already required"),
+                Shape::Switch | Shape::Map | Shape::Patch(_) => {
+                    return err("required applies to a plain value, Vec or Option")
+                }
+                _ => {}
+            }
+            if default.is_some()
+                || !required_unless.is_empty()
+                || one_of.is_some()
+                || at_least_one.is_some()
+            {
+                return err(
+                    "required cannot take default, required_unless or a one_of/at_least_one group",
+                );
+            }
+        }
+        if !required_unless.is_empty()
+            && matches!(shape, Shape::Plain(_) | Shape::Switch | Shape::Patch(_))
+        {
+            return Err(syn::Error::new_spanned(
+                &f.ty,
+                format!("field `{rust_name}`: required_unless needs an Option, Vec or map field"),
+            ));
+        }
+        if (one_of.is_some()
+            || at_least_one.is_some()
+            || !requires_if.is_empty()
+            || !conflicts_with.is_empty())
+            && matches!(shape, Shape::Plain(_))
+        {
             return Err(syn::Error::new_spanned(
                 &f.ty,
                 plain_in_relation(&rust_name),
@@ -291,6 +334,10 @@ impl Field {
             secret_inline,
             one_of,
             requires_if,
+            conflicts_with,
+            required_unless,
+            at_least_one,
+            explicit_required,
             reference,
             env,
             group_scope: Vec::new(),
@@ -329,6 +376,10 @@ impl Field {
             secret_inline: false,
             one_of: None,
             requires_if: Vec::new(),
+            conflicts_with: Vec::new(),
+            required_unless: Vec::new(),
+            at_least_one: None,
+            explicit_required: false,
             reference: None,
             env: None,
             group_scope,
@@ -346,8 +397,32 @@ impl Field {
     }
 
     pub fn required(&self) -> bool {
-        matches!(self.shape, Shape::Plain(_)) && self.default.is_none()
+        self.explicit_required || (matches!(self.shape, Shape::Plain(_)) && self.default.is_none())
     }
+}
+
+/// The string or list of strings of a relation attribute.
+fn targets(m: &syn::meta::ParseNestedMeta, key: &str) -> syn::Result<Vec<ScopeName>> {
+    let value: Expr = m.value()?.parse()?;
+    let items = match &value {
+        Expr::Array(array) => array.elems.iter().collect(),
+        single => vec![single],
+    };
+    items
+        .into_iter()
+        .map(|e| match e {
+            Expr::Lit(ExprLit {
+                lit: Lit::Str(s), ..
+            }) => Ok(ScopeName {
+                path: s.value(),
+                span: s.span(),
+            }),
+            _ => Err(syn::Error::new_spanned(
+                e,
+                format!("{key} takes a string or a list of strings"),
+            )),
+        })
+        .collect()
 }
 
 /// The derive error for a relation on a field that cannot be absent.
