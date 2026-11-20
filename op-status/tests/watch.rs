@@ -290,7 +290,7 @@ fn status_watch_is_a_cli_only_stream_entry_and_parity_holds() {
     let mounts = [Mount {
         name: "mcp",
         audience: Audience::Agent,
-        ops: &["status_get", "status_watch"],
+        ops: &["status_get"],
     }];
     assert_parity(&reg, &mounts);
     let argv: Vec<std::ffi::OsString> =

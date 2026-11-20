@@ -138,6 +138,9 @@ fn analyse<C: CliContext>(
             let here = mount.ops.contains(&d.name.as_str());
             lines.push(if here {
                 reachable(&d.name, mount.name)
+            } else if d.kind == OpKind::Stream {
+                // A mount is a unary transport; a stream has a reason to be absent.
+                absent(&d.name, mount.name, "stream")
             } else {
                 absent(&d.name, mount.name, "missing from mount")
             });

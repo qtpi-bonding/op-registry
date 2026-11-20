@@ -179,11 +179,10 @@ fn fixture() -> Registry<Ctx> {
     r
 }
 
-const AGENT_OPS: [&str; 6] = [
+const AGENT_OPS: [&str; 5] = [
     "concept_get",
     "concept_list",
     "concept_list_page",
-    "status_watch",
     "concept_purge",
     "concept_rich",
 ];
@@ -227,10 +226,6 @@ fn parity_reports_missing_mount_op() {
     // Every missing op is named, not only the first.
     assert!(
         text.contains("concept_list_page on rest: missing from mount"),
-        "{text}"
-    );
-    assert!(
-        text.contains("status_watch on rest: missing from mount"),
         "{text}"
     );
     assert!(
@@ -472,6 +467,10 @@ fn sample_params_satisfies_from_json() {
     let r = fixture();
     let ctx = Ctx;
     for d in r.descriptors() {
+        // `TypedOnly` ops refuse the JSON path and streams are not unary.
+        if d.paths == Paths::TypedOnly || d.kind == op_registry::OpKind::Stream {
+            continue;
+        }
         let params = sample_params(&d.input_schema);
         let out = futures_executor::block_on(r.call(
             &d.name,
@@ -479,13 +478,6 @@ fn sample_params_satisfies_from_json() {
             &ctx,
             CallOptions::default(),
         ));
-        // `TypedOnly` ops refuse the JSON path; every other op decodes.
-        if d.paths == Paths::TypedOnly {
-            continue;
-        }
-        if d.kind == op_registry::OpKind::Stream {
-            continue;
-        }
         assert!(
             out.is_ok(),
             "{}: {params} did not decode: {:?}",
@@ -530,4 +522,57 @@ fn sample_params_handles_enum_one_of_and_dependents() {
         sample,
         serde_json::json!({"mode": "fast", "m": {}, "list": [], "n": 1.0, "a": "x", "c": 1, "d": false})
     );
+}
+
+#[test]
+fn parity_mount_without_stream_passes_and_reports_stream() {
+    let r = fixture();
+    assert!(!AGENT_OPS.contains(&"status_watch"));
+    let mounts = [Mount {
+        name: "rest",
+        audience: Audience::Agent,
+        ops: &AGENT_OPS,
+    }];
+    assert_parity(&r, &mounts);
+    let line = parity_report(&r, &mounts)
+        .into_iter()
+        .find(|l| l.name == "status_watch" && l.path == "rest")
+        .unwrap();
+    assert_eq!(
+        line.reach,
+        Reach::Absent {
+            reason: "stream".into()
+        }
+    );
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct Inner {
+    snake_key: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+struct MapOfInner {
+    by_name: BTreeMap<String, Inner>,
+}
+
+#[test]
+fn casing_flags_snake_key_inside_map_value() {
+    let mut r = fixture();
+    r.push_op(
+        OpSpec::<Get, MapOfInner>::new("concept nested", "Returns a map of structs."),
+        |_c: &Ctx, _p: Get, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<MapOfInner>> {
+            Box::pin(async {
+                Ok(MapOfInner {
+                    by_name: BTreeMap::new(),
+                })
+            })
+        },
+    );
+    let text = panic_text(|| assert_casing(&r, Casing::Camel));
+    assert!(text.contains("concept_nested output schema"), "{text}");
+    assert!(text.contains("`snake_key`"), "{text}");
 }
