@@ -3,14 +3,19 @@
 mod call;
 pub mod cli;
 mod descriptor;
+mod hook;
+mod invoke;
 pub mod mcp;
+mod notices;
 mod output;
 mod params;
 pub mod parity;
 mod registry;
 
 pub use call::CallError;
-pub use call::{CallOptions, Caller, Cursor};
+pub use call::{CallOptions, Caller, Cursor, Op, TraceParent};
+pub use hook::{CallHook, CallInfo, CallPath, NoHook};
+pub use notices::{Notice, NoticeSink, Notices};
 pub use descriptor::*;
 pub use op_registry_derive::OpParams;
 pub use output::OutputSchema;

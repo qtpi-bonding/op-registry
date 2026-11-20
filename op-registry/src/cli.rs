@@ -1,6 +1,6 @@
 //! Command-line command construction and dispatch for a registry.
 
-use crate::{derive_name, CallOptions, Cursor, OpKind, ParseCx, Registry};
+use crate::{derive_name, CallOptions, CallPath, Cursor, OpKind, ParseCx, Registry};
 use anyhow::Result;
 use clap::{Arg, ArgMatches, Command};
 use futures_util::stream::BoxStream;
@@ -197,13 +197,13 @@ pub async fn dispatch<'a, C: Sync>(
             .map(Cursor::new);
         Ok(CliOutput::Stream(
             registry
-                .run_stream(&descriptor.name, params, ctx, opts, cursor)
+                .call_stream_decoded(&descriptor.name, params, ctx, opts, cursor, CallPath::Cli)
                 .await?,
         ))
     } else {
         Ok(CliOutput::Value(
             registry
-                .run_unary(&descriptor.name, params, ctx, opts)
+                .call_decoded(&descriptor.name, params, ctx, opts, CallPath::Cli)
                 .await?,
         ))
     }

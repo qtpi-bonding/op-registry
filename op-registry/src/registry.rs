@@ -1,7 +1,7 @@
 //! The registry: typed operations behind erased entries, with build-time checks.
 
 use crate::{
-    derive_name, Access, Audience, CallOptions, Cursor, Descriptor, ErrorCodeEntry, Exit, OpKind,
+    derive_name, Access, Audience, CallHook, CallOptions, NoHook, Cursor, Descriptor, ErrorCodeEntry, Exit, OpKind,
     OpParams, OutputSchema, ParseCx, Paths,
 };
 use anyhow::Result;
@@ -88,6 +88,20 @@ impl<P, O> Default for OpSpec<P, O> {
     }
 }
 
+pub(crate) type TypedUnary<C, P, O> =
+    Arc<dyn for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync>;
+pub(crate) type TypedStream<C, P, O> = Arc<
+    dyn for<'a> Fn(
+            &'a C,
+            P,
+            Option<Cursor>,
+            CallOptions,
+        ) -> BoxFuture<'a, Result<BoxStream<'a, Result<O>>>>
+        + Send
+        + Sync,
+>;
+type ErasedFields = Box<dyn Fn(&(dyn Any + Send)) -> Vec<(&'static str, String)> + Send + Sync>;
+
 type UnaryRun<C> = Box<
     dyn for<'a> Fn(&'a C, Box<dyn Any + Send>, CallOptions) -> BoxFuture<'a, Result<Value>>
         + Send
@@ -109,12 +123,11 @@ pub(crate) enum Run<C> {
     Stream(StreamRun<C>),
 }
 
-/// The spec fields the registry keeps for later tasks, typed by `P` and `O`.
+/// The spec fields the registry keeps for later tasks, typed by `O`.
 #[allow(dead_code)]
-pub(crate) struct Extras<P, O> {
+pub(crate) struct Extras<O> {
     pub cap: usize,
     pub page_size: u32,
-    pub fields: Option<fn(&P) -> Vec<(&'static str, String)>>,
     pub ok_exit: Option<fn(&O) -> u8>,
     pub render_text: Option<fn(&O) -> String>,
 }
@@ -122,9 +135,10 @@ pub(crate) struct Extras<P, O> {
 pub(crate) struct Entry<C> {
     pub descriptor: Descriptor,
     /// The typed function (an `Arc<dyn Fn>` over `P` and `O`), for typed calls.
-    #[allow(dead_code)]
     pub typed: Box<dyn Any + Send + Sync>,
-    /// The `Extras<P, O>` of the spec.
+    /// The spec's `fields` function over erased parameters.
+    pub fields: Option<ErasedFields>,
+    /// The `Extras<O>` of the spec.
     #[allow(dead_code)]
     pub extras: Box<dyn Any + Send + Sync>,
     pub decode_json: fn(Value, &mut ParseCx) -> Result<Box<dyn Any + Send>>,
@@ -145,6 +159,7 @@ pub struct Registry<C> {
     by_name: HashMap<String, usize>,
     groups: Vec<Group>,
     pillar: &'static str,
+    pub(crate) hook: Arc<dyn CallHook>,
 }
 
 fn words(path: &str) -> Vec<String> {
@@ -169,7 +184,14 @@ impl<C: Sync> Registry<C> {
             by_name: HashMap::new(),
             groups: Vec::new(),
             pillar: "",
+            hook: Arc::new(NoHook),
         }
+    }
+
+    /// Sets the hook that wraps every call. A registry starts with [`NoHook`];
+    /// `merge` keeps the receiver's hook.
+    pub fn set_call_hook(&mut self, hook: Arc<dyn CallHook>) {
+        self.hook = hook;
     }
 
     /// Names the pillar this registry belongs to.
@@ -346,39 +368,6 @@ impl<C: Sync> Registry<C> {
         self.by_name.insert(new.name.clone(), index);
         self.entries.push(entry);
     }
-
-    /// Runs the entry's unary pipeline on already decoded parameters.
-    pub(crate) async fn run_unary(
-        &self,
-        name: &str,
-        params: Box<dyn Any + Send>,
-        ctx: &C,
-        opts: CallOptions,
-    ) -> Result<Value> {
-        match &self.entry(name)?.run {
-            Run::Unary(run) => run(ctx, params, opts).await,
-            Run::Stream(_) => Err(coded_error::into_anyhow(crate::CallError::WrongShape {
-                name: name.to_owned(),
-            })),
-        }
-    }
-
-    /// Runs the entry's stream pipeline on already decoded parameters.
-    pub(crate) async fn run_stream<'a>(
-        &self,
-        name: &str,
-        params: Box<dyn Any + Send>,
-        ctx: &'a C,
-        opts: CallOptions,
-        cursor: Option<Cursor>,
-    ) -> Result<BoxStream<'a, Result<Value>>> {
-        match &self.entry(name)?.run {
-            Run::Stream(run) => run(ctx, params, opts, cursor).await,
-            Run::Unary(_) => Err(coded_error::into_anyhow(crate::CallError::WrongShape {
-                name: name.to_owned(),
-            })),
-        }
-    }
 }
 
 impl<C: Sync + 'static> Registry<C> {
@@ -429,13 +418,10 @@ impl<C: Sync + 'static> Registry<C> {
         let extras = Extras {
             cap: spec.cap,
             page_size: spec.page_size,
-            fields: spec.fields,
             ok_exit: spec.ok_exit,
             render_text: spec.render_text,
         };
-        let f: Arc<
-            dyn for<'a> Fn(&'a C, P, CallOptions) -> BoxFuture<'a, Result<O>> + Send + Sync,
-        > = Arc::new(f);
+        let f: TypedUnary<C, P, O> = Arc::new(f);
         let runner = f.clone();
         let run: UnaryRun<C> = Box::new(move |ctx, params, opts| {
             let fut = runner(ctx, downcast::<P>(params), opts);
@@ -444,6 +430,7 @@ impl<C: Sync + 'static> Registry<C> {
         self.insert_entry(Entry {
             descriptor,
             typed: Box::new(f),
+            fields: erase_fields(spec.fields),
             extras: Box::new(extras),
             decode_json: |value, cx| Ok(Box::new(P::from_json(value, cx)?)),
             augment: P::add_args,
@@ -506,21 +493,10 @@ impl<C: Sync + 'static> Registry<C> {
         let extras = Extras {
             cap: spec.cap,
             page_size: spec.page_size,
-            fields: spec.fields,
             ok_exit: spec.ok_exit,
             render_text: spec.render_text,
         };
-        type Typed<C, P, O> = Arc<
-            dyn for<'a> Fn(
-                    &'a C,
-                    P,
-                    Option<Cursor>,
-                    CallOptions,
-                ) -> BoxFuture<'a, Result<BoxStream<'a, Result<O>>>>
-                + Send
-                + Sync,
-        >;
-        let f: Typed<C, P, O> = Arc::new(f);
+        let f: TypedStream<C, P, O> = Arc::new(f);
         let runner = f.clone();
         let run: StreamRun<C> = Box::new(move |ctx, params, opts, cursor| {
             let fut = runner(ctx, downcast::<P>(params), cursor, opts);
@@ -536,6 +512,7 @@ impl<C: Sync + 'static> Registry<C> {
         self.insert_entry(Entry {
             descriptor,
             typed: Box::new(f),
+            fields: erase_fields(spec.fields),
             extras: Box::new(extras),
             decode_json: |value, cx| Ok(Box::new(P::from_json(value, cx)?)),
             augment: P::add_args,
@@ -543,6 +520,18 @@ impl<C: Sync + 'static> Registry<C> {
             run: Run::Stream(run),
         });
     }
+}
+
+fn erase_fields<P: 'static>(
+    fields: Option<fn(&P) -> Vec<(&'static str, String)>>,
+) -> Option<ErasedFields> {
+    fields.map(|f| {
+        Box::new(move |params: &(dyn Any + Send)| {
+            f(params
+                .downcast_ref::<P>()
+                .expect("the entry's fields function and parameters share one type"))
+        }) as ErasedFields
+    })
 }
 
 /// Flattened groups are opaque to the derive, so a name used by two fields

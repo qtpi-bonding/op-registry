@@ -1,17 +1,33 @@
-use crate::{ParseCx, Paths, Registry};
-use anyhow::Result;
-use futures_util::stream::BoxStream;
-use serde_json::Value;
+use crate::{Notices, OpParams};
 
+/// Per-call options.
 #[non_exhaustive]
 #[derive(Clone, Debug, Default)]
 pub struct CallOptions {
+    /// Who is calling.
     pub caller: Option<Caller>,
+    /// The trace context to pass to the hook.
+    pub trace: TraceParent,
+    /// Where the op's notices go.
+    pub notices: Notices,
+    /// The name of the transport, for the `json` path.
+    pub transport: Option<String>,
 }
 
 /// Identifies the caller of an operation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Caller(pub String);
+
+/// W3C trace context headers, carried untouched.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TraceParent {
+    /// The `traceparent` header.
+    pub traceparent: Option<String>,
+    /// The `tracestate` header.
+    pub tracestate: Option<String>,
+    /// The `baggage` header.
+    pub baggage: Option<String>,
+}
 
 impl CallOptions {
     /// Returns these options with the caller set.
@@ -19,6 +35,36 @@ impl CallOptions {
         self.caller = Some(caller);
         self
     }
+
+    /// Returns these options with the trace context set.
+    pub fn with_trace(mut self, trace: TraceParent) -> Self {
+        self.trace = trace;
+        self
+    }
+
+    /// Returns these options with the notice handle set.
+    pub fn with_notices(mut self, notices: Notices) -> Self {
+        self.notices = notices;
+        self
+    }
+
+    /// Returns these options with the transport name set.
+    pub fn with_transport(mut self, transport: impl Into<String>) -> Self {
+        self.transport = Some(transport.into());
+        self
+    }
+}
+
+/// A typed handle on one registered operation, for `call_typed`.
+pub trait Op {
+    /// The registry context.
+    type Ctx;
+    /// The parameter type.
+    type Params: OpParams;
+    /// The output (the item type for streams).
+    type Output: Send + 'static;
+    /// The operation name.
+    const NAME: &'static str;
 }
 
 /// A resumption point for a streaming operation.
@@ -64,40 +110,4 @@ pub enum CallError {
     #[error("operation {name} cannot be called on this path")]
     #[coded(code = "wrong_path", class = Logical)]
     WrongPath { name: String },
-}
-
-impl<C: Sync> Registry<C> {
-    /// Calls a unary operation by name with JSON arguments.
-    ///
-    /// A minimal v2 path (decode, run, serialise); Task 6 replaces it with the
-    /// full pipeline.
-    pub async fn call(&self, name: &str, args: Value, ctx: &C, opts: CallOptions) -> Result<Value> {
-        let entry = self.entry(name)?;
-        if entry.descriptor.paths == Paths::TypedOnly {
-            return Err(coded_error::into_anyhow(CallError::WrongPath {
-                name: name.to_owned(),
-            }));
-        }
-        let params = (entry.decode_json)(args, &mut ParseCx::default())?;
-        self.run_unary(name, params, ctx, opts).await
-    }
-
-    /// Calls a streaming operation by name with JSON arguments.
-    pub async fn call_stream<'a>(
-        &self,
-        name: &str,
-        args: Value,
-        ctx: &'a C,
-        opts: CallOptions,
-        cursor: Option<Cursor>,
-    ) -> Result<BoxStream<'a, Result<Value>>> {
-        let entry = self.entry(name)?;
-        if entry.descriptor.paths == Paths::TypedOnly {
-            return Err(coded_error::into_anyhow(CallError::WrongPath {
-                name: name.to_owned(),
-            }));
-        }
-        let params = (entry.decode_json)(args, &mut ParseCx::default())?;
-        self.run_stream(name, params, ctx, opts, cursor).await
-    }
 }
