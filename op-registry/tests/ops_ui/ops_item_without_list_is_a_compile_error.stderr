@@ -1,0 +1,5 @@
+error: `item:` goes only with `list:`; use `output:`
+  --> tests/ops_ui/ops_item_without_list_is_a_compile_error.rs:23:38
+   |
+23 |     "a b" => { params: P, output: O, item: O, access: reads, audience: agent, op: f },
+   |                                      ^^^^

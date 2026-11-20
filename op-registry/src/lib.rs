@@ -20,7 +20,7 @@ pub use descriptor::*;
 pub use hook::{CallHook, CallInfo, CallPath, NoHook};
 pub use list::{ListItem, Page, PageParams, PageRequest, TooMany};
 pub use notices::{Notice, NoticeSink, Notices};
-pub use op_registry_derive::OpParams;
+pub use op_registry_derive::{ops, OpParams};
 pub use output::{write_private, OutputSchema};
 pub use params::*;
 pub use refs::{Ref, RefSlot, Resolve, Resolved, Scope};
@@ -50,6 +50,7 @@ pub mod __private {
     pub use crate::params::usage;
     pub use anyhow;
     pub use clap;
+    pub use coded_error;
     pub use futures_util;
     #[cfg(feature = "schema")]
     pub use schemars;

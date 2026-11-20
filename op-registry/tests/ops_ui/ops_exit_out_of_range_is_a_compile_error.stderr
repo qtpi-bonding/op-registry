@@ -1,0 +1,5 @@
+error: an exit code must be in 3..=63 (0, 1 and 2 are reserved; 64 and up are the framework's)
+  --> tests/ops_ui/ops_exit_out_of_range_is_a_compile_error.rs:23:86
+   |
+23 |     "a b" => { params: P, output: O, access: reads, audience: agent, op: f, exits: { 2 => "usage" } },
+   |                                                                                      ^

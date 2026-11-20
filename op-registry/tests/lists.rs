@@ -272,3 +272,22 @@ fn list_without_pillar_panics() {
         serve,
     );
 }
+
+#[test]
+#[should_panic(expected = "page_size must be > 0")]
+fn list_with_zero_page_size_panics() {
+    let _ = registry(|s| s.page_size = 0);
+}
+
+#[test]
+fn list_pair_halves_carry_no_text_or_exits() {
+    let r = registry(|s| {
+        s.text = true;
+        s.exits = vec![(3, "x")];
+    });
+    for name in ["concept_list", "concept_list_page"] {
+        let d = r.get(name).unwrap();
+        assert!(!d.text, "{name}");
+        assert!(d.exits.is_empty(), "{name}");
+    }
+}

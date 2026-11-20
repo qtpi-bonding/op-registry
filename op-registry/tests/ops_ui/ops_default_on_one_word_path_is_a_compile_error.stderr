@@ -1,0 +1,5 @@
+error: `default:` needs a path with a group word: a one-word path is already top level
+  --> tests/ops_ui/ops_default_on_one_word_path_is_a_compile_error.rs:23:79
+   |
+23 |     "build" => { params: P, output: O, access: reads, audience: agent, op: f, default: true },
+   |                                                                               ^^^^^^^

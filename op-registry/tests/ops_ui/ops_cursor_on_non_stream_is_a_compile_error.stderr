@@ -1,0 +1,5 @@
+error: `cursor:` goes only with `stream:`
+  --> tests/ops_ui/ops_cursor_on_non_stream_is_a_compile_error.rs:23:77
+   |
+23 |     "a b" => { params: P, output: O, access: reads, audience: agent, op: f, cursor: true },
+   |                                                                             ^^^^^^

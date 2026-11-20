@@ -1,0 +1,5 @@
+error: a `list:` entry names its element type with `item:`, not `output:`
+  --> tests/ops_ui/ops_output_with_list_is_a_compile_error.rs:23:30
+   |
+23 |     "a list" => { params: P, output: O, access: reads, audience: agent, list: f },
+   |                              ^^^^^^

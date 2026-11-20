@@ -1,0 +1,5 @@
+error: missing `params: <type>` (required on every op)
+  --> tests/ops_ui/ops_missing_params_is_a_compile_error.rs:23:5
+   |
+23 |     "a b" => { output: O, access: reads, audience: agent, op: f },
+   |     ^^^^^

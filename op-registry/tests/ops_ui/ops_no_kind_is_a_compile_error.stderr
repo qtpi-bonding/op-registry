@@ -1,0 +1,5 @@
+error: missing the kind: give one of `op:`, `local:`, `stream:` or `list:`
+  --> tests/ops_ui/ops_no_kind_is_a_compile_error.rs:23:5
+   |
+23 |     "a b" => { params: P, output: O, access: reads, audience: agent },
+   |     ^^^^^

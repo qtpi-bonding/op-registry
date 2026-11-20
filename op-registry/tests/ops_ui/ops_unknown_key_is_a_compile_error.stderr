@@ -1,0 +1,5 @@
+error: unknown key `colour`: expected params, output, item, op, local, stream, list, access, audience, errors, fields, exits, text, hidden, default, paths, cursor, cap, page_size or unpaged
+  --> tests/ops_ui/ops_unknown_key_is_a_compile_error.rs:23:77
+   |
+23 |     "a b" => { params: P, output: O, access: reads, audience: agent, op: f, colour: red },
+   |                                                                             ^^^^^^

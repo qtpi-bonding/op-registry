@@ -85,7 +85,8 @@ impl<P, O> OpSpec<P, O> {
 impl<P, O> OpSpec<P, O> {
     /// The same metadata over other parameter and output types: what a list
     /// pair's two ops share. The output hooks (`ok_exit`, `render_text`) are
-    /// typed by `O` and do not carry over.
+    /// typed by `O` and do not carry over, and a list pair has no text
+    /// rendering or extra exits (ruling R12), so `text` and `exits` are cleared.
     pub(crate) fn respec<P2, O2>(
         &self,
         fields: Option<fn(&P2) -> Vec<(&'static str, String)>>,
@@ -98,8 +99,8 @@ impl<P, O> OpSpec<P, O> {
             audience: self.audience,
             hidden: self.hidden,
             group_default: self.group_default,
-            text: self.text,
-            exits: self.exits.clone(),
+            text: false,
+            exits: Vec::new(),
             errors: self.errors.clone(),
             paths: self.paths,
             cursor: self.cursor,
@@ -197,6 +198,9 @@ pub struct Registry<C> {
     by_name: HashMap<String, usize>,
     groups: Vec<Group>,
     pillar: &'static str,
+    bin: &'static str,
+    version: &'static str,
+    about: &'static str,
     /// Kinds the server resolves: the library passes their refs through raw.
     pub(crate) server_kinds: HashSet<&'static str>,
     pub(crate) hook: Arc<dyn CallHook>,
@@ -224,6 +228,9 @@ impl<C: Sync> Registry<C> {
             by_name: HashMap::new(),
             groups: Vec::new(),
             pillar: "",
+            bin: "",
+            version: "",
+            about: "",
             server_kinds: HashSet::new(),
             hook: Arc::new(NoHook),
         }
@@ -243,6 +250,28 @@ impl<C: Sync> Registry<C> {
     /// Returns the pillar name set by [`Registry::set_pillar`].
     pub fn pillar(&self) -> &'static str {
         self.pillar
+    }
+
+    /// Names the binary: its command name, version and one-line description.
+    pub fn set_bin(&mut self, bin: &'static str, version: &'static str, about: &'static str) {
+        self.bin = bin;
+        self.version = version;
+        self.about = about;
+    }
+
+    /// The binary's command name set by [`Registry::set_bin`].
+    pub fn bin(&self) -> &'static str {
+        self.bin
+    }
+
+    /// The binary's version set by [`Registry::set_bin`].
+    pub fn version(&self) -> &'static str {
+        self.version
+    }
+
+    /// The binary's description set by [`Registry::set_bin`].
+    pub fn about(&self) -> &'static str {
+        self.about
     }
 
     /// Declares that the server resolves refs of `kind`: the library skips

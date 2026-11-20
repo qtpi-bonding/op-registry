@@ -1,0 +1,5 @@
+error: an op has exactly one kind: use one of `op:`, `local:`, `stream:` or `list:`
+  --> tests/ops_ui/ops_two_kinds_is_a_compile_error.rs:23:77
+   |
+23 |     "a b" => { params: P, output: O, access: reads, audience: agent, op: f, local: f },
+   |                                                                             ^^^^^

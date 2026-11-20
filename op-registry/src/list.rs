@@ -230,7 +230,8 @@ impl<C: Resolve + 'static> Registry<C> {
     /// # Panics
     ///
     /// Panics when the path has no noun word ("list op needs a noun"), when
-    /// no pillar is set ("set_pillar before push_list"), and on the build-time
+    /// no pillar is set ("set_pillar before push_list"), when `page_size` is 0
+    /// ("page_size must be > 0"), and on the build-time
     /// checks of [`Registry::push_op`].
     pub fn push_list<P, T, F>(&mut self, spec: OpSpec<P, T>, f: F)
     where
@@ -248,6 +249,7 @@ impl<C: Resolve + 'static> Registry<C> {
             spec.path
         );
         assert!(!self.pillar().is_empty(), "set_pillar before push_list");
+        assert!(spec.page_size > 0, "page_size must be > 0");
         let name = derive_name(&path);
         let noun = path[path.len() - 2].replace('-', "_");
         let code: &'static str =
