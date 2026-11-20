@@ -6,6 +6,9 @@ use crate::{
 use serde::Serialize;
 use serde_json::Value;
 
+#[cfg(feature = "rmcp")]
+pub mod rmcp;
+
 /// The tool contract exposed for an operation.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -12,7 +12,7 @@ schema = ["dep:schemars"]
 manual = []
 secrets = ["dep:zeroize"]
 testing = ["manual"]
-rmcp = ["dep:rmcp"]
+rmcp = ["dep:rmcp", "dep:tokio"]
 
 [dependencies]
 op-registry-derive = { path = "../op-registry-derive", version = "0.3.0" }
@@ -26,10 +26,12 @@ thiserror = { workspace = true }
 schemars = { workspace = true, optional = true }
 zeroize = { workspace = true, optional = true }
 rmcp = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["sync"] }
 
 [dev-dependencies]
 trybuild = { workspace = true }
 futures-executor = { workspace = true }
-tokio = { workspace = true, features = ["rt", "time", "macros"] }
+tokio = { workspace = true, features = ["rt", "time", "macros", "io-util"] }
+rmcp = { workspace = true, features = ["server", "client"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"] }
