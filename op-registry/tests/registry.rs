@@ -158,3 +158,22 @@ fn call_runs_a_json_op() {
         "op_registry.call.unknown_operation"
     );
 }
+
+#[test]
+#[should_panic(expected = "group \"concept\" is declared twice with different summaries")]
+fn merge_with_conflicting_group_summary_panics() {
+    let mut registry: Registry<Ctx> = Registry::new();
+    registry.group("concept", "Concepts.");
+    let mut other: Registry<Ctx> = Registry::new();
+    other.group("concept", "Something else.");
+    registry.merge(other);
+}
+
+#[test]
+fn merge_with_equal_group_summary_is_accepted() {
+    let mut registry: Registry<Ctx> = Registry::new();
+    registry.group("concept", "Concepts.");
+    let mut other: Registry<Ctx> = Registry::new();
+    other.group("concept", "Concepts.");
+    registry.merge(other);
+}

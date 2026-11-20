@@ -278,7 +278,7 @@ fn parsed_secrets<C: CliContext>(parsed: &Parsed) -> Redactor {
 }
 
 /// The raw values given to the op's secret arguments.
-fn matches_redactor(ids: &[String], matches: &clap::ArgMatches, cx: &ParseCx) -> Redactor {
+fn matches_redactor(ids: &[String], matches: &clap::ArgMatches) -> Redactor {
     let mut redactor = Redactor::default();
     for id in ids {
         if let Ok(Some(values)) = matches.try_get_raw(id) {
@@ -286,9 +286,6 @@ fn matches_redactor(ids: &[String], matches: &clap::ArgMatches, cx: &ParseCx) ->
                 redactor.add(value.to_string_lossy().as_bytes());
             }
         }
-    }
-    for secret in &cx.secrets {
-        redactor.add(secret);
     }
     redactor
 }
@@ -372,7 +369,7 @@ async fn execute<C: CliContext + Resolve>(
         Ok(params) => params,
         Err(error) => {
             // Nothing is built yet, so the redactor comes from the raw values.
-            let mut redactor = matches_redactor(&entry.secret_ids, &matches, &cx);
+            let mut redactor = matches_redactor(&entry.secret_ids, &matches);
             redactor.extend(&secrets);
             if exit::exit_code(&error) == exit::USAGE {
                 if let Some(hooks) = hooks {

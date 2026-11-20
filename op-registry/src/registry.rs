@@ -182,23 +182,12 @@ pub(crate) enum Run<C> {
     Stream(StreamRun<C>),
 }
 
-/// The spec fields the registry keeps for later tasks, typed by `O`.
-#[allow(dead_code)]
-pub(crate) struct Extras<O> {
-    pub cap: usize,
-    pub ok_exit: Option<fn(&O) -> u8>,
-    pub render_text: Option<fn(&O) -> String>,
-}
-
 pub(crate) struct Entry<C> {
     pub descriptor: Descriptor,
     /// The typed function (an `Arc<dyn Fn>` over `P` and `O`), for typed calls.
     pub typed: Box<dyn Any + Send + Sync>,
     /// The spec's `fields` function over erased parameters.
     pub fields: Option<ErasedFields>,
-    /// The `Extras<O>` of the spec.
-    #[allow(dead_code)]
-    pub extras: Box<dyn Any + Send + Sync>,
     pub decode_json: fn(Value, &mut ParseCx) -> Result<Box<dyn Any + Send>>,
     pub augment: fn(clap::Command) -> clap::Command,
     pub decode_matches: fn(&clap::ArgMatches, &mut ParseCx) -> Result<Box<dyn Any + Send>>,
@@ -389,9 +378,7 @@ impl<C: Sync> Registry<C> {
             self.strict_codes |= other.strict_codes;
         }
         for group in other.groups {
-            if !self.groups.iter().any(|g| g.path == group.path) {
-                self.group(&group.path.join(" "), &group.summary);
-            }
+            self.group(&group.path.join(" "), &group.summary);
         }
         self.server_kinds.extend(other.server_kinds);
         for entry in other.entries {
@@ -568,11 +555,6 @@ impl<C: Resolve + 'static> Registry<C> {
     {
         let descriptor = Self::describe(spec, kind);
         check_param_clashes::<P>(&descriptor.name);
-        let extras = Extras {
-            cap: spec.cap,
-            ok_exit: spec.ok_exit,
-            render_text: spec.render_text,
-        };
         let runner = f.clone();
         let (ok_exit, render_text) = (spec.ok_exit, spec.render_text);
         let run: UnaryRun<C> = Box::new(move |registry, ctx, params, opts, want_text| {
@@ -590,7 +572,6 @@ impl<C: Resolve + 'static> Registry<C> {
             descriptor,
             typed: Box::new(f),
             fields: erase_fields(spec.fields),
-            extras: Box::new(extras),
             decode_json: |value, cx| Ok(Box::new(P::from_json(value, cx)?)),
             augment: P::add_args,
             decode_matches: |matches, cx| Ok(Box::new(P::from_matches(matches, cx)?)),
@@ -670,11 +651,6 @@ impl<C: Resolve + 'static> Registry<C> {
     {
         let descriptor = Self::describe(&spec, OpKind::Stream);
         check_param_clashes::<P>(&descriptor.name);
-        let extras = Extras {
-            cap: spec.cap,
-            ok_exit: spec.ok_exit,
-            render_text: spec.render_text,
-        };
         let f: TypedStream<C, P, O> = Arc::new(f);
         let runner = f.clone();
         let run: StreamRun<C> = Box::new(move |ctx, params, opts, cursor| {
@@ -692,7 +668,6 @@ impl<C: Resolve + 'static> Registry<C> {
             descriptor,
             typed: Box::new(f),
             fields: erase_fields(spec.fields),
-            extras: Box::new(extras),
             decode_json: |value, cx| Ok(Box::new(P::from_json(value, cx)?)),
             augment: P::add_args,
             decode_matches: |matches, cx| Ok(Box::new(P::from_matches(matches, cx)?)),

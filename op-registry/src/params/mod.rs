@@ -23,8 +23,6 @@ pub struct ParseCx {
     pub(crate) stdin: Option<Box<dyn Read + Send>>,
     /// The first field that read stdin.
     pub(crate) stdin_used_by: Option<String>,
-    /// Secret values collected while decoding, for redaction.
-    pub secrets: Vec<Vec<u8>>,
 }
 
 impl std::fmt::Debug for ParseCx {
@@ -32,7 +30,6 @@ impl std::fmt::Debug for ParseCx {
         f.debug_struct("ParseCx")
             .field("stdin", &self.stdin.is_some())
             .field("stdin_used_by", &self.stdin_used_by)
-            .field("secrets", &self.secrets.len())
             .finish()
     }
 }

@@ -181,7 +181,8 @@ the flag:
   `invalid value`. `SecretFile` needs the `secrets` feature.
 - `#[derive(OpGlobals)]` declares process-wide flags and environment variables
   (`--hub`, `APP_HUB`). They may come before or after the verb and are not tool
-  params.
+  params. `--help` and `--version` succeed even when a required global is
+  missing.
 
 Removed from v1 with no replacement: `registry!`, `Operation`, `CliHooks`, the
 `name:` override, `#[op(positional)]`, `#[op(short)]`, `#[op(long)]`,
@@ -272,7 +273,8 @@ Enable `op-registry` with `features = ["testing"]` as a dev-dependency (it
 implies `manual`). The checks panic with every problem they find:
 
 - `assert_parity(&registry, &mounts)`: every op reaches the CLI, the tool list
-  and each mount, or says why not. Streams are exempt from mounts.
+  and each mount, or says why not. Streams are exempt from mounts; hidden ops
+  are not (a mount must still serve them).
 - `assert_canonical`, `assert_casing(&registry, Casing::Camel)`,
   `assert_help_complete`, `assert_manual_snapshot`.
 - `assert_exit_table`, `assert_error_codes`, `strict_codes`,
