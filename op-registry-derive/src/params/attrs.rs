@@ -28,6 +28,33 @@ pub struct Field {
     pub reference: Option<RefInfo>,
     /// The environment variable a global falls back to (`OpGlobals` only).
     pub env: Option<String>,
+    /// On a flattened group: the scope its subject takes (`scope = [..]`).
+    pub group_scope: Vec<ScopeName>,
+}
+
+/// One `scope = [..]` entry: a field name or a dotted path through flattened
+/// groups, with the span of its string literal.
+#[derive(Clone)]
+pub struct ScopeName {
+    pub path: String,
+    pub span: proc_macro2::Span,
+}
+
+impl ScopeName {
+    /// The path's last segment: the field whose value the scope carries.
+    pub fn leaf(&self) -> &str {
+        self.path.rsplit('.').next().unwrap_or(&self.path)
+    }
+
+    /// The scope key the resolver sees: the leaf's camelCase name.
+    pub fn key(&self) -> String {
+        camel(self.leaf())
+    }
+
+    /// The segments of the path.
+    pub fn segments(&self) -> Vec<&str> {
+        self.path.split('.').collect()
+    }
 }
 
 /// What `subject`, `kind`, `id_only` and `scope` say about a `Ref` field.
@@ -35,7 +62,7 @@ pub struct RefInfo {
     pub kind: String,
     pub subject: bool,
     pub id_only: bool,
-    pub scope: Vec<String>,
+    pub scope: Vec<ScopeName>,
 }
 
 impl Field {
@@ -63,7 +90,7 @@ impl Field {
         let mut subject: Option<String> = None;
         let mut kind: Option<String> = None;
         let mut id_only = false;
-        let mut scope: Option<Vec<String>> = None;
+        let mut scope: Option<Vec<ScopeName>> = None;
         let mut env: Option<String> = None;
         for attr in f.attrs.iter().filter(|a| a.path().is_ident("op")) {
             attr.parse_nested_meta(|m| {
@@ -85,7 +112,10 @@ impl Field {
                             match e {
                                 Expr::Lit(ExprLit {
                                     lit: Lit::Str(s), ..
-                                }) => names.push(s.value()),
+                                }) => names.push(ScopeName {
+                                    path: s.value(),
+                                    span: s.span(),
+                                }),
                                 _ => {
                                     return Err(syn::Error::new_spanned(
                                         e,
@@ -152,8 +182,8 @@ impl Field {
                     || requires_if.is_some()
                     || subject.is_some()
                     || kind.is_some()
-                    || id_only
-                    || scope.is_some(),
+                    || id_only,
+                scope.unwrap_or_default(),
             );
         }
         let shape = classify(&f.ty, value_enum).ok_or_else(|| {
@@ -252,6 +282,7 @@ impl Field {
             requires_if,
             reference,
             env,
+            group_scope: Vec::new(),
         })
     }
 
@@ -260,6 +291,7 @@ impl Field {
         ident: Ident,
         rust_name: String,
         other_attrs: bool,
+        group_scope: Vec<ScopeName>,
     ) -> syn::Result<Field> {
         if other_attrs {
             return Err(syn::Error::new_spanned(
@@ -288,6 +320,7 @@ impl Field {
             requires_if: None,
             reference: None,
             env: None,
+            group_scope,
         })
     }
 
@@ -320,7 +353,7 @@ fn ref_info(
     subject: Option<String>,
     kind: Option<String>,
     id_only: bool,
-    scope: Option<Vec<String>>,
+    scope: Option<Vec<ScopeName>>,
     has_default: bool,
 ) -> syn::Result<Option<RefInfo>> {
     let is_ref = matches!(

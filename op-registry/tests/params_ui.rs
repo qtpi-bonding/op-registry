@@ -13,6 +13,9 @@ fn op_params_compile_failures() {
     tests.compile_fail("tests/params_ui/op_params_clearable_needs_option_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_params_two_subjects_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_params_scope_names_unknown_field_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_scope_unknown_dotted_path_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_scope_unknown_leaf_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_scope_duplicate_leaf_is_a_compile_error.rs");
     tests.compile_fail(
         "tests/params_ui/op_params_secret_inline_needs_secret_file_is_a_compile_error.rs",
     );

@@ -257,7 +257,7 @@ impl<C: Resolve> Registry<C> {
     /// the subject (whose scope reads the siblings' resolved ids).
     pub(crate) async fn resolve_refs<P: OpParams>(&self, ctx: &C, params: &mut P) -> Result<()> {
         for subject in [false, true] {
-            for slot in params.ref_slots() {
+            for slot in params.ref_slots()? {
                 if slot.subject == subject {
                     self.resolve_slot(ctx, slot).await?;
                 }

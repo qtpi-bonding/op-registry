@@ -1,0 +1,5 @@
+error: scope names `nope.root`, whose first segment is not a flattened group of this struct
+  --> tests/params_ui/op_params_scope_unknown_dotted_path_is_a_compile_error.rs:10:38
+   |
+10 |     #[op(subject = "build", scope = ["nope.root"])]
+   |                                      ^^^^^^^^^^^

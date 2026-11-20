@@ -106,7 +106,8 @@ fn check_relations(fields: &[Field]) -> syn::Result<()> {
     Ok(())
 }
 
-/// One subject at most, and every scope name is a sibling field.
+/// One subject at most, and every scope name is a field of this struct or a
+/// dotted path starting at one of its flattened groups.
 fn check_refs(fields: &[Field]) -> syn::Result<()> {
     let mut subjects = fields
         .iter()
@@ -119,18 +120,60 @@ fn check_refs(fields: &[Field]) -> syn::Result<()> {
         ));
     }
     for f in fields {
-        let Some(r) = &f.reference else { continue };
-        for name in &r.scope {
-            let sibling = fields
-                .iter()
-                .find(|o| &o.rust_name == name && o.rust_name != f.rust_name);
-            if sibling.is_none_or(|o| matches!(o.shape, types::Shape::Flatten(_))) {
-                return Err(syn::Error::new(
-                    f.ident.span(),
-                    format!("scope names `{name}`, which is not another field of this struct"),
-                ));
-            }
+        if let Some(r) = &f.reference {
+            check_scope(fields, f, &r.scope)?;
         }
+        check_scope(fields, f, &f.group_scope)?;
+    }
+    Ok(())
+}
+
+/// Checks one `scope = [..]` list: names resolve, and keys are distinct.
+fn check_scope(fields: &[Field], owner: &Field, scope: &[attrs::ScopeName]) -> syn::Result<()> {
+    let mut keys: Vec<(String, &str)> = Vec::new();
+    for name in scope {
+        let segments = name.segments();
+        if segments.iter().any(|s| s.is_empty()) {
+            return Err(syn::Error::new(
+                name.span,
+                format!("scope names `{}`, which is not a field path", name.path),
+            ));
+        }
+        let head = fields.iter().find(|o| o.rust_name == segments[0]);
+        let ok = if segments.len() == 1 {
+            head.is_some_and(|o| {
+                o.rust_name != owner.rust_name && !matches!(o.shape, types::Shape::Flatten(_))
+            })
+        } else {
+            head.is_some_and(|o| matches!(o.shape, types::Shape::Flatten(_)))
+        };
+        if !ok {
+            let span = if segments.len() == 1 {
+                owner.ident.span()
+            } else {
+                name.span
+            };
+            let what = if segments.len() == 1 {
+                "which is not another field of this struct"
+            } else {
+                "whose first segment is not a flattened group of this struct"
+            };
+            return Err(syn::Error::new(
+                span,
+                format!("scope names `{}`, {what}", name.path),
+            ));
+        }
+        let key = name.key();
+        if let Some((_, first)) = keys.iter().find(|(k, _)| *k == key) {
+            return Err(syn::Error::new(
+                name.span,
+                format!(
+                    "scope names `{first}` and `{}`, which share the scope key `{key}`",
+                    name.path
+                ),
+            ));
+        }
+        keys.push((key, &name.path));
     }
     Ok(())
 }

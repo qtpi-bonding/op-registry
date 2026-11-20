@@ -170,7 +170,12 @@ the flag:
   JSON keys are camelCase (`agentId`) on every JSON path, input and output.
 - The subject of an op is `--id <REF>`, marked `#[op(subject = "concept")]` on a
   `Ref` field. Other objects are flags named by kind (`--collection`). There are
-  no positional arguments.
+  no positional arguments. `#[op(scope = ["blueprint", "project.root"])]` on the
+  subject names the field values its resolver sees: a field of the same struct,
+  or a dotted path through a flattened group. A `PathBuf` is a scope value (a
+  non-UTF-8 path fails with `op_registry.usage.invalid`). Keys in `Scope` are
+  the leaf field's camelCase name (`root`, `gcodeStore`). `scope` on a
+  `#[op(flatten)]` field gives the subject inside that group its scope.
 - `Option<T>` is optional, `bool` is a switch, `Vec<T>` repeats. `#[op(default = N)]`,
   `#[op(keys = [...])]`, `#[op(value_enum)]` and `#[op(secret)]` adjust a field.
 - `Json` takes a JSON string, `@path` or `@-` (stdin); `Input` and `SecretFile`

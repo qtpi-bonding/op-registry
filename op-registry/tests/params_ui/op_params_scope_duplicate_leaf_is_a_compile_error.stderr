@@ -1,0 +1,5 @@
+error: scope names `a.root` and `b.root`, which share the scope key `root`
+  --> tests/params_ui/op_params_scope_duplicate_leaf_is_a_compile_error.rs:15:48
+   |
+15 |     #[op(subject = "build", scope = ["a.root", "b.root"])]
+   |                                                ^^^^^^^^

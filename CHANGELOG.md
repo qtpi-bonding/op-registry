@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.2
+
+Additive. All four crates move to 0.3.2.
+
+- `#[op(scope = [..])]` may name a field of a flattened group by a dotted path
+  from the op's params struct: `scope = ["project.root", "store.gcode_store"]`.
+  The first segment must be a `#[op(flatten)]` field (else a compile error naming
+  the path); a missing field is rustc's own error, pointing at the path literal.
+  Paths may go through several groups.
+- The `Scope` key is the leaf field's camelCase name (`root`, `gcodeStore`) for
+  every entry, direct or dotted, so a resolver cannot tell them apart. Two
+  entries with the same leaf are a compile error. This also makes a direct
+  multi-word entry (`"gcode_store"`) arrive as `gcodeStore` (it was
+  `gcode_store`); single-word names are unchanged.
+- `PathBuf` and `Option<PathBuf>` fields can be scope values. A path that is not
+  UTF-8 fails the call with `op_registry.usage.invalid`, never a panic.
+- `#[op(flatten, scope = [..])]` gives a subject declared inside that group the
+  named scope, resolved against the whole params struct.
+- `OpParams::ref_slots` now returns `anyhow::Result<Vec<RefSlot>>` so a scope
+  value can fail. Only derive output and `ListParams` implement it.
+
 ## 0.3.1
 
 Additive. All four crates move to 0.3.1.

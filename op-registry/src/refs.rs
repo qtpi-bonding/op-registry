@@ -80,7 +80,7 @@ impl<'de> serde::Deserialize<'de> for Ref {
     }
 }
 
-/// The sibling values a resolver needs, by field name.
+/// The field values a resolver needs, by camelCase field key.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Scope(BTreeMap<String, String>);
 
@@ -88,6 +88,12 @@ impl Scope {
     /// The value of the named sibling, if it was given.
     pub fn get(&self, name: &str) -> Option<&str> {
         self.0.get(name).map(String::as_str)
+    }
+
+    pub(crate) fn merged(&self, over: &Scope) -> Scope {
+        let mut map = self.0.clone();
+        map.extend(over.0.iter().map(|(k, v)| (k.clone(), v.clone())));
+        Scope(map)
     }
 
     pub(crate) fn from_pairs(pairs: impl IntoIterator<Item = (String, String)>) -> Self {

@@ -467,7 +467,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "op-listen"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "coded-error",
@@ -483,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "op-registry"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -503,7 +503,7 @@ dependencies = [
 
 [[package]]
 name = "op-registry-derive"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -512,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "op-status"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "clap",

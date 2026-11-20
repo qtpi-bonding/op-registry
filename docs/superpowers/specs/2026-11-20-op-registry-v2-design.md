@@ -188,6 +188,15 @@ is a flag named by its kind (`--collection`, `--blueprint`, `--build`,
 - `#[op(scope = ["blueprint"])]` on the subject names sibling params the
   resolver needs: a concept URI is unique only within a collection, a build
   only within a blueprint.
+  A scope name is a field of the same struct (`"blueprint"`) or a dotted path
+  through a flattened group (`"project.root"`, 3.6), resolved at compile time.
+  `Scope` keys are the leaf field's camelCase name (`root`, `gcodeStore`) in both
+  forms, and two entries with one leaf are a compile error. `String`, `Ref` and
+  `PathBuf` (and `Option` of these) are scope values; a path that is not UTF-8
+  fails the call with `op_registry.usage.invalid`. `scope` on a `#[op(flatten)]`
+  field gives a subject declared inside that group its scope, resolved against
+  the whole struct. archegraph's `--root` and `--gcode-store` reach its
+  `blueprint`, `build` and `symbol` resolvers this way.
 - Before the op runs, on every path, the library calls the context's resolver:
 
   ```rust
@@ -196,7 +205,7 @@ is a flag named by its kind (`--collection`, `--blueprint`, `--build`,
   }
   ```
 
-  `Scope` holds the named sibling values, typed as strings, by name. The op
+  `Scope` holds the named field values, typed as strings, by camelCase key. The op
   receives `Resolved`, never the raw text.
 - **Pass-through.** A kind may be declared `resolve: server`. The library then
   skips `Resolve` for it and hands the raw ref to the op as
@@ -266,7 +275,9 @@ struct into the op, as flags on the CLI and as keys on MCP, REST and the typed
 path. This is how a per-call setting reaches every path: archegraph's `root`
 and `gcodeStore` are per-call MCP params, so they are a flattened group, not
 globals. A group is defined once, so its help wording is the same everywhere.
-Flattened names that clash with the op's own fields fail at build. Taken from:
+Flattened names that clash with the op's own fields fail at build. A subject's
+`scope = [..]` can reach into a group by dotted path (`"project.root"`), so a
+shared `--root` can scope ref resolution (see the Ref section). Taken from:
 archegraph review.
 
 ### 3.7 Globals

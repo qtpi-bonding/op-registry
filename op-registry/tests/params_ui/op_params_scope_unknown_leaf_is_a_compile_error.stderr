@@ -1,0 +1,7 @@
+error[E0609]: no field `missing` on type `Group`
+  --> tests/params_ui/op_params_scope_unknown_leaf_is_a_compile_error.rs:10:38
+   |
+10 |     #[op(subject = "build", scope = ["project.missing"])]
+   |                                      ^^^^^^^^^^^^^^^^^ unknown field
+   |
+   = note: available field is: `root`

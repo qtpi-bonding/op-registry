@@ -354,39 +354,59 @@ pub fn input_arg(cx: &mut ParseCx, flag: &str, text: &str) -> Result<Input> {
     Ok(Input(bytes))
 }
 
-/// A sibling value a subject's scope can name: its resolved id or raw text.
+/// A field value a subject's scope can name: its resolved id or raw text.
+/// `Err` is a usage error (a path that is not UTF-8).
 pub trait ScopeValue {
-    fn scope_value(&self) -> Option<String>;
+    fn scope_value(&self) -> Result<Option<String>>;
 }
 
 impl ScopeValue for String {
-    fn scope_value(&self) -> Option<String> {
-        Some(self.clone())
+    fn scope_value(&self) -> Result<Option<String>> {
+        Ok(Some(self.clone()))
     }
 }
 
 impl ScopeValue for crate::Ref {
-    fn scope_value(&self) -> Option<String> {
-        Some(match self.resolved_opt() {
+    fn scope_value(&self) -> Result<Option<String>> {
+        Ok(Some(match self.resolved_opt() {
             Some(crate::Resolved::Id(s) | crate::Resolved::Raw(s)) => s.clone(),
             _ => self.as_raw().to_owned(),
-        })
+        }))
+    }
+}
+
+impl ScopeValue for std::path::PathBuf {
+    fn scope_value(&self) -> Result<Option<String>> {
+        match self.to_str() {
+            Some(s) => Ok(Some(s.to_owned())),
+            None => Err(usage(UsageError::InvalidField {
+                name: "scope".to_owned(),
+                reason: format!("path {} is not valid UTF-8", self.display()),
+            })),
+        }
     }
 }
 
 impl<T: ScopeValue> ScopeValue for Option<T> {
-    fn scope_value(&self) -> Option<String> {
-        self.as_ref().and_then(ScopeValue::scope_value)
+    fn scope_value(&self) -> Result<Option<String>> {
+        self.as_ref().map_or(Ok(None), ScopeValue::scope_value)
     }
 }
 
-/// The scope of a subject: the named siblings that were given.
-pub fn scope(pairs: Vec<(&str, Option<String>)>) -> crate::Scope {
-    crate::Scope::from_pairs(
-        pairs
-            .into_iter()
-            .filter_map(|(name, value)| Some((name.to_owned(), value?))),
-    )
+/// The scope of a subject: the named fields that were given.
+pub fn scope(pairs: Vec<(&str, Result<Option<String>>)>) -> Result<crate::Scope> {
+    let mut out = Vec::new();
+    for (name, value) in pairs {
+        if let Some(value) = value? {
+            out.push((name.to_owned(), value));
+        }
+    }
+    Ok(crate::Scope::from_pairs(out))
+}
+
+/// `base` with the entries of `over` added (`over` wins on a clash).
+pub fn merge_scope(base: &crate::Scope, over: &crate::Scope) -> crate::Scope {
+    base.merged(over)
 }
 
 /// The text form of a `#[op(secret)]` field's value, for redaction.

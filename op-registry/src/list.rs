@@ -168,7 +168,7 @@ impl<P: OpParams> OpParams for PageParams<P> {
         self.inner.validate()
     }
 
-    fn ref_slots(&mut self) -> Vec<RefSlot<'_>> {
+    fn ref_slots(&mut self) -> Result<Vec<RefSlot<'_>>> {
         self.inner.ref_slots()
     }
 

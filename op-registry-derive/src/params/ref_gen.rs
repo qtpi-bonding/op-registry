@@ -3,33 +3,61 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use super::attrs::Field;
+use super::attrs::{Field, ScopeName};
 use super::types::Shape;
+
+/// `scope(vec![(key, value), ..])?` over the named fields of `self`.
+fn scope_expr(names: &[ScopeName]) -> TokenStream {
+    let pairs = names.iter().map(|name| {
+        let key = name.key();
+        let mut access = quote!(self);
+        for seg in name.segments() {
+            let mut ident = syn::parse_str::<syn::Ident>(seg)
+                .unwrap_or_else(|_| syn::Ident::new_raw(seg, name.span));
+            ident.set_span(name.span);
+            access = quote!(#access.#ident);
+        }
+        quote!((#key, ::op_registry::__private::rt::ScopeValue::scope_value(&#access)))
+    });
+    quote!(::op_registry::__private::rt::scope(vec![#(#pairs),*])?)
+}
 
 pub fn ref_slots_fn(fields: &[Field]) -> TokenStream {
     let mut subject_scope = TokenStream::new();
+    let mut group_scopes = TokenStream::new();
     let mut pushes = Vec::new();
-    for f in fields {
+    for (i, f) in fields.iter().enumerate() {
         let ident = &f.ident;
         let Some(r) = &f.reference else {
             if matches!(f.shape, Shape::Flatten(_)) {
-                pushes.push(
-                    quote!(slots.extend(::op_registry::OpParams::ref_slots(&mut self.#ident));),
-                );
+                if f.group_scope.is_empty() {
+                    pushes.push(
+                        quote!(slots.extend(::op_registry::OpParams::ref_slots(&mut self.#ident)?);),
+                    );
+                } else {
+                    let var = quote::format_ident!("group_scope_{i}");
+                    let expr = scope_expr(&f.group_scope);
+                    group_scopes.extend(quote!(let #var = #expr;));
+                    pushes.push(quote! {
+                        slots.extend(
+                            ::op_registry::OpParams::ref_slots(&mut self.#ident)?
+                                .into_iter()
+                                .map(|mut s| {
+                                    if s.subject {
+                                        s.scope = ::op_registry::__private::rt::merge_scope(&s.scope, &#var);
+                                    }
+                                    s
+                                }),
+                        );
+                    });
+                }
             }
             continue;
         };
         let (kind, subject, id_only) = (&r.kind, r.subject, r.id_only);
         let scope = if r.subject {
-            let pairs = r.scope.iter().map(|name| {
-                let sibling = fields
-                    .iter()
-                    .find(|o| &o.rust_name == name)
-                    .map(|o| &o.ident);
-                quote!((#name, ::op_registry::__private::rt::ScopeValue::scope_value(&self.#sibling)))
-            });
-            subject_scope =
-                quote!(let scope = ::op_registry::__private::rt::scope(vec![#(#pairs),*]););
+            let expr = scope_expr(&r.scope);
+            subject_scope = quote!(let scope = #expr;);
             quote!(scope)
         } else {
             quote!(::op_registry::Scope::default())
@@ -61,12 +89,13 @@ pub fn ref_slots_fn(fields: &[Field]) -> TokenStream {
         });
     }
     quote! {
-        fn ref_slots(&mut self) -> ::std::vec::Vec<::op_registry::RefSlot<'_>> {
+        fn ref_slots(&mut self) -> ::op_registry::__private::anyhow::Result<::std::vec::Vec<::op_registry::RefSlot<'_>>> {
             #subject_scope
+            #group_scopes
             let mut slots: ::std::vec::Vec<::op_registry::RefSlot<'_>> = ::std::vec::Vec::new();
             #(#pushes)*
             slots.sort_by_key(|s| s.subject);
-            slots
+            ::std::result::Result::Ok(slots)
         }
     }
 }

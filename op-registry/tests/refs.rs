@@ -7,6 +7,7 @@ use op_registry::{
 };
 use serde::Serialize;
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 #[derive(Debug, thiserror::Error, coded_error::CodedError)]
@@ -24,6 +25,8 @@ enum BuildError {
 struct Ctx {
     panic_on_resolve: bool,
     seen_scope: Mutex<Vec<Option<String>>>,
+    /// The `root` and `gcodeStore` scope keys each build lookup saw.
+    seen_paths: Mutex<Vec<(Option<String>, Option<String>)>>,
 }
 
 impl Resolve for Ctx {
@@ -42,6 +45,10 @@ impl Resolve for Ctx {
                         .lock()
                         .unwrap()
                         .push(scope.get("blueprint").map(str::to_owned));
+                    self.seen_paths.lock().unwrap().push((
+                        scope.get("root").map(str::to_owned),
+                        scope.get("gcodeStore").map(str::to_owned),
+                    ));
                     if raw == "dup" {
                         return Err(coded_error::into_anyhow(BuildError::Ambiguous(raw.into())));
                     }
@@ -75,6 +82,42 @@ struct Scoped {
     id: Ref,
     #[op(kind = "blueprint")]
     blueprint: Ref,
+}
+
+#[derive(Debug, OpParams)]
+struct ProjectGroup {
+    root: PathBuf,
+}
+
+#[derive(Debug, OpParams)]
+struct StoreGroup {
+    gcode_store: Option<PathBuf>,
+}
+
+#[derive(Debug, OpParams)]
+struct Dotted {
+    #[op(subject = "build", scope = ["project.root", "store.gcode_store"])]
+    id: Ref,
+    #[op(flatten)]
+    project: ProjectGroup,
+    #[op(flatten)]
+    store: StoreGroup,
+}
+
+#[derive(Debug, OpParams)]
+struct SubjectGroup {
+    #[op(subject = "build")]
+    id: Ref,
+}
+
+#[derive(Debug, OpParams)]
+struct Grouped {
+    #[op(flatten, scope = ["blueprint", "project.root"])]
+    subject: SubjectGroup,
+    #[op(kind = "blueprint")]
+    blueprint: Ref,
+    #[op(flatten)]
+    project: ProjectGroup,
 }
 
 #[derive(Debug, OpParams)]
@@ -134,6 +177,8 @@ macro_rules! op {
 }
 op!(GetOp, Get, "get", build);
 op!(WaitsOp, Waits, "waits", id);
+op!(DottedOp, Dotted, "dotted", id);
+op!(GroupedOp, Grouped, "grouped", id);
 
 fn registry(server: Option<&'static str>) -> Registry<Ctx> {
     let mut r: Registry<Ctx> = Registry::new();
@@ -150,6 +195,18 @@ fn registry(server: Option<&'static str>) -> Registry<Ctx> {
         OpSpec::<Scoped, Seen>::new("scoped", "Scoped."),
         |_c: &Ctx, p: Scoped, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Seen>> {
             Box::pin(async move { Ok(seen(&p.id)) })
+        },
+    );
+    r.push_op(
+        OpSpec::<Dotted, Seen>::new("dotted", "Dotted."),
+        |_c: &Ctx, p: Dotted, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Seen>> {
+            Box::pin(async move { Ok(seen(&p.id)) })
+        },
+    );
+    r.push_op(
+        OpSpec::<Grouped, Seen>::new("grouped", "Grouped."),
+        |_c: &Ctx, p: Grouped, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Seen>> {
+            Box::pin(async move { Ok(seen(&p.subject.id)) })
         },
     );
     r.push_op(
@@ -461,5 +518,140 @@ async fn resolution_failure_reaches_the_hook_on_every_path() {
     assert_eq!(
         hook.errors.lock().unwrap().as_slice(),
         ["get fix.build.not_found", "get fix.build.not_found"]
+    );
+}
+
+fn dotted_typed(root: PathBuf, store: Option<PathBuf>) -> Dotted {
+    Dotted {
+        id: Ref::new("nightly"),
+        project: ProjectGroup { root },
+        store: StoreGroup { gcode_store: store },
+    }
+}
+
+#[tokio::test]
+async fn dotted_scope_reaches_the_resolver_on_every_path() {
+    let r = registry(None);
+    let want = vec![(Some("/srv/x".to_owned()), Some("/srv/g".to_owned()))];
+    // JSON (`call` / `call_tool` share this decode).
+    let ctx = Ctx::default();
+    r.call(
+        "dotted",
+        json!({"id": "nightly", "root": "/srv/x", "gcodeStore": "/srv/g"}),
+        &ctx,
+        CallOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(*ctx.seen_paths.lock().unwrap(), want);
+    // MCP `call_tool`
+    let ctx = Ctx::default();
+    op_registry::mcp::call_tool(
+        &r,
+        &ctx,
+        op_registry::Audience::Agent,
+        "dotted",
+        json!({"id": "nightly", "root": "/srv/x", "gcodeStore": "/srv/g"}),
+        CallOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(*ctx.seen_paths.lock().unwrap(), want);
+    // CLI
+    let ctx = Ctx::default();
+    let m = Dotted::add_args(Command::new("t"))
+        .try_get_matches_from([
+            "t",
+            "--id",
+            "nightly",
+            "--root",
+            "/srv/x",
+            "--gcode-store",
+            "/srv/g",
+        ])
+        .unwrap();
+    let p = Dotted::from_matches(&m, &mut ParseCx::default()).unwrap();
+    r.call_typed::<DottedOp>(&ctx, p, CallOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(*ctx.seen_paths.lock().unwrap(), want);
+    // typed
+    let ctx = Ctx::default();
+    let p = dotted_typed("/srv/x".into(), Some("/srv/g".into()));
+    r.call_typed::<DottedOp>(&ctx, p, CallOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(*ctx.seen_paths.lock().unwrap(), want);
+}
+
+#[tokio::test]
+async fn dotted_scope_skips_an_absent_optional() {
+    let r = registry(None);
+    let ctx = Ctx::default();
+    let p = dotted_typed("/srv/x".into(), None);
+    r.call_typed::<DottedOp>(&ctx, p, CallOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        *ctx.seen_paths.lock().unwrap(),
+        [(Some("/srv/x".to_owned()), None)]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn non_utf8_path_in_scope_is_a_usage_error() {
+    use std::os::unix::ffi::OsStringExt;
+    let r = registry(None);
+    let ctx = Ctx::default();
+    let bad = PathBuf::from(std::ffi::OsString::from_vec(vec![b'/', 0xff, b'x']));
+    let err = r
+        .call_typed::<DottedOp>(&ctx, dotted_typed(bad, None), CallOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(code(&err), "op_registry.usage.invalid");
+    assert!(ctx.seen_paths.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn flattened_subject_takes_its_groups_scope() {
+    let r = registry(None);
+    let ctx = Ctx::default();
+    let out = r
+        .call(
+            "grouped",
+            json!({"id": "nightly", "blueprint": "Blue", "root": "/srv/x"}),
+            &ctx,
+            CallOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out["id"], "b1");
+    // The blueprint reaches the resolver as its resolved id, and the path too.
+    assert_eq!(*ctx.seen_scope.lock().unwrap(), [Some("bp".to_owned())]);
+    assert_eq!(
+        *ctx.seen_paths.lock().unwrap(),
+        [(Some("/srv/x".to_owned()), None)]
+    );
+    // The typed path sees the same scope.
+    let ctx = Ctx::default();
+    let m = Grouped::add_args(Command::new("t"))
+        .try_get_matches_from([
+            "t",
+            "--id",
+            "nightly",
+            "--blueprint",
+            "Blue",
+            "--root",
+            "/r",
+        ])
+        .unwrap();
+    let p = Grouped::from_matches(&m, &mut ParseCx::default()).unwrap();
+    r.call_typed::<GroupedOp>(&ctx, p, CallOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        *ctx.seen_paths.lock().unwrap(),
+        [(Some("/r".to_owned()), None)]
     );
 }

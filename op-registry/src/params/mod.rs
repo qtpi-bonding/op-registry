@@ -181,8 +181,10 @@ pub trait OpParams: Sized + Send + 'static {
         Ok(())
     }
     /// The refs of this struct: non-subject refs first, then the subject.
-    fn ref_slots(&mut self) -> Vec<crate::RefSlot<'_>> {
-        Vec::new()
+    ///
+    /// Fails when a scope value cannot be read (a path that is not UTF-8).
+    fn ref_slots(&mut self) -> anyhow::Result<Vec<crate::RefSlot<'_>>> {
+        Ok(Vec::new())
     }
     fn secrets(&self) -> Vec<Vec<u8>> {
         Vec::new()

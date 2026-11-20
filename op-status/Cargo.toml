@@ -18,15 +18,15 @@ serde_json = { workspace = true }
 futures-util = { workspace = true }
 coded-error = { workspace = true }
 thiserror = { workspace = true }
-op-registry = { path = "../op-registry", version = "0.3.1", optional = true }
-op-listen = { path = "../op-listen", version = "0.3.1", default-features = false }
+op-registry = { path = "../op-registry", version = "0.3.2", optional = true }
+op-listen = { path = "../op-listen", version = "0.3.2", default-features = false }
 clap = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "time", "test-util"] }
 futures-executor = { workspace = true }
-op-registry = { path = "../op-registry", version = "0.3.1", features = ["testing"] }
+op-registry = { path = "../op-registry", version = "0.3.2", features = ["testing"] }
 clap = { workspace = true }
 schemars = { workspace = true }
 
