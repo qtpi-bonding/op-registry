@@ -655,3 +655,43 @@ async fn flattened_subject_takes_its_groups_scope() {
         [(Some("/r".to_owned()), None)]
     );
 }
+
+#[derive(Debug, OpParams)]
+struct Many {
+    #[op(subject = "agent", id_only)]
+    id: Ref,
+    #[op(kind = "build")]
+    builds: Vec<Ref>,
+}
+
+#[test]
+fn vec_ref_field_reports_repeated_kind() {
+    let fields = Many::fields();
+    let builds = fields.iter().find(|f| f.rust_name == "builds").unwrap();
+    assert_eq!(builds.kind, op_registry::FieldKind::Repeated);
+    assert!(builds.subject.is_none());
+}
+
+#[test]
+fn subject_field_meta_names_kind() {
+    let fields = IdOnly::fields();
+    assert_eq!(
+        fields[0].subject,
+        Some(op_registry::SubjectMeta::new("agent").id_only(true))
+    );
+    let s = fields[0].subject.as_ref().unwrap();
+    assert_eq!(
+        (s.kind.as_str(), s.id_only, s.absent_ok),
+        ("agent", true, false)
+    );
+    assert_eq!(fields[0].kind, op_registry::FieldKind::Ref);
+    let plain = Get::fields();
+    assert_eq!(plain[0].subject.as_ref().map(|s| s.id_only), Some(false));
+    let waits = Waits::fields();
+    assert!(waits
+        .iter()
+        .find(|f| f.rust_name == "waits_for")
+        .unwrap()
+        .subject
+        .is_none());
+}

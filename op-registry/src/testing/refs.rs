@@ -3,7 +3,7 @@
 
 use super::codes::call_errors;
 use super::{fail_on_noting, kit_path, sample_params, typed_only_line, Fixture};
-use crate::{Descriptor, FieldKind, Registry, Resolve};
+use crate::{Descriptor, Registry, Resolve};
 use coded_error::ErrorClass;
 use serde_json::Value;
 
@@ -16,7 +16,7 @@ fn has_subject<C>(registry: &Registry<C>, d: &Descriptor) -> bool {
         .any(|e| {
             e.param_fields
                 .iter()
-                .any(|f| f.kind == FieldKind::Ref && f.key == "id")
+                .any(|f| f.subject.is_some() && f.key == "id")
         })
 }
 

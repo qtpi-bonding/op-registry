@@ -194,13 +194,15 @@ pub fn fields_fn(fields: &[Field]) -> TokenStream {
         }
         let (rust_name, flag, key, help) = (&f.rust_name, &f.flag, &f.key, &f.help);
         let kind = match &f.shape {
-            _ if f.reference.is_some() => quote!(Ref),
             Shape::Plain(Base::Json) | Shape::Optional(Base::Json) => quote!(Json),
             Shape::Plain(Base::Input) | Shape::Optional(Base::Input) => quote!(Input),
             Shape::Plain(Base::SecretFile) | Shape::Optional(Base::SecretFile) => {
                 quote!(SecretFile)
             }
-            Shape::Plain(_) | Shape::Optional(_) | Shape::Patch(_) => quote!(Scalar),
+            Shape::Plain(Base::Ref) | Shape::Optional(Base::Ref) => quote!(Ref),
+            Shape::Plain(Base::Path) | Shape::Optional(Base::Path) => quote!(Path),
+            Shape::Plain(_) | Shape::Optional(_) => quote!(Scalar),
+            Shape::Patch(_) => quote!(Patch),
             Shape::Switch => quote!(Switch),
             Shape::TriState => quote!(TriState),
             Shape::Repeated(_) => quote!(Repeated),
@@ -208,17 +210,22 @@ pub fn fields_fn(fields: &[Field]) -> TokenStream {
             Shape::Flatten(_) => unreachable!(),
         };
         let (required, secret) = (f.required(), f.secret);
+        let subject = f.reference.as_ref().filter(|r| r.subject).map(|r| {
+            let (kind, id_only) = (&r.kind, r.id_only);
+            quote!(.with_subject(::op_registry::SubjectMeta::new(#kind).id_only(#id_only)))
+        });
+        let env = f.env.as_ref().map(|var| quote!(.with_env(#var)));
         quote! {
-            fields.push(::op_registry::FieldMeta {
-                rust_name: #rust_name,
-                flag: #flag.to_owned(),
-                key: #key.to_owned(),
-                help: #help.to_owned(),
-                kind: ::op_registry::FieldKind::#kind,
-                required: #required,
-                secret: #secret,
-                from_group: ::std::option::Option::None,
-            });
+            fields.push(
+                ::op_registry::FieldMeta::new(#rust_name, ::op_registry::FieldKind::#kind)
+                    .with_flag(#flag)
+                    .with_key(#key)
+                    .with_help(#help)
+                    .required(#required)
+                    .secret(#secret)
+                    #subject
+                    #env
+            );
         }
     });
     quote! {

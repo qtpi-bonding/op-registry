@@ -131,7 +131,7 @@ impl Redactor {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FieldKind {
-    /// One value (`String`, numbers, `PathBuf`, enums), possibly optional.
+    /// One value (`String`, numbers, enums), possibly optional.
     Scalar,
     /// A `bool` switch.
     Switch,
@@ -149,10 +149,48 @@ pub enum FieldKind {
     Ref,
     /// A secret read from a file.
     SecretFile,
+    /// A `PathBuf` or `Option<PathBuf>`.
+    Path,
+    /// A clearable `Patch<T>`.
+    Patch,
+}
+
+/// The subject marker of a field: the kind it names and how it is resolved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SubjectMeta {
+    /// The kind of object the subject names.
+    pub kind: String,
+    /// The id passes through without resolution.
+    pub id_only: bool,
+    /// The subject may be absent: the id passes through, and the object need not exist.
+    pub absent_ok: bool,
+}
+
+impl SubjectMeta {
+    /// A subject of `kind`, resolved normally.
+    pub fn new(kind: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            id_only: false,
+            absent_ok: false,
+        }
+    }
+
+    pub fn id_only(mut self, yes: bool) -> Self {
+        self.id_only = yes;
+        self
+    }
+
+    pub fn absent_ok(mut self, yes: bool) -> Self {
+        self.absent_ok = yes;
+        self
+    }
 }
 
 /// What the derive knows about one field.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FieldMeta {
     /// The Rust field name.
     pub rust_name: &'static str,
@@ -168,6 +206,83 @@ pub struct FieldMeta {
     pub secret: bool,
     /// The shared param group the field came from, if any.
     pub from_group: Option<&'static str>,
+    /// Set on the op's subject.
+    pub subject: Option<SubjectMeta>,
+    /// The environment variable the field falls back to.
+    pub env: Option<String>,
+    /// The label of a prompted `SecretFile`.
+    pub prompt: Option<String>,
+}
+
+impl FieldMeta {
+    /// A field named `rust_name`: the flag is its kebab-case, the key its camelCase.
+    pub fn new(rust_name: &'static str, kind: FieldKind) -> Self {
+        let mut key = String::new();
+        for (i, part) in rust_name.split('_').filter(|p| !p.is_empty()).enumerate() {
+            if i == 0 {
+                key.push_str(part);
+            } else {
+                let mut chars = part.chars();
+                if let Some(c) = chars.next() {
+                    key.extend(c.to_uppercase());
+                    key.push_str(chars.as_str());
+                }
+            }
+        }
+        Self {
+            rust_name,
+            flag: rust_name.replace('_', "-"),
+            key,
+            help: String::new(),
+            kind,
+            required: false,
+            secret: false,
+            from_group: None,
+            subject: None,
+            env: None,
+            prompt: None,
+        }
+    }
+
+    pub fn with_flag(mut self, flag: impl Into<String>) -> Self {
+        self.flag = flag.into();
+        self
+    }
+
+    pub fn with_key(mut self, key: impl Into<String>) -> Self {
+        self.key = key.into();
+        self
+    }
+
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.help = help.into();
+        self
+    }
+
+    pub fn required(mut self, yes: bool) -> Self {
+        self.required = yes;
+        self
+    }
+
+    pub fn secret(mut self, yes: bool) -> Self {
+        self.secret = yes;
+        self
+    }
+
+    pub fn with_subject(mut self, subject: SubjectMeta) -> Self {
+        self.subject = Some(subject);
+        self
+    }
+
+    pub fn with_env(mut self, env: impl Into<String>) -> Self {
+        self.env = Some(env.into());
+        self
+    }
+
+    pub fn with_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.prompt = Some(prompt.into());
+        self
+    }
 }
 
 /// One parameter struct decoded from clap matches or JSON.

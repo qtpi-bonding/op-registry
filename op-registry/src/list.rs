@@ -90,16 +90,9 @@ const LIMIT_HELP: &str = "The most items to return.";
 const CURSOR_HELP: &str = "Where to resume, from an earlier page's nextCursor.";
 
 fn paging_field(name: &'static str, required: bool, help: &str) -> FieldMeta {
-    FieldMeta {
-        rust_name: name,
-        flag: name.to_owned(),
-        key: name.to_owned(),
-        help: help.to_owned(),
-        kind: FieldKind::Scalar,
-        required,
-        secret: false,
-        from_group: None,
-    }
+    FieldMeta::new(name, FieldKind::Scalar)
+        .with_help(help)
+        .required(required)
 }
 
 impl<P: OpParams> OpParams for PageParams<P> {
