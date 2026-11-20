@@ -1,0 +1,5 @@
+error: field `id`: the subject is not clearable
+ --> tests/params_ui/op_params_patch_ref_subject_is_a_compile_error.rs:6:9
+  |
+6 |     id: Patch<Ref>,
+  |         ^^^^^^^^^^

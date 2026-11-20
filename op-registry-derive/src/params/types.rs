@@ -143,7 +143,7 @@ pub fn classify(ty: &Type, value_enum: bool) -> Option<Shape> {
             }
             "Patch" => {
                 return match base(inner, value_enum)? {
-                    Base::Bool | Base::Json | Base::Input | Base::Ref | Base::SecretFile => None,
+                    Base::Bool | Base::Json | Base::Input | Base::SecretFile => None,
                     b => Some(Shape::Patch(b)),
                 }
             }

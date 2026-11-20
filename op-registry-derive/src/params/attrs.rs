@@ -452,7 +452,10 @@ fn ref_info(
 ) -> syn::Result<Option<RefInfo>> {
     let is_ref = matches!(
         shape,
-        Shape::Plain(Base::Ref) | Shape::Optional(Base::Ref) | Shape::Repeated(Base::Ref)
+        Shape::Plain(Base::Ref)
+            | Shape::Optional(Base::Ref)
+            | Shape::Repeated(Base::Ref)
+            | Shape::Patch(Base::Ref)
     );
     let err = |msg: String| {
         Err(syn::Error::new_spanned(
@@ -478,6 +481,9 @@ fn ref_info(
             err("a `Ref` field needs `#[op(subject = \"..\")]` or `#[op(kind = \"..\")]`".into())
         }
         (Some(kind), None) => {
+            if matches!(shape, Shape::Patch(_)) {
+                return err("the subject is not clearable".into());
+            }
             if !matches!(shape, Shape::Plain(_) | Shape::Optional(_)) {
                 return err("the subject is one `Ref` or `Option<Ref>`".into());
             }
@@ -489,18 +495,13 @@ fn ref_info(
                 scope: scope.unwrap_or_default(),
             }))
         }
-        (None, Some(kind)) => {
-            if id_only || scope.is_some() {
-                return err("id_only and scope belong to the subject".into());
-            }
-            Ok(Some(RefInfo {
-                kind,
-                subject: false,
-                id_only: false,
-                absent_ok: false,
-                scope: Vec::new(),
-            }))
-        }
+        (None, Some(kind)) => Ok(Some(RefInfo {
+            kind,
+            subject: false,
+            id_only,
+            absent_ok: false,
+            scope: scope.unwrap_or_default(),
+        })),
     }
 }
 

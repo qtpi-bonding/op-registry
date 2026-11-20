@@ -27,6 +27,8 @@ struct Ctx {
     seen_scope: Mutex<Vec<Option<String>>>,
     /// The `root` and `gcodeStore` scope keys each build lookup saw.
     seen_paths: Mutex<Vec<(Option<String>, Option<String>)>>,
+    /// Every lookup: the kind and the `root` scope key it saw.
+    seen_roots: Mutex<Vec<(String, Option<String>)>>,
 }
 
 impl Resolve for Ctx {
@@ -39,6 +41,10 @@ impl Resolve for Ctx {
         Box::pin(async move {
             assert!(!self.panic_on_resolve, "the resolver must not be called");
             let raw = r.as_raw();
+            self.seen_roots
+                .lock()
+                .unwrap()
+                .push((kind.to_owned(), scope.get("root").map(str::to_owned)));
             match kind {
                 "build" => {
                     self.seen_scope
@@ -61,6 +67,7 @@ impl Resolve for Ctx {
                 }
                 "blueprint" if raw == "bp" || raw == "Blue" => Ok(Resolved::Id("bp".into())),
                 "collection" if raw == "c1" => Ok(Resolved::Id("c1".into())),
+                "place" if raw == "Home" => Ok(Resolved::Id("p1".into())),
                 _ => Err(coded_error::into_anyhow(BuildError::NotFound(raw.into()))),
             }
         })
@@ -1119,4 +1126,332 @@ async fn malformed_id_is_usage_invalid_every_surface() {
     };
     assert_eq!(run("bad id"), 2);
     assert_eq!(run("good-id"), 0);
+}
+
+// ---- Non-subject refs: scope and `id_only` (PAR-2), `Patch<Ref>` (PAR-3) ----
+
+#[derive(Debug, OpParams)]
+struct NonSubjectScope {
+    #[op(subject = "build")]
+    id: Ref,
+    root: Option<PathBuf>,
+    #[op(kind = "blueprint", scope = ["root"])]
+    blueprint: Option<Ref>,
+    #[op(kind = "collection", scope = ["root"])]
+    more: Vec<Ref>,
+}
+
+#[derive(Debug, OpParams)]
+struct NonSubjectIdOnly {
+    #[op(subject = "build")]
+    id: Ref,
+    #[op(kind = "action", id_only)]
+    waits_for: Option<Ref>,
+    #[op(kind = "action", id_only)]
+    after: Vec<Ref>,
+}
+
+#[derive(Debug, OpParams)]
+struct Homed {
+    #[op(subject = "build")]
+    id: Ref,
+    #[op(kind = "place", clearable)]
+    home_place: op_registry::Patch<Ref>,
+}
+
+struct NonSubjectScopeOp;
+impl Op for NonSubjectScopeOp {
+    type Ctx = Ctx;
+    type Params = NonSubjectScope;
+    type Output = OptSeen;
+    const NAME: &'static str = "nonsubject_scope";
+}
+
+fn par_registry() -> Registry<Ctx> {
+    let mut r: Registry<Ctx> = Registry::new();
+    r.push_op(
+        OpSpec::<NonSubjectScope, OptSeen>::new("nonsubject_scope", "Scoped non-subjects."),
+        |_c: &Ctx, p: NonSubjectScope, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<OptSeen>> {
+            Box::pin(async move { Ok(opt_seen(&p.blueprint, None)) })
+        },
+    );
+    r.push_op(
+        OpSpec::<NonSubjectIdOnly, OptSeen>::new("waits_id_only", "Id-only non-subjects."),
+        |_c: &Ctx,
+         p: NonSubjectIdOnly,
+         _o: CallOptions|
+         -> BoxFuture<'_, anyhow::Result<OptSeen>> {
+            Box::pin(async move {
+                let after: Vec<&str> = p.after.iter().map(Ref::id).collect();
+                Ok(opt_seen(&p.waits_for, Some(after.join(","))))
+            })
+        },
+    );
+    r.push_op(
+        OpSpec::<Homed, OptSeen>::new("homed", "Patch ref."),
+        |_c: &Ctx, p: Homed, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<OptSeen>> {
+            Box::pin(async move {
+                Ok(match &p.home_place {
+                    op_registry::Patch::Set(r) => opt_seen(&Some(r.clone()), Some("set".into())),
+                    op_registry::Patch::Keep => opt_seen(&None, Some("keep".into())),
+                    op_registry::Patch::Clear => opt_seen(&None, Some("clear".into())),
+                })
+            })
+        },
+    );
+    r
+}
+
+fn roots(ctx: &Ctx, kind: &str) -> Vec<Option<String>> {
+    ctx.seen_roots
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(k, _)| k == kind)
+        .map(|(_, root)| root.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn non_subject_ref_scope_reaches_resolver() {
+    let r = par_registry();
+    // JSON: both the Option<Ref> and each Vec<Ref> member see the scope.
+    let ctx = Ctx::default();
+    r.call(
+        "nonsubject_scope",
+        json!({"id": "nightly", "root": "/srv/x", "blueprint": "Blue", "more": ["c1", "c1"]}),
+        &ctx,
+        CallOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(roots(&ctx, "blueprint"), [Some("/srv/x".to_owned())]);
+    assert_eq!(
+        roots(&ctx, "collection"),
+        [Some("/srv/x".to_owned()), Some("/srv/x".to_owned())]
+    );
+    // An absent scope member is left out of the scope.
+    let ctx = Ctx::default();
+    r.call(
+        "nonsubject_scope",
+        json!({"id": "nightly", "blueprint": "Blue"}),
+        &ctx,
+        CallOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(roots(&ctx, "blueprint"), [None]);
+    // CLI-decoded typed params.
+    let ctx = Ctx::default();
+    let m = NonSubjectScope::add_args(Command::new("t"))
+        .try_get_matches_from([
+            "t",
+            "--id",
+            "nightly",
+            "--root",
+            "/r",
+            "--blueprint",
+            "Blue",
+        ])
+        .unwrap();
+    let p = NonSubjectScope::from_matches(&m, &mut ParseCx::default()).unwrap();
+    r.call_typed::<NonSubjectScopeOp>(&ctx, p, CallOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(roots(&ctx, "blueprint"), [Some("/r".to_owned())]);
+}
+
+#[tokio::test]
+async fn non_subject_id_only_skips_resolver() {
+    let mut r = par_registry();
+    // The subject is server-resolved, so only the id_only refs could reach
+    // the resolver, and it panics if called.
+    r.resolve_server("build");
+    let ctx = Ctx {
+        panic_on_resolve: true,
+        ..Ctx::default()
+    };
+    let out = r
+        .call(
+            "waits_id_only",
+            json!({"id": "nightly", "waitsFor": "w-1", "after": ["a-1", "a-2"]}),
+            &ctx,
+            CallOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out, json!({"id": "w-1", "raw": false, "action": "a-1,a-2"}));
+}
+
+#[tokio::test]
+async fn id_without_blueprint_has_no_blueprint_scope_key() {
+    // archegraph's case: `--id` alone reaches the build resolver without a
+    // `blueprint` key in its scope.
+    let r = opt_registry();
+    let ctx = Ctx::default();
+    r.call(
+        "opt",
+        json!({"id": "nightly"}),
+        &ctx,
+        CallOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(*ctx.seen_scope.lock().unwrap(), [None]);
+    let ctx = Ctx::default();
+    r.call(
+        "opt",
+        json!({"id": "nightly", "blueprint": "Blue"}),
+        &ctx,
+        CallOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(*ctx.seen_scope.lock().unwrap(), [Some("bp".to_owned())]);
+}
+
+#[tokio::test]
+async fn patch_ref_set_resolves_keep_clear_do_not() {
+    let r = par_registry();
+    let ctx = Ctx::default();
+    let out = r
+        .call(
+            "homed",
+            json!({"id": "nightly", "homePlace": "Home"}),
+            &ctx,
+            CallOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out, json!({"id": "p1", "raw": false, "action": "set"}));
+    assert_eq!(roots(&ctx, "place").len(), 1);
+    // An unknown name fails like any non-subject ref.
+    let err = r
+        .call(
+            "homed",
+            json!({"id": "nightly", "homePlace": "nowhere"}),
+            &ctx,
+            CallOptions::default(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(code(err.error()), "fix.build.not_found");
+    // Keep and Clear call no resolver for the place.
+    for (input, action) in [
+        (json!({"id": "nightly"}), "keep"),
+        (json!({"id": "nightly", "homePlace": null}), "clear"),
+    ] {
+        let ctx = Ctx::default();
+        let out = r
+            .call("homed", input, &ctx, CallOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(out["action"], action);
+        assert!(roots(&ctx, "place").is_empty());
+    }
+}
+
+#[test]
+fn patch_ref_clear_flag_and_json_null() {
+    use op_registry::Patch;
+    let cli = |args: &[&str]| {
+        let mut argv = vec!["t", "--id", "b1"];
+        argv.extend_from_slice(args);
+        Homed::add_args(Command::new("t")).try_get_matches_from(argv)
+    };
+    let decode = |m: &clap::ArgMatches| Homed::from_matches(m, &mut ParseCx::default()).unwrap();
+    assert!(matches!(decode(&cli(&[]).unwrap()).home_place, Patch::Keep));
+    assert!(matches!(
+        decode(&cli(&["--clear-home-place"]).unwrap()).home_place,
+        Patch::Clear
+    ));
+    match decode(&cli(&["--home-place", "Home"]).unwrap()).home_place {
+        Patch::Set(r) => assert_eq!(r.as_raw(), "Home"),
+        _ => panic!("expected Set"),
+    }
+    assert!(cli(&["--home-place", "Home", "--clear-home-place"]).is_err());
+    let json = |v| {
+        Homed::from_json(v, &mut ParseCx::default())
+            .unwrap()
+            .home_place
+    };
+    assert!(matches!(json(json!({"id": "b1"})), Patch::Keep));
+    assert!(matches!(
+        json(json!({"id": "b1", "homePlace": null})),
+        Patch::Clear
+    ));
+    match json(json!({"id": "b1", "homePlace": "Home"})) {
+        Patch::Set(r) => assert_eq!(r.as_raw(), "Home"),
+        _ => panic!("expected Set"),
+    }
+}
+
+#[derive(Debug, OpParams)]
+struct CheckNonSubject {
+    #[op(subject = "agent", id_only)]
+    id: Ref,
+    #[op(kind = "place", id_only)]
+    home: Option<Ref>,
+    #[op(kind = "place", id_only)]
+    more: Vec<Ref>,
+    #[op(kind = "place", id_only, clearable)]
+    moved_to: op_registry::Patch<Ref>,
+}
+
+#[tokio::test]
+async fn check_id_runs_for_non_subject_id_only() {
+    let mut r: Registry<CheckCtx> = Registry::new();
+    r.push_op(
+        OpSpec::<CheckNonSubject, Seen>::new("nonsubj", "Non-subject id_only."),
+        |_c: &CheckCtx,
+         p: CheckNonSubject,
+         _o: CallOptions|
+         -> BoxFuture<'_, anyhow::Result<Seen>> {
+            Box::pin(async move { Ok(seen(&p.id)) })
+        },
+    );
+    let ctx = CheckCtx::default();
+    r.call(
+        "nonsubj",
+        json!({"id": "a-1", "home": "h-1", "more": ["m-1"], "movedTo": "t-1"}),
+        &ctx,
+        CallOptions::default(),
+    )
+    .await
+    .unwrap();
+    let mut checked = ctx.checked.lock().unwrap().clone();
+    checked.sort();
+    assert_eq!(
+        checked,
+        [
+            ("agent".to_owned(), "a-1".to_owned()),
+            ("place".to_owned(), "h-1".to_owned()),
+            ("place".to_owned(), "m-1".to_owned()),
+            ("place".to_owned(), "t-1".to_owned()),
+        ]
+    );
+    // Keep and Clear are not checked.
+    for moved in [json!(null), json!("absent")] {
+        let ctx = CheckCtx::default();
+        let mut input = json!({"id": "a-1"});
+        if moved.is_null() {
+            input["movedTo"] = moved;
+        }
+        r.call("nonsubj", input, &ctx, CallOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(ctx.checked.lock().unwrap().len(), 1);
+    }
+    // A malformed id is a usage error for each non-subject shape.
+    for bad in [
+        json!({"id": "a-1", "home": "h 1"}),
+        json!({"id": "a-1", "more": ["m 1"]}),
+        json!({"id": "a-1", "movedTo": "t 1"}),
+    ] {
+        let err = r
+            .call("nonsubj", bad, &CheckCtx::default(), CallOptions::default())
+            .await
+            .unwrap_err();
+        assert_eq!(code(err.error()), "op_registry.usage.invalid");
+    }
 }

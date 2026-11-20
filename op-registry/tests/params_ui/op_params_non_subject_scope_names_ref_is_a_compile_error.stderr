@@ -1,0 +1,5 @@
+error: the scope of non-subject ref `collection` names the ref `blueprint`; refs resolve non-subjects first, so only the subject's scope may name a ref
+ --> tests/params_ui/op_params_non_subject_scope_names_ref_is_a_compile_error.rs:9:40
+  |
+9 |     #[op(kind = "collection", scope = ["blueprint"])]
+  |                                        ^^^^^^^^^^^

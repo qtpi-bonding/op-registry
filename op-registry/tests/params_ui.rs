@@ -46,4 +46,8 @@ fn op_params_compile_failures() {
     tests.compile_fail("tests/params_ui/op_params_validate_without_path_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_params_vec_ref_subject_is_a_compile_error.rs");
     tests.compile_fail("tests/params_ui/op_params_absent_ok_on_non_subject_is_a_compile_error.rs");
+    tests.compile_fail(
+        "tests/params_ui/op_params_non_subject_scope_names_ref_is_a_compile_error.rs",
+    );
+    tests.compile_fail("tests/params_ui/op_params_patch_ref_subject_is_a_compile_error.rs");
 }

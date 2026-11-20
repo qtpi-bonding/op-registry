@@ -23,7 +23,7 @@ fn scope_expr(names: &[ScopeName]) -> TokenStream {
 }
 
 pub fn ref_slots_fn(fields: &[Field]) -> TokenStream {
-    let mut subject_scope = TokenStream::new();
+    let mut scopes = TokenStream::new();
     let mut group_scopes = TokenStream::new();
     let mut pushes = Vec::new();
     for (i, f) in fields.iter().enumerate() {
@@ -55,10 +55,11 @@ pub fn ref_slots_fn(fields: &[Field]) -> TokenStream {
             continue;
         };
         let (kind, subject, id_only, absent_ok) = (&r.kind, r.subject, r.id_only, r.absent_ok);
-        let scope = if r.subject {
+        let scope = if r.subject || !r.scope.is_empty() {
+            let var = quote::format_ident!("scope_{i}");
             let expr = scope_expr(&r.scope);
-            subject_scope = quote!(let scope = #expr;);
-            quote!(scope)
+            scopes.extend(quote!(let #var = #expr;));
+            quote!(#var)
         } else {
             quote!(::op_registry::Scope::default())
         };
@@ -83,6 +84,10 @@ pub fn ref_slots_fn(fields: &[Field]) -> TokenStream {
                 let s = slot(quote!(r));
                 quote!(if let ::std::option::Option::Some(r) = &mut self.#ident { slots.push(#s); })
             }
+            Shape::Patch(_) => {
+                let s = slot(quote!(r));
+                quote!(if let ::op_registry::Patch::Set(r) = &mut self.#ident { slots.push(#s); })
+            }
             _ => {
                 let s = slot(quote!(r));
                 quote!(for r in self.#ident.iter_mut() { slots.push(#s); })
@@ -91,7 +96,7 @@ pub fn ref_slots_fn(fields: &[Field]) -> TokenStream {
     }
     quote! {
         fn ref_slots(&mut self) -> ::op_registry::__private::anyhow::Result<::std::vec::Vec<::op_registry::RefSlot<'_>>> {
-            #subject_scope
+            #scopes
             #group_scopes
             let mut slots: ::std::vec::Vec<::op_registry::RefSlot<'_>> = ::std::vec::Vec::new();
             #(#pushes)*

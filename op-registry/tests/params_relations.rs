@@ -543,6 +543,14 @@ struct EveryShape {
     flag: Option<bool>,
 }
 
+#[derive(Debug, OpParams)]
+struct PatchRefGroup {
+    #[op(kind = "place", id_only, clearable, one_of_optional = "g")]
+    home_place: Patch<Ref>,
+    #[op(one_of_optional = "g")]
+    note: Option<String>,
+}
+
 /// One candidate value of a key; `None` leaves the key out.
 type Candidates = (&'static str, Vec<Option<Value>>);
 
@@ -638,6 +646,30 @@ fn schema_agrees_with_validate() {
         ("flag", some(&[json!(true), json!(false), Value::Null])),
     ]);
     assert_agrees::<ConflictsOnly>(&[("a", option.clone()), ("b", list.clone())]);
+}
+
+#[test]
+fn patch_ref_member_schema_agrees() {
+    // `null` clears, so it is present; an absent key is absent.
+    assert_agrees::<PatchRefGroup>(&[
+        ("homePlace", some(&[json!("p1"), Value::Null])),
+        ("note", some(&[json!("x"), Value::Null])),
+    ]);
+    assert!(json_of::<PatchRefGroup>(json!({"homePlace": null})).is_ok());
+    assert!(json_of::<PatchRefGroup>(json!({})).is_ok());
+    assert_eq!(
+        code(json_of::<PatchRefGroup>(
+            json!({"homePlace": null, "note": "x"})
+        )),
+        "op_registry.usage.one_of"
+    );
+    let schema = PatchRefGroup::input_schema();
+    assert!(jsonschema::is_valid(&schema, &json!({"homePlace": null})));
+    assert!(jsonschema::is_valid(&schema, &json!({})));
+    assert!(!jsonschema::is_valid(
+        &schema,
+        &json!({"homePlace": null, "note": "x"})
+    ));
 }
 
 #[test]

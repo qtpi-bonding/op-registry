@@ -267,8 +267,39 @@ fn check_refs(fields: &[Field]) -> syn::Result<()> {
     for f in fields {
         if let Some(r) = &f.reference {
             check_scope(fields, f, &r.scope)?;
+            if !r.subject {
+                check_non_subject_scope(fields, f, &r.scope)?;
+            }
         }
         check_scope(fields, f, &f.group_scope)?;
+    }
+    Ok(())
+}
+
+/// A non-subject's scope may not name a ref: non-subjects resolve first, so
+/// the ref would still be unresolved.
+fn check_non_subject_scope(
+    fields: &[Field],
+    owner: &Field,
+    scope: &[ScopeName],
+) -> syn::Result<()> {
+    for name in scope {
+        let segments = name.segments();
+        if segments.len() != 1 {
+            continue;
+        }
+        if fields
+            .iter()
+            .any(|o| o.rust_name == segments[0] && o.reference.is_some())
+        {
+            return Err(syn::Error::new(
+                name.span,
+                format!(
+                    "the scope of non-subject ref `{}` names the ref `{}`; refs resolve non-subjects first, so only the subject's scope may name a ref",
+                    owner.rust_name, name.path
+                ),
+            ));
+        }
     }
     Ok(())
 }
