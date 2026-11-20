@@ -210,6 +210,9 @@ pub(crate) struct Entry<C> {
     pub secret_flags: Vec<String>,
     /// The clap argument ids of those fields, to read their raw values.
     pub secret_ids: Vec<String>,
+    /// The parameter fields, for the testing kit's argv and subject checks.
+    #[cfg(feature = "testing")]
+    pub param_fields: Vec<crate::FieldMeta>,
     /// The secrets of erased parameters, for redaction.
     pub secrets: fn(&(dyn Any + Send)) -> Vec<Vec<u8>>,
     pub run: Run<C>,
@@ -237,6 +240,10 @@ pub struct Registry<C> {
     pub(crate) extras: Vec<crate::cli::Extra>,
     /// The root fallback, when there is one.
     pub(crate) fallback: Option<crate::cli::Fallback>,
+    /// Set by `testing::strict_codes`: a call that returns a code outside
+    /// the op's declared list panics.
+    #[cfg(feature = "testing")]
+    pub(crate) strict_codes: bool,
 }
 
 pub(crate) fn words(path: &str) -> Vec<String> {
@@ -268,6 +275,8 @@ impl<C: Sync> Registry<C> {
             hook: Arc::new(NoHook),
             extras: Vec::new(),
             fallback: None,
+            #[cfg(feature = "testing")]
+            strict_codes: false,
         }
     }
 
@@ -586,6 +595,8 @@ impl<C: Resolve + 'static> Registry<C> {
             page_size: spec.page_size,
             secret_flags: secret_flags::<P>(),
             secret_ids: secret_ids::<P>(),
+            #[cfg(feature = "testing")]
+            param_fields: P::fields(),
             resolve_refs: |registry, ctx, params| {
                 let params = params
                     .downcast_mut::<P>()
@@ -686,6 +697,8 @@ impl<C: Resolve + 'static> Registry<C> {
             page_size: spec.page_size,
             secret_flags: secret_flags::<P>(),
             secret_ids: secret_ids::<P>(),
+            #[cfg(feature = "testing")]
+            param_fields: P::fields(),
             resolve_refs: |registry, ctx, params| {
                 let params = params
                     .downcast_mut::<P>()

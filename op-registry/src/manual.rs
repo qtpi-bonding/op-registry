@@ -47,7 +47,7 @@ pub struct Guide {
 }
 
 /// The exit table of every binary: code and meaning.
-const EXITS: [(u8, &str); 6] = [
+pub(crate) const EXITS: [(u8, &str); 6] = [
     (crate::exit::OK, "ok"),
     (crate::exit::USAGE, "usage"),
     (crate::exit::LOGICAL, "logical"),

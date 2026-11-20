@@ -156,12 +156,15 @@ impl<C: Resolve> Registry<C> {
                 exit: crate::exit::ok_exit(&entry.descriptor.exits, ran.exit),
                 text: ran.text,
             },
-            Err(err) => Invocation {
-                result: Err(err),
-                redactor,
-                exit: 0,
-                text: None,
-            },
+            Err(err) => {
+                self.strict(name, &err);
+                Invocation {
+                    result: Err(err),
+                    redactor,
+                    exit: 0,
+                    text: None,
+                }
+            }
         }
     }
 
@@ -194,6 +197,9 @@ impl<C: Resolve> Registry<C> {
                 .await
         }
         .await;
+        if let Err(err) = &result {
+            self.strict(name, err);
+        }
         Invocation {
             result,
             redactor,
@@ -201,6 +207,18 @@ impl<C: Resolve> Registry<C> {
             text: None,
         }
     }
+
+    /// Under `testing::strict_codes`, panics when `err` is not one of the
+    /// op's declared codes.
+    #[cfg(feature = "testing")]
+    fn strict(&self, name: &str, err: &anyhow::Error) {
+        if self.strict_codes {
+            crate::testing::check_strict(self, name, err);
+        }
+    }
+
+    #[cfg(not(feature = "testing"))]
+    fn strict(&self, _name: &str, _err: &anyhow::Error) {}
 
     /// Resolves the refs of `params` in place: non-subject refs first, then
     /// the subject (whose scope reads the siblings' resolved ids).
@@ -292,10 +310,17 @@ impl<C: Resolve + 'static> Registry<C> {
             .ok_or_else(|| wrong_shape(O::NAME))?;
         crate::OpParams::validate(&params)?;
         opts.notices = opts.notices.redacting(&redactor_of(params.secrets()));
-        self.resolve_refs(ctx, &mut params).await?;
-        let info = self.info(entry, &params, CallPath::Typed, &opts);
-        self.pipeline(info, move || f(self, ctx, params, opts))
-            .await
+        let result = async {
+            self.resolve_refs(ctx, &mut params).await?;
+            let info = self.info(entry, &params, CallPath::Typed, &opts);
+            self.pipeline(info, move || f(self, ctx, params, opts))
+                .await
+        }
+        .await;
+        if let Err(err) = &result {
+            self.strict(O::NAME, err);
+        }
+        result
     }
 
     /// Opens the streaming operation `O::NAME` with typed parameters. The
@@ -314,10 +339,17 @@ impl<C: Resolve + 'static> Registry<C> {
             .ok_or_else(|| wrong_shape(O::NAME))?;
         crate::OpParams::validate(&params)?;
         opts.notices = opts.notices.redacting(&redactor_of(params.secrets()));
-        self.resolve_refs(ctx, &mut params).await?;
-        let info = self.info(entry, &params, CallPath::Typed, &opts);
-        self.pipeline(info, move || f(ctx, params, cursor, opts))
-            .await
+        let result = async {
+            self.resolve_refs(ctx, &mut params).await?;
+            let info = self.info(entry, &params, CallPath::Typed, &opts);
+            self.pipeline(info, move || f(ctx, params, cursor, opts))
+                .await
+        }
+        .await;
+        if let Err(err) = &result {
+            self.strict(O::NAME, err);
+        }
+        result
     }
 }
 
