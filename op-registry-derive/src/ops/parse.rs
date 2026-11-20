@@ -394,7 +394,7 @@ impl Parse for Entry {
         };
 
         if kind == Kind::List {
-            for key in [&text_key, &exits_key].into_iter().flatten() {
+            if let Some(key) = [&text_key, &exits_key].into_iter().flatten().next() {
                 return Err(syn::Error::new(
                     key.span(),
                     format!("`{key}:` is not allowed on a `list:` entry: a list pair has no text or extra exits"),

@@ -36,13 +36,13 @@ pub(crate) enum Fallback {
 impl Fallback {
     pub(crate) fn name(&self) -> &'static str {
         match self {
-            Fallback::FlagsOnly { name, .. } | Fallback::FreeText { name, .. } => *name,
+            Fallback::FlagsOnly { name, .. } | Fallback::FreeText { name, .. } => name,
         }
     }
 
     pub(crate) fn help(&self) -> &'static str {
         match self {
-            Fallback::FlagsOnly { help, .. } | Fallback::FreeText { help, .. } => *help,
+            Fallback::FlagsOnly { help, .. } | Fallback::FreeText { help, .. } => help,
         }
     }
 
@@ -156,13 +156,16 @@ fn skip_globals(cmd: &Command, tokens: &[OsString]) -> usize {
     at.min(tokens.len())
 }
 
+/// What routing decides: the parse, or nothing when no fallback applies.
+type Routed<C> = Option<(Parsed, Option<<C as CliContext>::Globals>)>;
+
 /// Routes a command line through the fallback: `Ok(None)` when the normal
 /// parse decides it (a command, help or version, or no fallback).
 pub(super) fn route<C: CliContext>(
     registry: &Registry<C>,
     cmd: &Command,
     argv: &[OsString],
-) -> Result<Option<(Parsed, Option<C::Globals>)>, UsageFailure> {
+) -> Result<Routed<C>, UsageFailure> {
     let Some(fallback) = &registry.fallback else {
         return Ok(None);
     };

@@ -12,6 +12,9 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+/// A function pulling span fields out of typed params.
+type FieldsFn<P> = fn(&P) -> Vec<(&'static str, String)>;
+
 /// The declaration of one operation: its path, help text and options.
 ///
 /// `P` is the parameter type. `O` is the op's output: the item type for
@@ -46,7 +49,7 @@ pub struct OpSpec<P, O> {
     /// Whether the op declares an unpaged form.
     pub unpaged: bool,
     /// Extra `key: value` lines for the text rendering of the parameters.
-    pub fields: Option<fn(&P) -> Vec<(&'static str, String)>>,
+    pub fields: Option<FieldsFn<P>>,
     /// The exit code for a successful output; it must be one of `exits`.
     pub ok_exit: Option<fn(&O) -> u8>,
     /// The text rendering of an output; its presence is `Descriptor::text`.
@@ -84,10 +87,7 @@ impl<P, O> OpSpec<P, O> {
     /// pair's two ops share. The output hooks (`ok_exit`, `render_text`) are
     /// typed by `O` and do not carry over, and a list pair has no text
     /// rendering or extra exits (ruling R12), so `exits` is cleared.
-    pub(crate) fn respec<P2, O2>(
-        &self,
-        fields: Option<fn(&P2) -> Vec<(&'static str, String)>>,
-    ) -> OpSpec<P2, O2> {
+    pub(crate) fn respec<P2, O2>(&self, fields: Option<FieldsFn<P2>>) -> OpSpec<P2, O2> {
         OpSpec {
             path: self.path,
             summary: self.summary,
@@ -447,22 +447,20 @@ impl<C: Sync> Registry<C> {
             );
         }
         // A word that is both an operation and a group.
-        if !new.group_default {
-            if self.groups.iter().any(|g| g.path == new.path) {
-                let child = self
-                    .entries
-                    .iter()
-                    .map(|e| &e.descriptor)
-                    .find(|d| d.path.len() > new.path.len() && is_prefix(&new.path, &d.path));
-                panic!(
-                    "{:?} is both an operation ({:?}) and a group{}",
-                    new.path.join(" "),
-                    new.name,
-                    child
-                        .map(|d| format!(" (ops under it: {:?})", d.name))
-                        .unwrap_or_default()
-                );
-            }
+        if !new.group_default && self.groups.iter().any(|g| g.path == new.path) {
+            let child = self
+                .entries
+                .iter()
+                .map(|e| &e.descriptor)
+                .find(|d| d.path.len() > new.path.len() && is_prefix(&new.path, &d.path));
+            panic!(
+                "{:?} is both an operation ({:?}) and a group{}",
+                new.path.join(" "),
+                new.name,
+                child
+                    .map(|d| format!(" (ops under it: {:?})", d.name))
+                    .unwrap_or_default()
+            );
         }
         for existing in self.entries.iter().map(|e| &e.descriptor) {
             if !existing.group_default
@@ -720,9 +718,7 @@ impl<C: Resolve + 'static> Registry<C> {
     }
 }
 
-pub(crate) fn erase_fields<P: 'static>(
-    fields: Option<fn(&P) -> Vec<(&'static str, String)>>,
-) -> Option<ErasedFields> {
+pub(crate) fn erase_fields<P: 'static>(fields: Option<FieldsFn<P>>) -> Option<ErasedFields> {
     fields.map(|f| {
         Box::new(move |params: &(dyn Any + Send)| {
             f(params

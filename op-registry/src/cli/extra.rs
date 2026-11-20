@@ -7,11 +7,14 @@ use clap::{ArgMatches, Command};
 use futures_util::future::BoxFuture;
 use std::sync::Arc;
 
+type ExtraRun =
+    Arc<dyn for<'a> Fn(&'a ArgMatches) -> BoxFuture<'a, anyhow::Result<u8>> + Send + Sync>;
+
 /// An extra command with its erased runner. The runner decodes the globals
 /// from the matches itself, so the registry never names `C::Globals`.
 pub(crate) struct Extra {
     pub command: Command,
-    pub run: Arc<dyn for<'a> Fn(&'a ArgMatches) -> BoxFuture<'a, anyhow::Result<u8>> + Send + Sync>,
+    pub run: ExtraRun,
 }
 
 impl<C: CliContext + Sync> Registry<C> {

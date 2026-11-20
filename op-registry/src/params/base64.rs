@@ -34,7 +34,7 @@ fn sextet(c: u8) -> Option<u32> {
 
 pub fn decode(text: &str) -> Result<Vec<u8>, UsageError> {
     let bytes = text.as_bytes();
-    if bytes.len() % 4 != 0 {
+    if bytes.len() & 3 != 0 {
         return Err(invalid(
             "length is not a multiple of 4 (padding is required)",
         ));

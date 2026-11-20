@@ -148,7 +148,7 @@ pub fn command<C: CliContext>(registry: &Registry<C>) -> Command {
             !registry.extras.iter().any(|e| e.command.get_name() == word),
             "extra `{word}` clashes with op word"
         );
-        root = root.subcommand(to_command(registry, &[word.clone()], node));
+        root = root.subcommand(to_command(registry, std::slice::from_ref(&word), node));
     }
     for extra in &registry.extras {
         root = root.subcommand(extra.command.clone());
