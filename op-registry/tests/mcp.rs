@@ -16,6 +16,16 @@ use std::sync::{Arc, Mutex};
 struct Ctx;
 impl op_registry::Resolve for Ctx {}
 
+#[derive(Debug, op_registry::OpGlobals)]
+struct NoGlobals {}
+
+impl op_registry::CliContext for Ctx {
+    type Globals = NoGlobals;
+    fn from_globals(_globals: &NoGlobals) -> anyhow::Result<Self> {
+        Ok(Ctx)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, OpParams)]
 struct Plain {
     /// A host machine.
@@ -475,12 +485,20 @@ async fn call_info_audience_is_server_on_mcp_primary_elsewhere() {
     r.call_typed::<Shared>(&Ctx, NoArgs { tag: None }, CallOptions::default())
         .await
         .unwrap();
+    let (io, _cap) = op_registry::cli::Io::memory(b"", false, false);
+    let argv = ["app", "shared_op"].map(std::ffi::OsString::from).to_vec();
+    let code = op_registry::cli::run_with_io(&r, argv, &op_registry::cli::NoHooks, io).await;
+    assert_eq!(code, 0);
     let seen = seen.0.lock().unwrap();
-    assert_eq!(seen.len(), 4);
+    assert_eq!(seen.len(), 5);
     assert_eq!(seen[0], (CallPath::Mcp, Audience::Owner));
     assert_eq!(seen[1], (CallPath::Mcp, Audience::Agent));
-    assert_eq!(seen[2].1, Audience::Agent);
+    assert_eq!(
+        seen[2],
+        (CallPath::Transport("json".into()), Audience::Agent)
+    );
     assert_eq!(seen[3], (CallPath::Typed, Audience::Agent));
+    assert_eq!(seen[4], (CallPath::Cli, Audience::Agent));
 }
 
 #[test]
