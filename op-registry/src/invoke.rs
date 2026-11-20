@@ -9,8 +9,8 @@
 
 use crate::registry::{Entry, Run, TypedStream, TypedUnary};
 use crate::{
-    CallError, CallFailure, CallInfo, CallOptions, CallPath, Cursor, Op, OpParams, ParseCx, Paths,
-    Redactor, RefSlot, Registry, Resolve, Resolved,
+    CallError, CallFailure, CallInfo, CallOptions, CallPath, Cursor, Op, OpParams, ParseCx,
+    Redactor, RefSlot, Registry, Resolve, Resolved, Surface,
 };
 use anyhow::Result;
 use futures_util::future::BoxFuture;
@@ -131,7 +131,7 @@ impl<C: Resolve> Registry<C> {
         stream: bool,
     ) -> Result<Box<dyn Any + Send>> {
         let entry = self.entry(name)?;
-        check_path(entry, name, path)?;
+        check_path(entry, name, path.surface())?;
         if matches!(entry.run, Run::Stream(_)) != stream {
             return Err(wrong_shape(name));
         }
@@ -156,7 +156,7 @@ impl<C: Resolve> Registry<C> {
             Ok(entry) => entry,
             Err(err) => return Invocation::failed(err),
         };
-        if let Err(err) = check_path(entry, name, &path) {
+        if let Err(err) = check_path(entry, name, path.surface()) {
             return Invocation::failed(err);
         }
         let Run::Unary(run) = &entry.run else {
@@ -211,7 +211,7 @@ impl<C: Resolve> Registry<C> {
             Ok(entry) => entry,
             Err(err) => return Invocation::failed(err),
         };
-        if let Err(err) = check_path(entry, name, &path) {
+        if let Err(err) = check_path(entry, name, path.surface()) {
             return Invocation::failed(err);
         }
         let Run::Stream(run) = &entry.run else {
@@ -339,6 +339,7 @@ impl<C: Resolve + 'static> Registry<C> {
         mut opts: CallOptions,
     ) -> Result<O::Output> {
         let entry = self.entry(O::NAME)?;
+        check_path(entry, O::NAME, Surface::Typed)?;
         let f = entry
             .typed
             .downcast_ref::<TypedUnary<C, O::Params, O::Output>>()
@@ -372,6 +373,7 @@ impl<C: Resolve + 'static> Registry<C> {
         cursor: Option<Cursor>,
     ) -> Result<BoxStream<'a, Result<O::Output>>> {
         let entry = self.entry(O::NAME)?;
+        check_path(entry, O::NAME, Surface::Typed)?;
         let f = entry
             .typed
             .downcast_ref::<TypedStream<C, O::Params, O::Output>>()
@@ -400,15 +402,9 @@ fn json_path(opts: &CallOptions) -> CallPath {
     CallPath::Transport(opts.transport.clone().unwrap_or_else(|| "json".to_owned()))
 }
 
-/// Rejects a `TypedOnly` op on any path but the typed one, and a `CliOnly` op
-/// on any path but the typed and command-line ones.
-fn check_path<C>(entry: &Entry<C>, name: &str, path: &CallPath) -> Result<()> {
-    let allowed = match entry.descriptor.paths {
-        Paths::All => true,
-        Paths::TypedOnly => *path == CallPath::Typed,
-        Paths::CliOnly => matches!(path, CallPath::Typed | CallPath::Cli),
-    };
-    if !allowed {
+/// Rejects a call on a surface the op does not declare in its `paths`.
+pub(crate) fn check_path<C>(entry: &Entry<C>, name: &str, surface: Surface) -> Result<()> {
+    if !entry.descriptor.paths.contains(surface) {
         return Err(coded_error::into_anyhow(CallError::WrongPath {
             name: name.to_owned(),
         }));
@@ -441,7 +437,7 @@ mod tests {
     fn registry() -> Registry<Ctx> {
         let mut r = Registry::<Ctx>::new();
         let mut spec = OpSpec::<P, Out>::new("probe run", "Probe.");
-        spec.paths = Paths::All;
+        spec.paths = Paths::ALL;
         spec.exits = vec![(4, "four")];
         spec.ok_exit = Some(|o| o.code);
         spec.render_text = Some(|o| format!("code {}", o.code));

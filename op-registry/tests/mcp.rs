@@ -7,7 +7,7 @@ use futures_util::stream::BoxStream;
 use op_registry::mcp::{call_tool, tool_error, tool_list};
 use op_registry::{
     Access, Audience, CallHook, CallInfo, CallOptions, CallPath, OpKind, OpParams, OpSpec, Page,
-    PageRequest, Paths, Registry,
+    PageRequest, Paths, Registry, Surface,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -59,7 +59,7 @@ fn registry() -> Registry<Ctx> {
     hidden.hidden = true;
     r.push_op(hidden, ok_op::<Plain>);
     let mut typed = OpSpec::<Plain, Out>::new("typed_op", "Typed only.");
-    typed.paths = Paths::TypedOnly;
+    typed.paths = Paths::of(&[Surface::Typed]);
     r.push_op(typed, ok_op::<Plain>);
     let mut owner = OpSpec::<Plain, Out>::new("owner_op", "Owner.");
     owner.audience = Audience::Owner;

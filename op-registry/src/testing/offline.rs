@@ -2,7 +2,7 @@
 
 use super::refs::args_for;
 use super::{fail_on, kit_options, Fixture};
-use crate::{OpKind, Paths, Registry, Resolve};
+use crate::{OpKind, Registry, Resolve, Surface};
 use futures_util::FutureExt;
 use std::panic::AssertUnwindSafe;
 
@@ -20,7 +20,7 @@ pub async fn assert_local_ops_offline<C: Resolve>(
 ) {
     let mut problems = Vec::new();
     for d in registry.descriptors() {
-        if d.kind != OpKind::Local || d.paths != Paths::All {
+        if d.kind != OpKind::Local || !d.paths.contains(Surface::Json) {
             continue;
         }
         let args = args_for(d, overrides);

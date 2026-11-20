@@ -10,7 +10,7 @@ use op_registry::testing::{
 };
 use op_registry::{
     Access, Audience, CallOptions, CliContext, Cursor, OpGlobals, OpParams, OpSpec, Page,
-    PageRequest, Paths, Registry,
+    PageRequest, Paths, Registry, Surface,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -166,7 +166,7 @@ fn fixture() -> Registry<Ctx> {
     hidden.hidden = true;
     r.push_op(hidden, get_op);
     let mut typed = OpSpec::<Get, Item>::new("concept inner", "Inner use only.");
-    typed.paths = Paths::TypedOnly;
+    typed.paths = Paths::of(&[Surface::Typed]);
     r.push_op(typed, get_op);
     r.push_op(
         OpSpec::<Rich, Item>::new("concept rich", "Take every kind of field."),
@@ -235,7 +235,7 @@ fn parity_reports_missing_mount_op() {
 }
 
 #[test]
-fn parity_flags_typed_only_on_mcp() {
+fn parity_flags_undeclared_op_in_a_mount() {
     let r = fixture();
     let mut ops = AGENT_OPS.to_vec();
     ops.push("concept_inner");
@@ -247,7 +247,7 @@ fn parity_flags_typed_only_on_mcp() {
     }];
     let text = panic_text(|| assert_parity(&r, &mounts));
     assert!(
-        text.contains("typed-only op concept_inner is in mount mcp-mount"),
+        text.contains("op concept_inner is in mount mcp-mount but does not declare json"),
         "{text}"
     );
     assert!(
@@ -468,7 +468,7 @@ fn sample_params_satisfies_from_json() {
     let ctx = Ctx;
     for d in r.descriptors() {
         // `TypedOnly` ops refuse the JSON path and streams are not unary.
-        if d.paths == Paths::TypedOnly || d.kind == op_registry::OpKind::Stream {
+        if !d.paths.contains(Surface::Json) || d.kind == op_registry::OpKind::Stream {
             continue;
         }
         let params = sample_params(&d.input_schema);

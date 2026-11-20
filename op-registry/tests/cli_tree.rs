@@ -8,7 +8,8 @@ use common::{Echo, Out};
 use futures_util::future::BoxFuture;
 use op_registry::cli::{self, Parsed, UsageFailure};
 use op_registry::{
-    CallOptions, CliContext, OpGlobals, OpParams, OpSpec, Page, PageRequest, Paths, Registry, Style,
+    CallOptions, CliContext, OpGlobals, OpParams, OpSpec, Page, PageRequest, Paths, Registry,
+    Style, Surface,
 };
 use serde::Serialize;
 use std::ffi::OsString;
@@ -135,7 +136,7 @@ fn reg() -> Registry<Ctx> {
         OpSpec::<Echo, Out>::new("build status", "Build status."),
     );
     let mut dump = OpSpec::<Echo, Out>::new("internal dump", "Dump.");
-    dump.paths = Paths::TypedOnly;
+    dump.paths = Paths::of(&[Surface::Typed]);
     unary(&mut r, dump);
     stream(&mut r, OpSpec::new("feed watch", "Watch."));
     let mut tail = OpSpec::<Echo, Out>::new("feed tail", "Tail.");

@@ -1,6 +1,6 @@
 //! The call hook and the facts it sees about each call.
 
-use crate::{Access, Audience, Caller, Redactor, TraceParent};
+use crate::{Access, Audience, Caller, Redactor, Surface, TraceParent};
 use futures_util::future::BoxFuture;
 
 /// The path a call took to reach the operation.
@@ -14,6 +14,18 @@ pub enum CallPath {
     Mcp,
     /// A named JSON transport.
     Transport(String),
+}
+
+impl CallPath {
+    /// The surface this path is a call on.
+    pub fn surface(&self) -> Surface {
+        match self {
+            CallPath::Typed => Surface::Typed,
+            CallPath::Cli => Surface::Cli,
+            CallPath::Mcp => Surface::Mcp,
+            CallPath::Transport(_) => Surface::Json,
+        }
+    }
 }
 
 /// What a hook is told about one call.

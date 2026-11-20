@@ -39,5 +39,5 @@ name = "testing_kit"
 required-features = ["testing"]
 
 [[test]]
-name = "cli_only"
+name = "paths"
 required-features = ["testing"]

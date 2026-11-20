@@ -204,7 +204,7 @@ fn doc_comment_is_summary_and_long_help() {
     assert_eq!(d.exits.len(), 1);
     assert_eq!(d.exits[0].code, 3);
     assert!(d.text);
-    assert_eq!(d.paths, Paths::All);
+    assert_eq!(d.paths, Paths::ALL);
 }
 
 #[test]

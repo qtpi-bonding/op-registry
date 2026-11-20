@@ -2,7 +2,7 @@
 
 use super::fail_on;
 use crate::mcp::tool_list;
-use crate::{Audience, CliContext, Descriptor, OpKind, Paths, Registry};
+use crate::{Audience, CliContext, Descriptor, OpKind, Registry, Surface};
 use std::collections::BTreeSet;
 
 /// A mounted surface: a named place (REST, a typed client) that serves a set
@@ -30,14 +30,10 @@ pub struct ParityLine {
 }
 
 /// Reasons an op may be absent from a surface without it being a problem.
-const ALLOWED: [&str; 3] = ["stream", "typed only", "not an op"];
-
-/// The prefix of the reason a CLI-only op is absent from MCP; the declared
-/// reason follows it.
-const CLI_ONLY: &str = "cli only: ";
+const ALLOWED: [&str; 3] = ["stream", "not declared", "not an op"];
 
 fn allowed(reason: &str) -> bool {
-    ALLOWED.contains(&reason) || reason.starts_with(CLI_ONLY)
+    ALLOWED.contains(&reason)
 }
 
 fn reachable(name: &str, path: &str) -> ParityLine {
@@ -70,9 +66,7 @@ fn cli_leaf(root: &clap::Command, path: &[String]) -> Option<bool> {
 /// Why a hidden op could not be called on MCP, if it could not: the same
 /// conditions `call_tool` checks.
 fn hidden_problem<C: Sync>(registry: &Registry<C>, d: &Descriptor) -> Option<&'static str> {
-    if d.paths != Paths::All {
-        Some("hidden op is not on every path")
-    } else if d.kind == OpKind::Stream {
+    if d.kind == OpKind::Stream {
         Some("hidden op is a stream")
     } else if registry.get(&d.name).is_none() {
         Some("hidden op is not found by name")
@@ -105,24 +99,7 @@ fn analyse<C: CliContext>(
     for d in registry.descriptors() {
         let on_cli = cli_leaf(&root, &d.path);
         let on_mcp = tools.iter().any(|(_, names)| names.contains(&d.name));
-        if d.paths == Paths::TypedOnly {
-            lines.push(absent(&d.name, "cli", "typed only"));
-            lines.push(absent(&d.name, "mcp", "typed only"));
-            if on_cli == Some(true) {
-                problems.push(format!("typed-only op {} is on the CLI", d.name));
-            }
-            if on_mcp {
-                problems.push(format!("typed-only op {} is on MCP", d.name));
-            }
-            for mount in mounts.iter().filter(|m| m.ops.contains(&d.name.as_str())) {
-                problems.push(format!(
-                    "typed-only op {} is in mount {}",
-                    d.name, mount.name
-                ));
-            }
-            continue;
-        }
-        if d.paths == Paths::CliOnly {
+        if d.paths.contains(Surface::Cli) {
             lines.push(match on_cli {
                 Some(_) => reachable(&d.name, "cli"),
                 None => absent(
@@ -131,28 +108,21 @@ fn analyse<C: CliContext>(
                     &format!("no command at `{}`", d.path.join(" ")),
                 ),
             });
-            lines.push(absent(
-                &d.name,
-                "mcp",
-                &format!("{CLI_ONLY}{}", d.cli_only_reason),
-            ));
-            if on_mcp {
-                problems.push(format!("cli-only op {} is on MCP", d.name));
+        } else {
+            lines.push(absent(&d.name, "cli", "not declared"));
+            if on_cli == Some(true) {
+                problems.push(format!(
+                    "op {} is on the CLI but does not declare cli",
+                    d.name
+                ));
             }
-            for mount in mounts.iter().filter(|m| m.ops.contains(&d.name.as_str())) {
-                problems.push(format!("cli-only op {} is in mount {}", d.name, mount.name));
-            }
-            continue;
         }
-        lines.push(match on_cli {
-            Some(_) => reachable(&d.name, "cli"),
-            None => absent(
-                &d.name,
-                "cli",
-                &format!("no command at `{}`", d.path.join(" ")),
-            ),
-        });
-        lines.push(if d.kind == OpKind::Stream {
+        lines.push(if !d.paths.contains(Surface::Mcp) {
+            if on_mcp {
+                problems.push(format!("op {} is on MCP but does not declare mcp", d.name));
+            }
+            absent(&d.name, "mcp", "not declared")
+        } else if d.kind == OpKind::Stream {
             absent(&d.name, "mcp", "stream")
         } else if d.hidden {
             match hidden_problem(registry, d) {
@@ -166,6 +136,16 @@ fn analyse<C: CliContext>(
         });
         for mount in mounts.iter().filter(|m| m.audience == d.audience) {
             let here = mount.ops.contains(&d.name.as_str());
+            if !d.paths.contains(Surface::Json) {
+                if here {
+                    problems.push(format!(
+                        "op {} is in mount {} but does not declare json",
+                        d.name, mount.name
+                    ));
+                }
+                lines.push(absent(&d.name, mount.name, "not declared"));
+                continue;
+            }
             lines.push(if here {
                 reachable(&d.name, mount.name)
             } else if d.kind == OpKind::Stream {
@@ -201,12 +181,11 @@ pub fn parity_report<C: CliContext>(
     analyse(registry, mounts).0
 }
 
-/// Checks that every op that is not `TypedOnly` is on the CLI at its path, in
-/// `tool_list` (a stream or a hidden op excepted; a hidden op must still be
-/// callable) and in every mount of its audience; that no `TypedOnly` op is on
-/// a surface; that a `CliOnly` op is on the CLI and in no `tool_list` or mount
-/// (the report names it as CLI-only with its reason); and that every mount
-/// name is an op.
+/// Checks that every op declaring `cli` is on the CLI at its path; that every
+/// op declaring `mcp` is in `tool_list` (a stream or a hidden op excepted; a
+/// hidden op must still be callable); that every op declaring `json` is in
+/// every mount of its audience; that an op is on no surface it does not
+/// declare; and that every mount name is an op.
 ///
 /// # Panics
 ///

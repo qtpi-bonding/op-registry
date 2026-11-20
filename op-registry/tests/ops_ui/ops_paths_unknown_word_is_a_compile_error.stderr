@@ -1,0 +1,5 @@
+error: `paths` takes cli, typed, mcp and json
+  --> tests/ops_ui/ops_paths_unknown_word_is_a_compile_error.rs:23:90
+   |
+23 |     "a b" => { params: P, output: O, access: reads, audience: owner, op: f, paths: [cli, web] },
+   |                                                                                          ^^^

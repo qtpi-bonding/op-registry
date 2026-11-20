@@ -7,9 +7,11 @@ use futures_util::future::BoxFuture;
 use op_registry::cli::{self, Io, NoHooks};
 use op_registry::manual::{render, render_json, FrontMatter, Guide, Manual, ManualOp, Section};
 use op_registry::mcp::{call_tool, tool_list};
+#[cfg(feature = "testing")]
+use op_registry::testing::check_exit_table;
 use op_registry::{
     Access, Audience, CallOptions, CliContext, OpGlobals, OpParams, OpSpec, Page, PageRequest,
-    Paths, Registry,
+    Paths, Registry, Surface,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -180,30 +182,85 @@ fn too_many_listed_for_list_ops() {
 }
 
 #[test]
-fn cli_only_op_is_listed_and_marked() {
+fn manual_shows_paths_line() {
     let mut r = fixture();
     let mut owner = OpSpec::<Filter, Item>::new("concept sign", "Sign it.");
-    owner.paths = Paths::CliOnly;
-    owner.cli_only_reason = "signs with the owner key";
+    owner.paths = Paths::of(&[Surface::Cli, Surface::Typed]);
     r.push_op(owner, nothing::<Filter>);
     let text = render(&r, &sample_manual()).unwrap();
-    assert!(text.contains("### concordd concept sign"));
-    assert!(text.contains("CLI-only: signs with the owner key"));
-    assert_eq!(text.matches("CLI-only:").count(), 1);
+    let section = text.split("### concordd concept sign").nth(1).unwrap();
+    let section = section.split("\n### ").next().unwrap();
+    assert!(section.contains("Paths: cli, typed"), "{section}");
+    // An op on every surface has no paths line.
+    assert_eq!(text.matches("Paths: ").count(), 1);
 }
 
 #[test]
-fn hidden_and_typed_only_not_in_manual() {
+fn manual_lists_ops_off_the_command_line() {
+    let mut r = fixture();
+    let mut tool = OpSpec::<Filter, Item>::new("concept probe", "Probe it.");
+    tool.long_help = "Only agents call this.";
+    tool.access = Access::reads();
+    tool.exits = vec![(5, "probe failed")];
+    tool.ok_exit = Some(|_o: &Item| 5);
+    tool.paths = Paths::of(&[Surface::Mcp]);
+    r.push_op(tool, nothing::<Filter>);
+    let mut inner = OpSpec::<Filter, Item>::new("concept inner", "Inner use.");
+    inner.paths = Paths::of(&[Surface::Typed]);
+    r.push_op(inner, nothing::<Filter>);
+    let mut hidden = OpSpec::<Filter, Item>::new("concept purge", "Purge it.");
+    hidden.hidden = true;
+    hidden.paths = Paths::of(&[Surface::Typed]);
+    r.push_op(hidden, nothing::<Filter>);
+    let text = render(&r, &sample_manual()).unwrap();
+    let (cli_part, off) = text
+        .split_once("## Operations off the command line")
+        .expect("the section exists");
+    let off = off.split("\n## ").next().unwrap();
+    assert!(!cli_part.contains("concept_probe") && !cli_part.contains("concept probe"));
+    let probe = off.split("### concept_probe").nth(1).unwrap();
+    let probe = probe.split("\n### ").next().unwrap();
+    assert!(probe.contains("Probe it."), "{probe}");
+    assert!(probe.contains("Only agents call this."), "{probe}");
+    assert!(probe.contains("Paths: mcp"), "{probe}");
+    assert!(probe.contains("Access: reads"), "{probe}");
+    assert!(probe.contains("- 5: probe failed"), "{probe}");
+    let inner = off.split("### concept_inner").nth(1).unwrap();
+    assert!(inner.contains("Paths: typed"), "{inner}");
+    // A hidden op is not listed; the section is absent when nothing is off the CLI.
+    assert!(!text.contains("concept_purge"));
+    assert!(!render_fixture().contains("Operations off the command line"));
+}
+
+#[cfg(feature = "testing")]
+#[test]
+fn exit_table_checks_off_cli_ops() {
+    let mut r = fixture();
+    let mut tool = OpSpec::<Filter, Item>::new("concept probe", "Probe it.");
+    tool.exits = vec![(5, "probe failed")];
+    tool.ok_exit = Some(|_o: &Item| 5);
+    tool.paths = Paths::of(&[Surface::Mcp]);
+    r.push_op(tool, nothing::<Filter>);
+    let rendered = render(&r, &sample_manual()).unwrap();
+    assert!(check_exit_table(&r, &rendered).is_empty());
+    let broken = rendered.replace("- 5: probe failed", "- 5: something else");
+    let problems = check_exit_table(&r, &broken);
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("concept_probe") && p.contains("declared exit 5")),
+        "{problems:?}"
+    );
+}
+
+#[test]
+fn hidden_op_not_in_manual() {
     let mut r = fixture();
     let mut hidden = OpSpec::<Filter, Item>::new("concept purge", "Purge it.");
     hidden.hidden = true;
     r.push_op(hidden, nothing::<Filter>);
-    let mut typed = OpSpec::<Filter, Item>::new("concept inner", "Inner use.");
-    typed.paths = Paths::TypedOnly;
-    r.push_op(typed, nothing::<Filter>);
     let text = render(&r, &sample_manual()).unwrap();
     assert!(!text.contains("concept purge"));
-    assert!(!text.contains("concept inner"));
     // The JSON lists every op.
     let json = render_json(&r);
     let names: Vec<&str> = json["ops"]
@@ -212,7 +269,7 @@ fn hidden_and_typed_only_not_in_manual() {
         .iter()
         .map(|o| o["name"].as_str().unwrap())
         .collect();
-    assert!(names.contains(&"concept_purge") && names.contains(&"concept_inner"));
+    assert!(names.contains(&"concept_purge"));
 }
 
 fn with_manual() -> Registry<Ctx> {

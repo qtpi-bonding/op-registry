@@ -202,10 +202,16 @@ pub fn check_exit_table<C: CliContext>(registry: &Registry<C>, rendered: &str) -
                 ));
             }
         }
-        if d.hidden || !crate::cli::on_cli(registry, index) {
+        if d.hidden || d.kind == crate::OpKind::ListPage {
             continue;
         }
-        let heading = format!("### {} {}", registry.bin(), d.path.join(" "));
+        // A command has a section under its path; an op off the command line
+        // has one under its name.
+        let heading = if crate::cli::on_cli(registry, index) {
+            format!("### {} {}", registry.bin(), d.path.join(" "))
+        } else {
+            format!("### {}", d.name)
+        };
         let Some(text) = section(rendered, &heading) else {
             problems.push(format!("{}: the manual has no section `{heading}`", d.name));
             continue;

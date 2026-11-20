@@ -20,7 +20,7 @@ async fn f(_c: &Ctx, _p: P, _o: CallOptions) -> anyhow::Result<O> {
 op_registry::ops! {
     Ctx = Ctx;
     /// Doc.
-    "a b" => { params: P, output: O, access: reads, audience: owner, op: f, reason: "no path" },
+    "a b" => { params: P, output: O, access: reads, audience: owner, op: f, paths: [cli, web] },
 }
 
 fn main() {}

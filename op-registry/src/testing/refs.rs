@@ -3,7 +3,7 @@
 
 use super::codes::call_errors;
 use super::{fail_on, sample_params, Fixture};
-use crate::{Descriptor, FieldKind, Paths, Registry, Resolve};
+use crate::{Descriptor, FieldKind, Registry, Resolve, Surface};
 use coded_error::ErrorClass;
 use serde_json::Value;
 
@@ -54,7 +54,7 @@ pub async fn assert_unknown_ref_not_found<C: Resolve>(
 ) {
     let mut problems = Vec::new();
     for d in registry.descriptors() {
-        if d.paths != Paths::All || !has_subject(registry, d) {
+        if !d.paths.contains(Surface::Json) || !has_subject(registry, d) {
             continue;
         }
         let mut args = args_for(d, overrides);

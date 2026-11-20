@@ -129,19 +129,81 @@ pub enum OpKind {
     ListPage,
 }
 
-/// Which call paths reach an operation.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+/// One way of reaching an operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Paths {
-    /// The typed, JSON and command-line paths.
-    #[default]
-    All,
-    /// The typed path only.
-    TypedOnly,
-    /// The typed and command-line paths, never MCP, `call`, `call_tool` or a
-    /// JSON or REST mount. For ops that act with an owner key or sign; the
-    /// descriptor carries the declared reason (`cli_only_reason`).
-    CliOnly,
+pub enum Surface {
+    /// The command line.
+    Cli,
+    /// A typed Rust call.
+    Typed,
+    /// An MCP tool call.
+    Mcp,
+    /// A JSON call: `Registry::call` or a JSON transport.
+    Json,
+}
+
+impl Surface {
+    const ORDER: [Surface; 4] = [Surface::Cli, Surface::Typed, Surface::Mcp, Surface::Json];
+
+    const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+
+    /// The word the manual and the `paths` list use.
+    pub fn word(self) -> &'static str {
+        match self {
+            Surface::Cli => "cli",
+            Surface::Typed => "typed",
+            Surface::Mcp => "mcp",
+            Surface::Json => "json",
+        }
+    }
+}
+
+/// The set of surfaces that reach an operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Paths(u8);
+
+impl Paths {
+    /// Every surface.
+    pub const ALL: Paths = Paths(0b1111);
+
+    /// The set holding exactly `surfaces`.
+    pub fn of(surfaces: &[Surface]) -> Paths {
+        Paths(surfaces.iter().fold(0, |bits, s| bits | s.bit()))
+    }
+
+    /// Whether `s` is in the set.
+    pub fn contains(self, s: Surface) -> bool {
+        self.0 & s.bit() != 0
+    }
+
+    /// The surfaces in the set, in the order cli, typed, mcp, json.
+    pub fn iter(self) -> impl Iterator<Item = Surface> {
+        Surface::ORDER
+            .into_iter()
+            .filter(move |s| self.contains(*s))
+    }
+}
+
+impl Default for Paths {
+    fn default() -> Self {
+        Paths::ALL
+    }
+}
+
+impl Serialize for Paths {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.iter())
+    }
+}
+
+impl<'de> Deserialize<'de> for Paths {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let surfaces = Vec::<Surface>::deserialize(deserializer)?;
+        Ok(Paths::of(&surfaces))
+    }
 }
 
 /// A documented exit code.
@@ -202,8 +264,6 @@ pub struct Descriptor {
     pub errors: Vec<ErrorCodeEntry>,
     /// Which call paths reach the operation.
     pub paths: Paths,
-    /// Why the op is [`Paths::CliOnly`]; empty for every other op.
-    pub cli_only_reason: String,
     /// Whether the operation accepts a cursor.
     pub cursor: bool,
     /// The input schema.

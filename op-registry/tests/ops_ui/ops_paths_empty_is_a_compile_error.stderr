@@ -1,0 +1,5 @@
+error: `paths` needs at least one surface
+  --> tests/ops_ui/ops_paths_empty_is_a_compile_error.rs:23:84
+   |
+23 |     "a b" => { params: P, output: O, access: reads, audience: owner, op: f, paths: [] },
+   |                                                                                    ^^

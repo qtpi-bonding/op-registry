@@ -115,12 +115,18 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
     if let Some(n) = &e.page_size {
         sets.push(quote!(__spec.page_size = #n;));
     }
-    if e.typed_only {
-        sets.push(quote!(__spec.paths = ::op_registry::Paths::TypedOnly;));
-    }
-    if let Some(reason) = &e.cli_only {
-        sets.push(quote!(__spec.paths = ::op_registry::Paths::CliOnly;));
-        sets.push(quote!(__spec.cli_only_reason = #reason;));
+    if let Some(words) = &e.paths {
+        let surfaces = words.iter().map(|w| {
+            let v = match w.to_string().as_str() {
+                "cli" => "Cli",
+                "typed" => "Typed",
+                "mcp" => "Mcp",
+                _ => "Json",
+            };
+            let v = syn::Ident::new(v, w.span());
+            quote!(::op_registry::Surface::#v)
+        });
+        sets.push(quote!(__spec.paths = ::op_registry::Paths::of(&[#(#surfaces),*]);));
     }
     if let Some(fields) = &e.fields {
         sets.push(quote!(__spec.fields = Some(#fields);));

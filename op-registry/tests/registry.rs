@@ -1,7 +1,7 @@
 mod common;
 
 use common::*;
-use op_registry::{CallOptions, OpKind, OpSpec, Paths, Registry};
+use op_registry::{CallOptions, OpKind, OpSpec, Paths, Registry, Surface};
 use serde_json::json;
 
 #[test]
@@ -128,7 +128,7 @@ fn merge_keeps_order_and_checks_collisions() {
 fn typed_only_op_called_by_json_is_wrong_path() {
     let mut registry: Registry<Ctx> = Registry::new();
     let mut spec = OpSpec::new("x", "Typed only.");
-    spec.paths = Paths::TypedOnly;
+    spec.paths = Paths::of(&[Surface::Typed]);
     push_ok(&mut registry, spec);
     let err =
         futures_executor::block_on(registry.call("x", json!({}), &Ctx, CallOptions::default()))

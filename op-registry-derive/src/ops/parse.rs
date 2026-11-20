@@ -48,9 +48,8 @@ pub struct Entry {
     pub text: Option<LitBool>,
     pub hidden: Option<LitBool>,
     pub default: Option<LitBool>,
-    pub typed_only: bool,
-    /// `paths: [cli]` with its `reason:`.
-    pub cli_only: Option<LitStr>,
+    /// `paths: [..]`: the surface words, validated, in declared order.
+    pub paths: Option<Vec<Ident>>,
     pub cursor: Option<LitBool>,
     pub cap: Option<LitInt>,
     pub page_size: Option<LitInt>,
@@ -235,10 +234,7 @@ impl Parse for Entry {
         let (mut text, mut hidden, mut default) = (None, None, None);
         let mut text_key: Option<Ident> = None;
         let mut default_key: Option<Ident> = None;
-        let mut typed_only = false;
-        let mut cli_only: Option<Ident> = None;
-        let mut reason: Option<LitStr> = None;
-        let mut reason_key: Option<Ident> = None;
+        let mut paths: Option<Vec<Ident>> = None;
         let (mut cursor, mut cap, mut page_size, mut unpaged) = (None, None, None, None);
         let mut cursor_key = None;
         let mut list_only: Vec<Ident> = Vec::new();
@@ -341,30 +337,36 @@ impl Parse for Entry {
                 }
                 "paths" => {
                     let inner;
-                    bracketed!(inner in body);
+                    let bracket = bracketed!(inner in body);
+                    let mut words: Vec<Ident> = Vec::new();
                     for word in inner.parse_terminated(Ident::parse, Token![,])? {
-                        if word == "typed" {
-                            typed_only = true;
-                        } else if word == "cli" {
-                            cli_only = Some(word);
-                        } else {
+                        if !["cli", "typed", "mcp", "json"].iter().any(|w| word == w) {
                             return Err(syn::Error::new(
                                 word.span(),
-                                "`paths` takes `[typed]` (the typed path only) or `[cli]` \
-                                 (the command line and the typed path, never a JSON path)",
+                                "`paths` takes cli, typed, mcp and json",
                             ));
                         }
+                        if words.iter().any(|w| *w == word) {
+                            return Err(syn::Error::new(
+                                word.span(),
+                                format!("`paths` lists `{word}` twice"),
+                            ));
+                        }
+                        words.push(word);
                     }
-                    if typed_only && cli_only.is_some() {
+                    if words.is_empty() {
                         return Err(syn::Error::new(
-                            key.span(),
-                            "`paths` takes one of `[typed]` or `[cli]`, not both",
+                            bracket.span.join(),
+                            "`paths` needs at least one surface",
                         ));
                     }
+                    paths = Some(words);
                 }
                 "reason" => {
-                    reason_key = Some(key.clone());
-                    reason = Some(body.parse::<LitStr>()?);
+                    return Err(syn::Error::new(
+                        key.span(),
+                        "unknown key `reason`: 0.4.0 needs no reason for `paths`; remove it",
+                    ));
                 }
                 "cursor" => {
                     cursor_key = Some(key.clone());
@@ -388,7 +390,7 @@ impl Parse for Entry {
                         format!(
                             "unknown key `{other}`: expected params, output, item, op, local, \
                              stream, list, access, audience, errors, fields, exits, text, hidden, \
-                             default, paths, reason, cursor, cap, page_size or unpaged"
+                             default, paths, cursor, cap, page_size or unpaged"
                         ),
                     ))
                 }
@@ -466,23 +468,6 @@ impl Parse for Entry {
                 ));
             }
         }
-        if let Some(word) = &cli_only {
-            match &reason {
-                Some(r) if !r.value().trim().is_empty() => {}
-                _ => {
-                    return Err(syn::Error::new(
-                        word.span(),
-                        "`paths: [cli]` needs a non-empty `reason: \"...\"` (why the op must \
-                         never be offered over MCP or JSON)",
-                    ))
-                }
-            }
-        } else if let Some(key) = reason_key {
-            return Err(syn::Error::new(
-                key.span(),
-                "`reason:` goes only with `paths: [cli]`",
-            ));
-        }
         if let Some(key) = default_key {
             if path.value().split_whitespace().count() < 2 {
                 return Err(syn::Error::new(
@@ -508,8 +493,7 @@ impl Parse for Entry {
             text,
             hidden,
             default,
-            typed_only,
-            cli_only: cli_only.and(reason),
+            paths,
             cursor,
             cap,
             page_size,

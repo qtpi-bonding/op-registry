@@ -4,7 +4,7 @@
 use crate::registry::TypedUnary;
 use crate::{
     cli, Access, Audience, CallError, CallPath, CliContext, Descriptor, ErrorCodeEntry, Op, OpKind,
-    OpParams, OpSpec, Paths, Registry, RenderText, Resolve,
+    OpParams, OpSpec, Paths, Registry, RenderText, Resolve, Surface,
 };
 use anyhow::{anyhow, Result};
 use coded_error::{CodeCatalog, ErrorClass};
@@ -211,26 +211,59 @@ pub fn render<C: CliContext>(registry: &Registry<C>, manual: &Manual) -> Result<
         let help = command.clone().render_long_help().to_string();
         blocks.push(format!("```text\n{}\n```", help.trim_end()));
         blocks.push(format!("Access: {}", access_words(&d.access)));
-        if d.paths == Paths::CliOnly {
-            blocks.push(format!("CLI-only: {}", d.cli_only_reason));
+        if d.paths != Paths::ALL {
+            blocks.push(paths_line(d.paths));
         }
-        if !d.exits.is_empty() {
-            let lines: Vec<String> = d
-                .exits
-                .iter()
-                .map(|e| format!("- {}: {}", e.code, e.meaning))
-                .collect();
-            blocks.push(format!("Exits:\n{}", lines.join("\n")));
-        }
-        let codes = codes_of(registry, d);
-        if !codes.is_empty() {
-            blocks.push(code_table(&codes));
+        push_exits_and_codes(&mut blocks, registry, d);
+    }
+
+    let off_cli: Vec<&Descriptor> = registry
+        .entries
+        .iter()
+        .map(|e| &e.descriptor)
+        .filter(|d| !d.hidden && !d.paths.contains(Surface::Cli) && d.kind != OpKind::ListPage)
+        .collect();
+    if !off_cli.is_empty() {
+        blocks.push("## Operations off the command line".to_owned());
+        for d in off_cli {
+            blocks.push(format!("### {}", d.name));
+            blocks.push(d.summary.clone());
+            if !d.long_help.is_empty() {
+                blocks.push(d.long_help.clone());
+            }
+            blocks.push(paths_line(d.paths));
+            blocks.push(format!("Access: {}", access_words(&d.access)));
+            push_exits_and_codes(&mut blocks, registry, d);
         }
     }
 
     blocks.push("## Library codes".to_owned());
     blocks.push(code_table(&library_codes()));
     Ok(blocks.join("\n\n") + "\n")
+}
+
+fn paths_line(paths: Paths) -> String {
+    let words: Vec<&str> = paths.iter().map(Surface::word).collect();
+    format!("Paths: {}", words.join(", "))
+}
+
+fn push_exits_and_codes<C: CliContext>(
+    blocks: &mut Vec<String>,
+    registry: &Registry<C>,
+    d: &Descriptor,
+) {
+    if !d.exits.is_empty() {
+        let lines: Vec<String> = d
+            .exits
+            .iter()
+            .map(|e| format!("- {}: {}", e.code, e.meaning))
+            .collect();
+        blocks.push(format!("Exits:\n{}", lines.join("\n")));
+    }
+    let codes = codes_of(registry, d);
+    if !codes.is_empty() {
+        blocks.push(code_table(&codes));
+    }
 }
 
 /// Every descriptor, schema, exit and code as JSON. Output schemas are

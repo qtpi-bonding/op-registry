@@ -1,5 +1,0 @@
-error: `paths: [cli]` needs a non-empty `reason: "..."` (why the op must never be offered over MCP or JSON)
-  --> tests/ops_ui/ops_cli_without_reason_is_a_compile_error.rs:23:85
-   |
-23 |     "a b" => { params: P, output: O, access: reads, audience: owner, op: f, paths: [cli] },
-   |                                                                                     ^^^

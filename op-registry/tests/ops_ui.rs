@@ -14,6 +14,8 @@ fn ops_compile_failures() {
     tests.compile_fail("tests/ops_ui/ops_exits_on_list_is_a_compile_error.rs");
     tests.compile_fail("tests/ops_ui/ops_exits_without_ok_exit_is_a_compile_error.rs");
     tests.compile_fail("tests/ops_ui/ops_globals_mismatch_is_a_compile_error.rs");
-    tests.compile_fail("tests/ops_ui/ops_cli_without_reason_is_a_compile_error.rs");
-    tests.compile_fail("tests/ops_ui/ops_reason_without_cli_is_a_compile_error.rs");
+    tests.compile_fail("tests/ops_ui/ops_paths_unknown_word_is_a_compile_error.rs");
+    tests.compile_fail("tests/ops_ui/ops_paths_empty_is_a_compile_error.rs");
+    tests.compile_fail("tests/ops_ui/ops_paths_duplicate_is_a_compile_error.rs");
+    tests.compile_fail("tests/ops_ui/ops_reason_key_is_a_compile_error.rs");
 }

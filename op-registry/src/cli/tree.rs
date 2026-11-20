@@ -1,7 +1,7 @@
 //! The clap command tree of a registry.
 
 use super::{Fallback, ID_COMPACT, ID_PRETTY, ID_TEXT};
-use crate::{CliContext, OpGlobals, OpKind, Paths, Registry};
+use crate::{CliContext, OpGlobals, OpKind, Registry, Surface};
 use clap::{Arg, ArgAction, Command};
 
 /// Names the library owns on every command.
@@ -17,11 +17,11 @@ enum Node {
     Leaf(usize),
 }
 
-/// Whether an entry is a command of its own: not typed-only (a CLI-only op is a command), and not the
+/// Whether an entry is a command of its own: its paths contain `cli`, and it is not the
 /// paged half of a list pair (the pair is one command).
 pub(crate) fn on_cli<C>(registry: &Registry<C>, index: usize) -> bool {
     let d = &registry.entries[index].descriptor;
-    d.paths != Paths::TypedOnly && d.kind != OpKind::ListPage
+    d.paths.contains(Surface::Cli) && d.kind != OpKind::ListPage
 }
 
 /// The entry a command chain selects: a leaf at exactly that path, else the

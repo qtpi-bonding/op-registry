@@ -40,8 +40,6 @@ pub struct OpSpec<P, O> {
     pub errors: Vec<coded_error::CodeEntry>,
     /// Which call paths reach the operation.
     pub paths: Paths,
-    /// Why the op is `Paths::CliOnly`; required then, ignored otherwise.
-    pub cli_only_reason: &'static str,
     /// Whether the operation accepts a cursor.
     pub cursor: bool,
     /// The most items a list returns.
@@ -72,8 +70,7 @@ impl<P, O> OpSpec<P, O> {
             group_default: false,
             exits: Vec::new(),
             errors: Vec::new(),
-            paths: Paths::All,
-            cli_only_reason: "",
+            paths: Paths::ALL,
             cursor: false,
             cap: 10_000,
             page_size: 100,
@@ -102,7 +99,6 @@ impl<P, O> OpSpec<P, O> {
             exits: Vec::new(),
             errors: self.errors.clone(),
             paths: self.paths,
-            cli_only_reason: self.cli_only_reason,
             cursor: self.cursor,
             cap: self.cap,
             page_size: self.page_size,
@@ -508,11 +504,6 @@ impl<C: Resolve + 'static> Registry<C> {
     {
         let path = words(spec.path);
         assert!(!path.is_empty(), "an operation needs a path");
-        assert!(
-            spec.paths != Paths::CliOnly || !spec.cli_only_reason.trim().is_empty(),
-            "operation {:?} is CliOnly and needs a `cli_only_reason`",
-            spec.path
-        );
         Descriptor {
             name: derive_name(&path),
             path,
@@ -534,11 +525,6 @@ impl<C: Resolve + 'static> Registry<C> {
                 .collect(),
             errors: spec.errors.iter().map(ErrorCodeEntry::from).collect(),
             paths: spec.paths,
-            cli_only_reason: if spec.paths == Paths::CliOnly {
-                spec.cli_only_reason.to_owned()
-            } else {
-                String::new()
-            },
             cursor: spec.cursor,
             input_schema: P::input_schema(),
             output_schema: <O as OutputSchema>::output_schema(),

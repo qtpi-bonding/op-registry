@@ -1,0 +1,5 @@
+error: unknown key `reason`: 0.4.0 needs no reason for `paths`; remove it
+  --> tests/ops_ui/ops_reason_key_is_a_compile_error.rs:23:91
+   |
+23 |     "a b" => { params: P, output: O, access: reads, audience: owner, op: f, paths: [cli], reason: "no path" },
+   |                                                                                           ^^^^^^

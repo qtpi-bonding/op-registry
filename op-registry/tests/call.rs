@@ -5,7 +5,7 @@ use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use op_registry::{
     Access, Audience, CallHook, CallInfo, CallOptions, CallPath, Caller, Notice, NoticeSink,
-    Notices, Op, OpParams, OpSpec, Paths, Registry, TraceParent,
+    Notices, Op, OpParams, OpSpec, Paths, Registry, Surface, TraceParent,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -91,7 +91,7 @@ fn registry() -> Registry<Ctx> {
         },
     );
     let mut hidden = OpSpec::<Pick, Out>::new("hidden", "Typed only.");
-    hidden.paths = Paths::TypedOnly;
+    hidden.paths = Paths::of(&[Surface::Typed]);
     r.push_op(hidden, ok_op);
     r.push_op(
         OpSpec::<Pick, Out>::new("notify", "Notifies."),
