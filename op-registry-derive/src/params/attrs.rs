@@ -688,8 +688,7 @@ impl Field {
                     .map(|v| ::op_registry::__private::clap::builder::OsStr::from(v.get_name().to_owned()))
                 })
             }
-            Shape::Plain(Base::FromStr(_)) => None,
-            Shape::Plain(_) => {
+            Shape::Plain(Base::String | Base::Path | Base::Int { .. } | Base::Float) => {
                 let text = literal_text(e)?;
                 (!text.is_empty()).then(
                     || quote!(::std::option::Option::Some(::op_registry::__private::clap::builder::OsStr::from(#text.to_owned()))),

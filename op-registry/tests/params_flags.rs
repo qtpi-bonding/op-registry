@@ -616,6 +616,34 @@ fn empty_and_hidden_defaults_not_shown_schema_keeps_default() {
 
 // ---- PAR-10: env on params (CLI only) ----
 
+/// Serialises the tests that touch the process environment (clap reads it
+/// while the command is built) and removes what they set, even on panic.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct EnvScope {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    vars: Vec<&'static str>,
+}
+
+fn env_scope(vars: &[(&'static str, &str)]) -> EnvScope {
+    let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    for (k, v) in vars {
+        std::env::set_var(k, v);
+    }
+    EnvScope {
+        _lock: lock,
+        vars: vars.iter().map(|(k, _)| *k).collect(),
+    }
+}
+
+impl Drop for EnvScope {
+    fn drop(&mut self) {
+        for k in &self.vars {
+            std::env::remove_var(k);
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, OpParams)]
 struct EnvP {
     #[op(env = "OPREG_T16_NAME")]
@@ -634,8 +662,10 @@ struct EnvP {
 
 #[test]
 fn env_fills_absent_flag() {
-    std::env::set_var("OPREG_T16_NAME", "from-env");
-    std::env::set_var("OPREG_T16_VERBOSE", "true");
+    let _env = env_scope(&[
+        ("OPREG_T16_NAME", "from-env"),
+        ("OPREG_T16_VERBOSE", "true"),
+    ]);
     let p: EnvP = run(&[]).unwrap();
     assert_eq!(p.name.as_deref(), Some("from-env"));
     assert!(p.verbose);
@@ -647,20 +677,21 @@ fn env_fills_absent_flag() {
 
 #[test]
 fn flag_wins_over_env() {
-    std::env::set_var("OPREG_T16_NAME", "from-env");
+    let _env = env_scope(&[("OPREG_T16_NAME", "from-env")]);
     let p: EnvP = run(&["--name", "from-flag"]).unwrap();
     assert_eq!(p.name.as_deref(), Some("from-flag"));
 }
 
 #[test]
 fn malformed_env_value_is_exit_2() {
-    std::env::set_var("OPREG_T16_COUNT", "many");
+    let _env = env_scope(&[("OPREG_T16_COUNT", "many")]);
     let err = run::<EnvP>(&[]).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::ValueValidation);
 }
 
 #[test]
 fn help_shows_env_var() {
+    let _env = env_scope(&[]);
     let h = help::<EnvP>();
     assert!(h.contains("[env: OPREG_T16_HELP]"), "{h}");
     assert!(!h.contains("OPREG_T16_HIDDEN_HELP"), "{h}");
@@ -668,7 +699,7 @@ fn help_shows_env_var() {
 
 #[test]
 fn empty_env_param_is_absent() {
-    std::env::set_var("OPREG_T16_EMPTY", "");
+    let _env = env_scope(&[("OPREG_T16_EMPTY", "")]);
     let p: EnvP = run(&[]).unwrap();
     assert_eq!(p.empty, None);
 }
@@ -690,9 +721,9 @@ impl op_registry::Resolve for NoCtx {}
 
 #[test]
 fn env_ignored_off_cli_value_must_be_passed() {
+    let _env = env_scope(&[("OPREG_T16_NEED", "from-env")]);
     use futures_util::future::BoxFuture;
     use op_registry::{CallOptions, OpSpec, Registry};
-    std::env::set_var("OPREG_T16_NEED", "from-env");
     let cli: NeedEnv = run(&[]).unwrap();
     assert_eq!(cli.need, "from-env");
 
@@ -731,8 +762,7 @@ struct EmptyEnv {
 
 #[test]
 fn empty_env_on_typed_and_switch_params_is_absent() {
-    std::env::set_var("OPREG_T16_EMPTY_COUNT", "");
-    std::env::set_var("OPREG_T16_EMPTY_FLAG", "");
+    let _env = env_scope(&[("OPREG_T16_EMPTY_COUNT", ""), ("OPREG_T16_EMPTY_FLAG", "")]);
     let p: EmptyEnv = run(&[]).unwrap();
     assert_eq!(
         p,
@@ -744,4 +774,18 @@ fn empty_env_on_typed_and_switch_params_is_absent() {
     let p: EmptyEnv = run(&["--count", "4"]).unwrap();
     assert_eq!(p.count, Some(4));
     assert!(help::<EmptyEnv>().contains("[env: OPREG_T16_EMPTY_COUNT]"));
+}
+
+#[derive(Debug, PartialEq, OpParams)]
+struct InputDefault {
+    /// Base64 `hi`, as a literal (not a path, not stdin).
+    #[op(default = "aGk=")]
+    body: op_registry::Input,
+}
+
+#[test]
+fn input_literal_default_stays_a_literal() {
+    let p: InputDefault = run(&[]).unwrap();
+    assert_eq!(p.body, op_registry::Input(b"hi".to_vec()));
+    assert!(!help::<InputDefault>().contains("[default:"));
 }
