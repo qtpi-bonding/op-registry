@@ -3,7 +3,7 @@ resolver = "2"
 members = ["op-registry", "op-registry-derive", "op-listen", "op-status"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
@@ -15,8 +15,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive", "env", "string"] }
 futures-util = "0.3"
+zeroize = "1"
+rmcp = { version = "1", default-features = false, features = ["server"] }
 schemars = "1"
-coded-error = { git = "https://github.com/qtpi-bonding/coded-error.git", rev = "ffeaf3949230a8883b56c75e7031346a4f28ed4d", features = ["serde", "cli", "http"] }
+coded-error = { git = "https://github.com/qtpi-bonding/coded-error.git", rev = "de21d22e31baff78eae7d4ca817b87430bff1f81", features = ["serde", "cli", "http"] }
 thiserror = "2"
 tokio = "1"
 trybuild = "1"

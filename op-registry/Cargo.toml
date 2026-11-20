@@ -6,8 +6,16 @@ rust-version.workspace = true
 license.workspace = true
 description.workspace = true
 
+[features]
+default = ["schema", "manual", "secrets"]
+schema = ["dep:schemars"]
+manual = []
+secrets = ["dep:zeroize"]
+testing = ["manual"]
+rmcp = ["dep:rmcp"]
+
 [dependencies]
-op-registry-derive = { path = "../op-registry-derive", version = "0.2.0" }
+op-registry-derive = { path = "../op-registry-derive", version = "0.3.0" }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -15,7 +23,9 @@ clap = { workspace = true }
 futures-util = { workspace = true }
 coded-error = { workspace = true }
 thiserror = { workspace = true }
-schemars = { workspace = true }
+schemars = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
+rmcp = { workspace = true, optional = true }
 
 [dev-dependencies]
 trybuild = { workspace = true }

@@ -37,7 +37,7 @@ impl CliHooks {
 pub trait Operation: crate::__private::Sealed {
     type Ctx;
     type Params: OpParams;
-    type Output: serde::Serialize + schemars::JsonSchema;
+    type Output: serde::Serialize + crate::OutputSchema;
     fn descriptor() -> Descriptor;
 }
 
@@ -355,7 +355,7 @@ macro_rules! registry {
                     .audience($crate::Audience::$aud)
                     .streaming(matches!(stringify!($kind), "stream_op" | "stream_op_with"))
                     .input_schema(<$params as $crate::OpParams>::schema())
-                    .output_schema($crate::__private::output_schema_of::<$output>())
+                    .output_schema(<$output as $crate::OutputSchema>::output_schema().unwrap_or_default())
                     $(.output_schema($out_schema))?
                     $(.renders_text($renders))? $(.exit_code_on_ok($exit))?
                     $(.requires(vec![$($req.to_string()),*]))? $(.hidden($hidden))?

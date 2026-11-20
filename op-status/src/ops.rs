@@ -111,7 +111,9 @@ pub fn status_registry<C: StatusSource + Sync + 'static>(opts: StatusOptions) ->
         .audience(audience)
         .streaming(false)
         .input_schema(<GetParams as OpParams>::schema())
-        .output_schema(op_registry::__private::output_schema_of::<StatusSnapshot>());
+        .output_schema(
+            <StatusSnapshot as op_registry::OutputSchema>::output_schema().unwrap_or_default(),
+        );
     registry.push_unary::<GetParams, StatusSnapshot, _>(
         descriptor,
         move |ctx: &C, params: GetParams, _opts: CallOptions| get_op(ctx, params, max),

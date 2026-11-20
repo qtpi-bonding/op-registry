@@ -4,6 +4,7 @@ mod call;
 pub mod cli;
 mod descriptor;
 pub mod mcp;
+mod output;
 mod params;
 pub mod parity;
 mod registry;
@@ -12,6 +13,7 @@ pub use call::{call, call_stream, CallError};
 pub use call::{CallOptions, Caller, Cursor};
 pub use descriptor::*;
 pub use op_registry_derive::OpParams;
+pub use output::OutputSchema;
 pub use params::*;
 pub use registry::{CliHooks, Operation, Registry};
 
@@ -24,13 +26,10 @@ pub mod __private {
     pub use anyhow;
     pub use clap;
     pub use futures_util;
+    #[cfg(feature = "schema")]
     pub use schemars;
     pub use serde_json;
 
-    /// Returns the JSON schema generated for an operation output type.
-    pub fn output_schema_of<O: schemars::JsonSchema>() -> serde_json::Value {
-        serde_json::to_value(schemars::schema_for!(O)).expect("schemars output is valid JSON")
-    }
     #[macro_export]
     macro_rules! access {
         (reads) => {

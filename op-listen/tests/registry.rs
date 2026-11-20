@@ -26,7 +26,7 @@ fn listen_entry_output_schema_is_the_frame_schema() {
     let d = registry.get("log_listen").expect("registered");
     assert_eq!(
         d.output_schema,
-        op_registry::__private::output_schema_of::<op_listen::ListenFrame<(), String>>()
+        <op_listen::ListenFrame<(), String> as op_registry::OutputSchema>::output_schema().unwrap()
     );
 }
 
