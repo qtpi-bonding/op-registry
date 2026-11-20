@@ -13,7 +13,9 @@ pub fn ref_slots_fn(fields: &[Field]) -> TokenStream {
         let ident = &f.ident;
         let Some(r) = &f.reference else {
             if matches!(f.shape, Shape::Flatten(_)) {
-                pushes.push(quote!(slots.extend(::op_registry::OpParams::ref_slots(&mut self.#ident));));
+                pushes.push(
+                    quote!(slots.extend(::op_registry::OpParams::ref_slots(&mut self.#ident));),
+                );
             }
             continue;
         };
@@ -26,7 +28,8 @@ pub fn ref_slots_fn(fields: &[Field]) -> TokenStream {
                     .map(|o| &o.ident);
                 quote!((#name, ::op_registry::__private::rt::ScopeValue::scope_value(&self.#sibling)))
             });
-            subject_scope = quote!(let scope = ::op_registry::__private::rt::scope(vec![#(#pairs),*]););
+            subject_scope =
+                quote!(let scope = ::op_registry::__private::rt::scope(vec![#(#pairs),*]););
             quote!(scope)
         } else {
             quote!(::op_registry::Scope::default())

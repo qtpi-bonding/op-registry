@@ -176,7 +176,11 @@ fn env_secret_global_is_redacted_from_context_error() {
     std::env::remove_var(TOKEN_ENV);
     assert_eq!(ran.code, 70, "{}", ran.err);
     assert_hidden(&ran, &seen, "env-s3cret-context");
-    assert!(ran.err.contains("cannot log in with <secret>"), "{}", ran.err);
+    assert!(
+        ran.err.contains("cannot log in with <secret>"),
+        "{}",
+        ran.err
+    );
 }
 
 #[test]
@@ -198,7 +202,13 @@ fn parsed_debug_leaves_out_secret_values() {
     let r = registry();
     let (parsed, _) = cli::parse(
         &r,
-        &argv(&["--token", "debug-s3cret-global", "vault", "--token", "debug-s3cret-op"]),
+        &argv(&[
+            "--token",
+            "debug-s3cret-global",
+            "vault",
+            "--token",
+            "debug-s3cret-op",
+        ]),
     )
     .unwrap();
     let shown = format!("{parsed:?}");
@@ -242,8 +252,8 @@ struct HiddenKey {
 
 #[test]
 fn json_decode_errors_do_not_echo_secret_values() {
-    let err = Pin::from_json(json!({"pin": "json-s3cret-pin"}), &mut ParseCx::default())
-        .unwrap_err();
+    let err =
+        Pin::from_json(json!({"pin": "json-s3cret-pin"}), &mut ParseCx::default()).unwrap_err();
     assert_eq!(
         coded_error::facts_anyhow(&err).code,
         "op_registry.usage.invalid"

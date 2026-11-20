@@ -5,7 +5,9 @@ use common::*;
 use op_listen::listen_entry;
 use op_registry::mcp;
 use op_registry::testing::assert_parity;
-use op_registry::{cli, Audience, CallOptions, Caller, CliContext, Cursor, OpGlobals, OpSpec, Registry};
+use op_registry::{
+    cli, Audience, CallOptions, Caller, CliContext, Cursor, OpGlobals, OpSpec, Registry,
+};
 use serde_json::json;
 use std::sync::Arc;
 

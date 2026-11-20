@@ -1,6 +1,8 @@
 //! Plain-data MCP adapters for a registry: tool specs and tool calls.
 
-use crate::{Audience, CallError, CallFailure, CallOptions, CallPath, OpKind, Paths, Registry, Resolve};
+use crate::{
+    Audience, CallError, CallFailure, CallOptions, CallPath, OpKind, Paths, Registry, Resolve,
+};
 use serde::Serialize;
 use serde_json::Value;
 

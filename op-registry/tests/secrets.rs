@@ -67,10 +67,13 @@ fn secret_file_reads_path_at_parse() {
     assert_eq!(p.key.bytes(), b"line-one-key\nline-two-key");
     assert_eq!(p.key.path(), Some(path.as_path()));
     let shown = format!("{:?}", p.key);
-    assert!(shown.contains("key.pem") && !shown.contains("line-one-key"), "{shown}");
+    assert!(
+        shown.contains("key.pem") && !shown.contains("line-one-key"),
+        "{shown}"
+    );
     std::fs::remove_file(&path).unwrap();
-    let err = parse::<Keyed>(&["--key", path.to_str().unwrap()], &mut ParseCx::default())
-        .unwrap_err();
+    let err =
+        parse::<Keyed>(&["--key", path.to_str().unwrap()], &mut ParseCx::default()).unwrap_err();
     assert_eq!(
         coded_error::facts_anyhow(&err).code,
         "op_registry.usage.invalid"
@@ -126,8 +129,8 @@ fn secret_inline_accepts_base64_object() {
     assert_eq!(p.key.bytes(), b"on-disk");
     std::fs::remove_file(&path).unwrap();
     // without secret_inline an object is refused
-    let err = Keyed::from_json(json!({"key": {"inline": "aGk="}}), &mut ParseCx::default())
-        .unwrap_err();
+    let err =
+        Keyed::from_json(json!({"key": {"inline": "aGk="}}), &mut ParseCx::default()).unwrap_err();
     assert_eq!(
         coded_error::facts_anyhow(&err).code,
         "op_registry.usage.invalid"
@@ -139,10 +142,12 @@ fn secret_inline_accepts_base64_object() {
 #[test]
 fn hidden_path_is_not_printed() {
     let path = temp_file("hidden.key", b"abcdefgh");
-    let p: HiddenKey =
-        parse(&["--key", path.to_str().unwrap()], &mut ParseCx::default()).unwrap();
+    let p: HiddenKey = parse(&["--key", path.to_str().unwrap()], &mut ParseCx::default()).unwrap();
     let shown = format!("{p:?}");
-    assert!(shown.contains("<secret>") && !shown.contains("hidden.key"), "{shown}");
+    assert!(
+        shown.contains("<secret>") && !shown.contains("hidden.key"),
+        "{shown}"
+    );
     let secrets = p.secrets();
     assert!(secrets.contains(&b"abcdefgh".to_vec()));
     assert!(secrets.contains(&path.to_str().unwrap().as_bytes().to_vec()));
@@ -157,10 +162,7 @@ fn redactor_redacts_value_and_lines() {
         r.redact("failed with line-two-key here"),
         "failed with <secret> here"
     );
-    assert_eq!(
-        r.redact("all: line-one-key\nline-two-key"),
-        "all: <secret>"
-    );
+    assert_eq!(r.redact("all: line-one-key\nline-two-key"), "all: <secret>");
     // short values are skipped
     let mut short = Redactor::default();
     short.add(b"abc");
@@ -237,7 +239,10 @@ fn write_private_mode_0600_and_no_overwrite() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
     std::fs::remove_file(&path).unwrap();
 }

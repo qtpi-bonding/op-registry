@@ -63,9 +63,10 @@ impl std::fmt::Debug for Parsed {
                 .field("text", text)
                 .field("cursor", cursor)
                 .finish_non_exhaustive(),
-            Parsed::Extra { name, .. } => {
-                f.debug_struct("Extra").field("name", name).finish_non_exhaustive()
-            }
+            Parsed::Extra { name, .. } => f
+                .debug_struct("Extra")
+                .field("name", name)
+                .finish_non_exhaustive(),
             Parsed::Fallback { args, .. } => f
                 .debug_struct("Fallback")
                 .field("args", &args.len())

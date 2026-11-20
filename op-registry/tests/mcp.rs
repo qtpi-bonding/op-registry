@@ -41,7 +41,11 @@ struct Out {
     ok: bool,
 }
 
-fn ok_op<P: Send + 'static>(_c: &Ctx, _p: P, _o: CallOptions) -> BoxFuture<'_, anyhow::Result<Out>> {
+fn ok_op<P: Send + 'static>(
+    _c: &Ctx,
+    _p: P,
+    _o: CallOptions,
+) -> BoxFuture<'_, anyhow::Result<Out>> {
     Box::pin(async { Ok(Out { ok: true }) })
 }
 
@@ -60,13 +64,18 @@ fn registry() -> Registry<Ctx> {
     let mut owner = OpSpec::<Plain, Out>::new("owner_op", "Owner.");
     owner.audience = Audience::Owner;
     r.push_op(owner, ok_op::<Plain>);
-    r.push_local(OpSpec::<Plain, Out>::new("local_op", "Local."), ok_op::<Plain>);
+    r.push_local(
+        OpSpec::<Plain, Out>::new("local_op", "Local."),
+        ok_op::<Plain>,
+    );
     r.push_stream(
         OpSpec::<Plain, Out>::new("flow", "Streams."),
         |_c: &Ctx, _p: Plain, _cur, _o: CallOptions| {
             Box::pin(async {
-                Ok(Box::pin(futures_util::stream::iter(vec![Ok(Out { ok: true })]))
-                    as BoxStream<'_, anyhow::Result<Out>>)
+                Ok(
+                    Box::pin(futures_util::stream::iter(vec![Ok(Out { ok: true })]))
+                        as BoxStream<'_, anyhow::Result<Out>>,
+                )
             })
         },
     );
@@ -91,9 +100,16 @@ fn tool_list_filters_hidden_stream_typed_and_audience() {
 #[tokio::test]
 async fn hidden_op_still_callable_on_mcp() {
     let r = registry();
-    let out = call_tool(&r, &Ctx, Audience::Agent, "hidden_op", json!({}), CallOptions::default())
-        .await
-        .unwrap();
+    let out = call_tool(
+        &r,
+        &Ctx,
+        Audience::Agent,
+        "hidden_op",
+        json!({}),
+        CallOptions::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(out, json!({"ok": true}));
 }
 
@@ -109,10 +125,22 @@ async fn call_errors_by_audience_shape_and_path() {
             tool_error(&err, "t", "fallback").code
         }
     };
-    assert_eq!(code("owner_op", Audience::Agent).await, "op_registry.call.outside_audience");
-    assert_eq!(code("flow", Audience::Agent).await, "op_registry.call.wrong_shape");
-    assert_eq!(code("typed_op", Audience::Agent).await, "op_registry.call.wrong_path");
-    assert_eq!(code("nope", Audience::Agent).await, "op_registry.call.unknown_operation");
+    assert_eq!(
+        code("owner_op", Audience::Agent).await,
+        "op_registry.call.outside_audience"
+    );
+    assert_eq!(
+        code("flow", Audience::Agent).await,
+        "op_registry.call.wrong_shape"
+    );
+    assert_eq!(
+        code("typed_op", Audience::Agent).await,
+        "op_registry.call.wrong_path"
+    );
+    assert_eq!(
+        code("nope", Audience::Agent).await,
+        "op_registry.call.unknown_operation"
+    );
 }
 
 #[test]
@@ -135,10 +163,19 @@ fn annotations_from_access() {
         .collect();
     assert_eq!(
         hints,
-        vec![(true, false), (false, false), (false, true), (false, true), (false, false)]
+        vec![
+            (true, false),
+            (false, false),
+            (false, true),
+            (false, true),
+            (false, false)
+        ]
     );
     let json = serde_json::to_value(&tool_list(&r, Audience::Agent)[0]).unwrap();
-    assert_eq!(json["annotations"], json!({"readOnlyHint": true, "destructiveHint": false}));
+    assert_eq!(
+        json["annotations"],
+        json!({"readOnlyHint": true, "destructiveHint": false})
+    );
     assert!(json.get("inputSchema").is_some());
 }
 
@@ -178,7 +215,10 @@ fn list_pair_both_tools() {
         OpSpec::<Lst, Out>::new("thing list", "List things."),
         |_c: &Ctx, _p: Lst, _req: PageRequest| -> BoxFuture<'_, anyhow::Result<Page<Out>>> {
             Box::pin(async {
-                Ok(Page { items: vec![Out { ok: true }], next_cursor: None })
+                Ok(Page {
+                    items: vec![Out { ok: true }],
+                    next_cursor: None,
+                })
             })
         },
     );
@@ -205,9 +245,16 @@ async fn call_tool_path_is_mcp() {
     let mut r = registry();
     let rec = Arc::new(Recorder::default());
     r.set_call_hook(rec.clone());
-    call_tool(&r, &Ctx, Audience::Agent, "read_it", json!({}), CallOptions::default())
-        .await
-        .unwrap();
+    call_tool(
+        &r,
+        &Ctx,
+        Audience::Agent,
+        "read_it",
+        json!({}),
+        CallOptions::default(),
+    )
+    .await
+    .unwrap();
     // a transport label does not change the path
     call_tool(
         &r,
@@ -273,5 +320,8 @@ fn output_schema_none_without_schema_feature() {
     r.push_op(OpSpec::<Plain, Out>::new("a", "x"), ok_op::<Plain>);
     let tool = tool_list(&r, Audience::Agent).remove(0);
     assert_eq!(tool.output_schema, None);
-    assert!(serde_json::to_value(&tool).unwrap().get("outputSchema").is_none());
+    assert!(serde_json::to_value(&tool)
+        .unwrap()
+        .get("outputSchema")
+        .is_none());
 }

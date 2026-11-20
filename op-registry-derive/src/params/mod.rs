@@ -48,7 +48,11 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         )
     });
     let require_secrets = needs_secrets.then(|| {
-        quote!(const _: () = { ::op_registry::__require_secrets!(); };)
+        quote!(
+            const _: () = {
+                ::op_registry::__require_secrets!();
+            };
+        )
     });
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     Ok(quote! {
@@ -75,7 +79,10 @@ fn check_relations(fields: &[Field]) -> syn::Result<()> {
                 format!("one_of group `{name}` needs at least two `Option` fields"),
             ));
         }
-        if members.iter().any(|f| f.one_of.as_ref().map(|g| g.1) != Some(optional)) {
+        if members
+            .iter()
+            .any(|f| f.one_of.as_ref().map(|g| g.1) != Some(optional))
+        {
             return Err(syn::Error::new(
                 members[0].ident.span(),
                 format!("group `{name}` mixes one_of and one_of_optional"),

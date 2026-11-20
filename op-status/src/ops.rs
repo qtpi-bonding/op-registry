@@ -97,7 +97,9 @@ fn get_op<'a, C: StatusSource + Sync>(
 }
 
 /// Builds a registry holding the `status get` operation for source `C`.
-pub fn status_registry<C: StatusSource + op_registry::Resolve + 'static>(opts: StatusOptions) -> Registry<C> {
+pub fn status_registry<C: StatusSource + op_registry::Resolve + 'static>(
+    opts: StatusOptions,
+) -> Registry<C> {
     let mut registry = Registry::<C>::new();
     let max = opts.max_components;
     let watch = opts.watch;

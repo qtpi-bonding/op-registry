@@ -3,8 +3,8 @@
 
 use crate::registry::TypedUnary;
 use crate::{
-    cli, Access, Audience, CallError, CallPath, CliContext, Descriptor, ErrorCodeEntry, Op, OpKind, OpParams,
-    OpSpec, Registry, RenderText, Resolve,
+    cli, Access, Audience, CallError, CallPath, CliContext, Descriptor, ErrorCodeEntry, Op, OpKind,
+    OpParams, OpSpec, Registry, RenderText, Resolve,
 };
 use anyhow::{anyhow, Result};
 use coded_error::{CodeCatalog, ErrorClass};

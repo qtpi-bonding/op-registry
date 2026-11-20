@@ -650,7 +650,10 @@ fn each_stderr_and_stdout_line_is_one_write() {
         ));
         for (stream, writes) in [("stdout", &stdout), ("stderr", &stderr)] {
             let writes = writes.0.lock().unwrap();
-            assert!(!writes.is_empty() || stream == "stdout", "{args:?}: no {stream}");
+            assert!(
+                !writes.is_empty() || stream == "stdout",
+                "{args:?}: no {stream}"
+            );
             for write in writes.iter() {
                 let text = String::from_utf8_lossy(write);
                 assert!(

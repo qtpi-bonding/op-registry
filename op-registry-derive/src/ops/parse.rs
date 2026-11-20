@@ -117,7 +117,11 @@ impl Parse for Ops {
             syn::Error::new(header_span, "missing `Ctx = <type>;` at the top of `ops!`")
         })?;
         let bin = match (bin, version, about) {
-            (Some(bin), Some(version), Some(about)) => Some(Bin { bin, version, about }),
+            (Some(bin), Some(version), Some(about)) => Some(Bin {
+                bin,
+                version,
+                about,
+            }),
             (None, None, None) => None,
             _ => {
                 return Err(syn::Error::new(
@@ -148,7 +152,10 @@ impl Parse for Ops {
 
 fn once<T>(slot: &mut Option<T>, key: &Ident, value: T) -> Result<()> {
     if slot.is_some() {
-        return Err(syn::Error::new(key.span(), format!("`{key}` is given twice")));
+        return Err(syn::Error::new(
+            key.span(),
+            format!("`{key}` is given twice"),
+        ));
     }
     *slot = Some(value);
     Ok(())
@@ -173,16 +180,27 @@ fn docs(attrs: &[Attribute], at: Span) -> Result<(String, String)> {
                 ))
             }
         };
-        lines.push(text.strip_prefix(' ').unwrap_or(&text).trim_end().to_owned());
+        lines.push(
+            text.strip_prefix(' ')
+                .unwrap_or(&text)
+                .trim_end()
+                .to_owned(),
+        );
     }
     while lines.last().is_some_and(String::is_empty) {
         lines.pop();
     }
     let first = lines.iter().position(|l| !l.is_empty()).ok_or_else(|| {
-        syn::Error::new(at, "an op needs a doc comment: its first paragraph is the summary")
+        syn::Error::new(
+            at,
+            "an op needs a doc comment: its first paragraph is the summary",
+        )
     })?;
     let lines = &lines[first..];
-    let end = lines.iter().position(String::is_empty).unwrap_or(lines.len());
+    let end = lines
+        .iter()
+        .position(String::is_empty)
+        .unwrap_or(lines.len());
     let summary = lines[..end].join(" ");
     let rest = lines[end..]
         .iter()
@@ -224,7 +242,10 @@ impl Parse for Entry {
         while !body.is_empty() {
             let key: Ident = body.parse()?;
             if seen.contains(&key.to_string()) {
-                return Err(syn::Error::new(key.span(), format!("`{key}` is given twice")));
+                return Err(syn::Error::new(
+                    key.span(),
+                    format!("`{key}` is given twice"),
+                ));
             }
             seen.push(key.to_string());
             body.parse::<Token![:]>()?;
@@ -254,7 +275,9 @@ impl Parse for Entry {
                         if !ACCESS_WORDS.contains(&word.to_string().as_str()) {
                             return Err(syn::Error::new(
                                 word.span(),
-                                format!("unknown access `{word}`: expected one of {ACCESS_WORDS:?}"),
+                                format!(
+                                    "unknown access `{word}`: expected one of {ACCESS_WORDS:?}"
+                                ),
                             ));
                         }
                     }
@@ -359,8 +382,9 @@ impl Parse for Entry {
         }
 
         let at = path.span();
-        let params = params
-            .ok_or_else(|| syn::Error::new(at, "missing `params: <type>` (required on every op)"))?;
+        let params = params.ok_or_else(|| {
+            syn::Error::new(at, "missing `params: <type>` (required on every op)")
+        })?;
         if kinds.len() > 1 {
             return Err(syn::Error::new(
                 kinds[1].0.span(),
@@ -368,10 +392,17 @@ impl Parse for Entry {
             ));
         }
         let (_, kind, func) = kinds.pop().ok_or_else(|| {
-            syn::Error::new(at, "missing the kind: give one of `op:`, `local:`, `stream:` or `list:`")
+            syn::Error::new(
+                at,
+                "missing the kind: give one of `op:`, `local:`, `stream:` or `list:`",
+            )
         })?;
-        let access = access
-            .ok_or_else(|| syn::Error::new(at, "missing `access:` (reads, writes, network, spawns or destructive)"))?;
+        let access = access.ok_or_else(|| {
+            syn::Error::new(
+                at,
+                "missing `access:` (reads, writes, network, spawns or destructive)",
+            )
+        })?;
         let audience = audience
             .ok_or_else(|| syn::Error::new(at, "missing `audience:` (agent, owner or dev)"))?;
 
@@ -386,7 +417,10 @@ impl Parse for Entry {
                 .ok_or_else(|| syn::Error::new(at, "a `list:` entry needs `item: <type>`"))?
         } else {
             if let Some((key, _)) = item {
-                return Err(syn::Error::new(key.span(), "`item:` goes only with `list:`; use `output:`"));
+                return Err(syn::Error::new(
+                    key.span(),
+                    "`item:` goes only with `list:`; use `output:`",
+                ));
             }
             output
                 .map(|(_, t)| t)
@@ -401,11 +435,17 @@ impl Parse for Entry {
                 ));
             }
         } else if let Some(key) = list_only.first() {
-            return Err(syn::Error::new(key.span(), format!("`{key}:` goes only with `list:`")));
+            return Err(syn::Error::new(
+                key.span(),
+                format!("`{key}:` goes only with `list:`"),
+            ));
         }
         if kind != Kind::Stream {
             if let Some(key) = cursor_key {
-                return Err(syn::Error::new(key.span(), "`cursor:` goes only with `stream:`"));
+                return Err(syn::Error::new(
+                    key.span(),
+                    "`cursor:` goes only with `stream:`",
+                ));
             }
         }
         if let Some(key) = default_key {

@@ -121,9 +121,9 @@ impl Redactor {
 
     /// `text` with each secret replaced by `<secret>`, longest first.
     pub fn redact(&self, text: &str) -> String {
-        self.secrets
-            .iter()
-            .fold(text.to_owned(), |out, s| out.replace(s.as_str(), "<secret>"))
+        self.secrets.iter().fold(text.to_owned(), |out, s| {
+            out.replace(s.as_str(), "<secret>")
+        })
     }
 }
 

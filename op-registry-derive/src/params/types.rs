@@ -8,7 +8,10 @@ pub enum Base {
     String,
     Path,
     /// An integer type; `signed` allows negative values.
-    Int { ty: Type, signed: bool },
+    Int {
+        ty: Type,
+        signed: bool,
+    },
     Float,
     Bool,
     /// An `#[op(value_enum)]` type.
@@ -43,7 +46,9 @@ impl Base {
     /// resolved (file, stdin) at decode time.
     pub fn clap_ty(&self) -> proc_macro2::TokenStream {
         match self {
-            Base::Json | Base::Input | Base::Ref | Base::SecretFile => quote::quote!(::std::string::String),
+            Base::Json | Base::Input | Base::Ref | Base::SecretFile => {
+                quote::quote!(::std::string::String)
+            }
             b => b.ty(),
         }
     }

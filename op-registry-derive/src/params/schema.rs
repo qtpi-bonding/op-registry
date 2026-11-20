@@ -13,7 +13,9 @@ fn json_path() -> TokenStream {
 fn base_schema(base: &Base) -> TokenStream {
     let json = json_path();
     match base {
-        Base::String | Base::Path | Base::Ref | Base::SecretFile => quote!(#json::json!({"type": "string"})),
+        Base::String | Base::Path | Base::Ref | Base::SecretFile => {
+            quote!(#json::json!({"type": "string"}))
+        }
         Base::Int { signed: true, .. } => quote!(#json::json!({"type": "integer"})),
         Base::Int { signed: false, .. } => {
             quote!(#json::json!({"type": "integer", "minimum": 0}))
@@ -80,7 +82,9 @@ fn default_schema(f: &Field) -> TokenStream {
         return quote!();
     }
     let value = match base {
-        Base::Enum(ty) => quote!(#json::json!(::op_registry::__private::rt::enum_name::<#ty>(&(#e)))),
+        Base::Enum(ty) => {
+            quote!(#json::json!(::op_registry::__private::rt::enum_name::<#ty>(&(#e))))
+        }
         _ => quote!(#json::to_value(&(#e)).expect("op-registry: default is not serialisable")),
     };
     quote!(object.insert("default".to_owned(), #value);)
@@ -106,8 +110,10 @@ pub fn input_schema_fn(fields: &[Field]) -> TokenStream {
         } else {
             default
         };
-        let any_json = matches!(&f.shape, Shape::Plain(Base::Json) | Shape::Optional(Base::Json))
-            && f.help.is_empty();
+        let any_json = matches!(
+            &f.shape,
+            Shape::Plain(Base::Json) | Shape::Optional(Base::Json)
+        ) && f.help.is_empty();
         let description = if any_json {
             quote!(object.insert("description".to_owned(), #json::json!("Any JSON value."));)
         } else {
@@ -124,10 +130,12 @@ pub fn input_schema_fn(fields: &[Field]) -> TokenStream {
             #require
         }
     });
-    let groups = one_of_groups(fields).into_iter().map(|(_, optional, members)| {
-        let keys = members.iter().map(|f| &f.key);
-        quote!(builder.one_of(&[#(#keys),*], #optional);)
-    });
+    let groups = one_of_groups(fields)
+        .into_iter()
+        .map(|(_, optional, members)| {
+            let keys = members.iter().map(|f| &f.key);
+            quote!(builder.one_of(&[#(#keys),*], #optional);)
+        });
     let depends = fields.iter().filter_map(|f| {
         let other = other_of(fields, f)?;
         let (other, key) = (&other.key, &f.key);
@@ -148,7 +156,9 @@ pub fn input_schema_fn(fields: &[Field]) -> TokenStream {
 pub fn one_of_groups(fields: &[Field]) -> Vec<(String, bool, Vec<&Field>)> {
     let mut groups: Vec<(String, bool, Vec<&Field>)> = Vec::new();
     for f in fields {
-        let Some((name, optional)) = &f.one_of else { continue };
+        let Some((name, optional)) = &f.one_of else {
+            continue;
+        };
         match groups.iter_mut().find(|g| &g.0 == name) {
             Some(g) => g.2.push(f),
             None => groups.push((name.clone(), *optional, vec![f])),
@@ -223,16 +233,18 @@ pub fn fields_fn(fields: &[Field]) -> TokenStream {
 /// `validate()`: the relations, then each flattened group's own.
 pub fn validate_fn(fields: &[Field]) -> TokenStream {
     let rt = quote!(::op_registry::__private::rt);
-    let groups = one_of_groups(fields).into_iter().map(|(name, optional, members)| {
-        let present = members.iter().filter_map(|f| f.present());
-        quote! {
-            #rt::check_one_of(
-                #name,
-                [#(#present),*].into_iter().filter(|p| *p).count(),
-                #optional,
-            )?;
-        }
-    });
+    let groups = one_of_groups(fields)
+        .into_iter()
+        .map(|(name, optional, members)| {
+            let present = members.iter().filter_map(|f| f.present());
+            quote! {
+                #rt::check_one_of(
+                    #name,
+                    [#(#present),*].into_iter().filter(|p| *p).count(),
+                    #optional,
+                )?;
+            }
+        });
     let requires = fields.iter().filter_map(|f| {
         let other = other_of(fields, f)?;
         let (present, other_present) = (f.present()?, other.present()?);
@@ -263,7 +275,9 @@ pub fn secrets_fn(fields: &[Field]) -> TokenStream {
     let pushes = fields.iter().filter_map(|f| {
         let ident = &f.ident;
         match &f.shape {
-            Shape::Flatten(_) => Some(quote!(out.extend(::op_registry::OpParams::secrets(&self.#ident));)),
+            Shape::Flatten(_) => {
+                Some(quote!(out.extend(::op_registry::OpParams::secrets(&self.#ident));))
+            }
             Shape::Plain(Base::SecretFile) | Shape::Optional(Base::SecretFile) => {
                 Some(quote!(#rt::SecretValue::push_secrets(&self.#ident, &mut out);))
             }

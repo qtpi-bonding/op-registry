@@ -10,8 +10,7 @@
 use crate::registry::{Entry, Run, TypedStream, TypedUnary};
 use crate::{
     CallError, CallFailure, CallInfo, CallOptions, CallPath, Cursor, Op, OpParams, ParseCx, Paths,
-    Redactor,
-    RefSlot, Registry, Resolve, Resolved,
+    Redactor, RefSlot, Registry, Resolve, Resolved,
 };
 use anyhow::Result;
 use futures_util::future::BoxFuture;
@@ -92,8 +91,16 @@ impl<C: Resolve> Registry<C> {
     ) -> Invocation<Value> {
         match self.decode_json(name, args, &path, false) {
             Ok(params) => {
-                self.call_decoded(name, params, ctx, opts, path, want_text, Redactor::default())
-                    .await
+                self.call_decoded(
+                    name,
+                    params,
+                    ctx,
+                    opts,
+                    path,
+                    want_text,
+                    Redactor::default(),
+                )
+                .await
             }
             Err(err) => Invocation::failed(err),
         }

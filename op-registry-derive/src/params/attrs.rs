@@ -128,8 +128,8 @@ impl Field {
                     "env" if allow_env => env = Some(m.value()?.parse::<syn::LitStr>()?.value()),
                     "long" | "short" | "positional" | "env" => {
                         return Err(m.error(format!(
-                            "unknown #[op] key `{key}`: flags are the long kebab-case field name only"
-                        )))
+                        "unknown #[op] key `{key}`: flags are the long kebab-case field name only"
+                    )))
                     }
                     _ => return Err(m.error(format!("unknown #[op] key `{key}`"))),
                 }
@@ -138,9 +138,23 @@ impl Field {
         }
 
         if flatten {
-            return Self::flatten(f, ident, rust_name, secret || secret_inline || default.is_some() || value_enum
-                || keys.is_some() || clearable || one_of.is_some() || requires_if.is_some()
-                || subject.is_some() || kind.is_some() || id_only || scope.is_some());
+            return Self::flatten(
+                f,
+                ident,
+                rust_name,
+                secret
+                    || secret_inline
+                    || default.is_some()
+                    || value_enum
+                    || keys.is_some()
+                    || clearable
+                    || one_of.is_some()
+                    || requires_if.is_some()
+                    || subject.is_some()
+                    || kind.is_some()
+                    || id_only
+                    || scope.is_some(),
+            );
         }
         let shape = classify(&f.ty, value_enum).ok_or_else(|| {
             let ty = &f.ty;
@@ -176,7 +190,16 @@ impl Field {
                 format!("field `{rust_name}`: secret does not apply to a value_enum field"),
             ));
         }
-        let reference = ref_info(&f.ty, &rust_name, &shape, subject, kind, id_only, scope, default.is_some())?;
+        let reference = ref_info(
+            &f.ty,
+            &rust_name,
+            &shape,
+            subject,
+            kind,
+            id_only,
+            scope,
+            default.is_some(),
+        )?;
         if one_of.is_some() && !matches!(shape, Shape::Optional(_)) {
             return Err(syn::Error::new_spanned(
                 &f.ty,
@@ -304,7 +327,12 @@ fn ref_info(
         shape,
         Shape::Plain(Base::Ref) | Shape::Optional(Base::Ref) | Shape::Repeated(Base::Ref)
     );
-    let err = |msg: String| Err(syn::Error::new_spanned(ty, format!("field `{rust_name}`: {msg}")));
+    let err = |msg: String| {
+        Err(syn::Error::new_spanned(
+            ty,
+            format!("field `{rust_name}`: {msg}"),
+        ))
+    };
     if !is_ref {
         if subject.is_some() || kind.is_some() || id_only || scope.is_some() {
             return err("subject, kind, id_only and scope apply only to a `Ref` field".into());
@@ -316,18 +344,30 @@ fn ref_info(
     }
     match (subject, kind) {
         (Some(_), Some(_)) => err("subject and kind are exclusive".into()),
-        (None, None) => err("a `Ref` field needs `#[op(subject = \"..\")]` or `#[op(kind = \"..\")]`".into()),
+        (None, None) => {
+            err("a `Ref` field needs `#[op(subject = \"..\")]` or `#[op(kind = \"..\")]`".into())
+        }
         (Some(kind), None) => {
             if !matches!(shape, Shape::Plain(_)) {
                 return err("the subject is a plain `Ref`".into());
             }
-            Ok(Some(RefInfo { kind, subject: true, id_only, scope: scope.unwrap_or_default() }))
+            Ok(Some(RefInfo {
+                kind,
+                subject: true,
+                id_only,
+                scope: scope.unwrap_or_default(),
+            }))
         }
         (None, Some(kind)) => {
             if id_only || scope.is_some() {
                 return err("id_only and scope belong to the subject".into());
             }
-            Ok(Some(RefInfo { kind, subject: false, id_only: false, scope: Vec::new() }))
+            Ok(Some(RefInfo {
+                kind,
+                subject: false,
+                id_only: false,
+                scope: Vec::new(),
+            }))
         }
     }
 }
@@ -345,7 +385,9 @@ fn is_enum_shape_any(shape: &Shape) -> bool {
 fn is_enum_shape(shape: &Shape) -> bool {
     matches!(
         shape,
-        Shape::Plain(Base::Enum(_)) | Shape::Optional(Base::Enum(_)) | Shape::Repeated(Base::Enum(_))
+        Shape::Plain(Base::Enum(_))
+            | Shape::Optional(Base::Enum(_))
+            | Shape::Repeated(Base::Enum(_))
     )
 }
 
