@@ -4,8 +4,12 @@
 pub mod base64;
 #[doc(hidden)]
 pub mod rt;
+#[cfg(feature = "secrets")]
+mod secret;
 mod types;
 
+#[cfg(feature = "secrets")]
+pub use secret::{Secret, SecretFile};
 pub use types::{Input, Json, Patch};
 
 use std::io::Read;
@@ -65,6 +69,54 @@ impl ParseCx {
             })
         })?;
         Ok(bytes)
+    }
+}
+
+/// Replaces known secret strings in text with `<secret>`.
+///
+/// Built from `OpParams::secrets()` for each call; it keeps exact strings
+/// only, so text an app has transformed (cut, re-encoded) is not caught.
+#[derive(Clone, Default)]
+pub struct Redactor {
+    /// Longest first.
+    secrets: Vec<String>,
+}
+
+impl std::fmt::Debug for Redactor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Redactor")
+            .field("secrets", &self.secrets.len())
+            .finish()
+    }
+}
+
+impl Redactor {
+    /// The shortest value worth redacting; shorter ones would mangle text.
+    const MIN_LEN: usize = 4;
+
+    /// Adds a secret: the whole value and each non-empty line of it, read as
+    /// UTF-8 (lossy). Values shorter than 4 bytes are skipped.
+    pub fn add(&mut self, bytes: &[u8]) {
+        let text = String::from_utf8_lossy(bytes);
+        let lines = text.lines().map(str::trim);
+        for candidate in std::iter::once(text.as_ref()).chain(lines) {
+            if candidate.len() >= Self::MIN_LEN && !self.secrets.iter().any(|s| s == candidate) {
+                self.secrets.push(candidate.to_owned());
+            }
+        }
+        self.secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    }
+
+    /// Whether nothing is to be redacted.
+    pub fn is_empty(&self) -> bool {
+        self.secrets.is_empty()
+    }
+
+    /// `text` with each secret replaced by `<secret>`, longest first.
+    pub fn redact(&self, text: &str) -> String {
+        self.secrets
+            .iter()
+            .fold(text.to_owned(), |out, s| out.replace(s.as_str(), "<secret>"))
     }
 }
 

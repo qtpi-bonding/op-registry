@@ -11,6 +11,10 @@ fn decode(f: &Field) -> TokenStream {
     let key = &f.key;
     // One optional scalar of a base type; an enum goes through its names.
     let get = |b: &Base| match b {
+        Base::SecretFile => {
+            let (inline, hide) = (f.secret_inline, f.secret);
+            quote!(#rt::secret_file_json(&o, #key, #inline, #hide)?)
+        }
         Base::Enum(ty) => quote! {
             #rt::get::<::std::string::String>(&o, #key)?
                 .map(|s| #rt::enum_value::<#ty>(#key, &s))

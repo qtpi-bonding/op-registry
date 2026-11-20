@@ -39,8 +39,20 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let from_json = json_gen::from_json_fn(&fields);
     let validate = schema::validate_fn(&fields);
     let ref_slots = ref_gen::ref_slots_fn(&fields);
+    let secrets = schema::secrets_fn(&fields);
+    let needs_secrets = fields.iter().any(|f| {
+        matches!(
+            f.shape,
+            types::Shape::Plain(types::Base::SecretFile)
+                | types::Shape::Optional(types::Base::SecretFile)
+        )
+    });
+    let require_secrets = needs_secrets.then(|| {
+        quote!(const _: () = { ::op_registry::__require_secrets!(); };)
+    });
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     Ok(quote! {
+        #require_secrets
         impl #impl_generics ::op_registry::OpParams for #name #ty_generics #where_clause {
             #fields_fn
             #schema_fn
@@ -49,6 +61,7 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             #from_json
             #validate
             #ref_slots
+            #secrets
         }
     })
 }

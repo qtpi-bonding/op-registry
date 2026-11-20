@@ -367,3 +367,130 @@ pub fn scope(pairs: Vec<(&str, Option<String>)>) -> crate::Scope {
             .filter_map(|(name, value)| Some((name.to_owned(), value?))),
     )
 }
+
+/// The text form of a `#[op(secret)]` field's value, for redaction.
+pub trait SecretValue {
+    fn push_secrets(&self, out: &mut Vec<Vec<u8>>);
+}
+
+macro_rules! secret_by_to_string {
+    ($($t:ty),*) => {$(
+        impl SecretValue for $t {
+            fn push_secrets(&self, out: &mut Vec<Vec<u8>>) {
+                out.push(self.to_string().into_bytes());
+            }
+        }
+    )*};
+}
+secret_by_to_string!(String, i32, i64, u8, u16, u32, u64, usize, f64);
+
+impl SecretValue for bool {
+    fn push_secrets(&self, _out: &mut Vec<Vec<u8>>) {}
+}
+
+impl SecretValue for std::path::PathBuf {
+    fn push_secrets(&self, out: &mut Vec<Vec<u8>>) {
+        out.push(self.to_string_lossy().into_owned().into_bytes());
+    }
+}
+
+impl SecretValue for crate::Ref {
+    fn push_secrets(&self, out: &mut Vec<Vec<u8>>) {
+        out.push(self.as_raw().as_bytes().to_vec());
+    }
+}
+
+impl SecretValue for Json {
+    fn push_secrets(&self, out: &mut Vec<Vec<u8>>) {
+        out.push(self.0.to_string().into_bytes());
+    }
+}
+
+impl SecretValue for Input {
+    fn push_secrets(&self, out: &mut Vec<Vec<u8>>) {
+        out.push(self.0.clone());
+    }
+}
+
+impl SecretValue for BTreeMap<String, String> {
+    fn push_secrets(&self, out: &mut Vec<Vec<u8>>) {
+        out.extend(self.values().map(|v| v.clone().into_bytes()));
+    }
+}
+
+impl<T: SecretValue> SecretValue for Option<T> {
+    fn push_secrets(&self, out: &mut Vec<Vec<u8>>) {
+        if let Some(v) = self {
+            v.push_secrets(out);
+        }
+    }
+}
+
+impl<T: SecretValue> SecretValue for Vec<T> {
+    fn push_secrets(&self, out: &mut Vec<Vec<u8>>) {
+        self.iter().for_each(|v| v.push_secrets(out));
+    }
+}
+
+impl<T: SecretValue> SecretValue for Patch<T> {
+    fn push_secrets(&self, out: &mut Vec<Vec<u8>>) {
+        if let Patch::Set(v) = self {
+            v.push_secrets(out);
+        }
+    }
+}
+
+#[cfg(feature = "secrets")]
+impl SecretValue for crate::SecretFile {
+    fn push_secrets(&self, out: &mut Vec<Vec<u8>>) {
+        out.push(self.bytes().to_vec());
+        if self.path_is_secret() {
+            if let Some(path) = self.path() {
+                out.push(path.to_string_lossy().into_owned().into_bytes());
+            }
+        }
+    }
+}
+
+/// A `SecretFile` flag value: a path, or `-` for stdin.
+#[cfg(feature = "secrets")]
+pub fn secret_file_arg(
+    cx: &mut ParseCx,
+    flag: &str,
+    text: &str,
+    hide_path: bool,
+) -> Result<crate::SecretFile> {
+    let file = if text == "-" {
+        crate::SecretFile::new(None, cx.read_stdin(flag)?)
+    } else {
+        crate::SecretFile::new(Some(text.into()), read_path(flag, text)?)
+    };
+    Ok(if hide_path { file.hide_path() } else { file })
+}
+
+/// A `SecretFile` JSON value: a path string, or with `inline` also
+/// `{"inline": "<base64>"}`. Absent and `null` are `None`.
+#[cfg(feature = "secrets")]
+pub fn secret_file_json(
+    object: &Map<String, Value>,
+    key: &str,
+    inline: bool,
+    hide_path: bool,
+) -> Result<Option<crate::SecretFile>> {
+    let file = match object.get(key) {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(path)) => {
+            crate::SecretFile::new(Some(path.into()), read_path(key, path)?)
+        }
+        Some(Value::Object(o)) if inline => {
+            let text = match (o.len(), o.get("inline")) {
+                (1, Some(Value::String(text))) => text,
+                _ => return Err(invalid(key, "expected {\"inline\": \"<base64>\"}")),
+            };
+            let bytes = super::base64::decode(text).map_err(|e| invalid(key, e))?;
+            crate::SecretFile::new(None, bytes)
+        }
+        Some(_) => return Err(invalid(key, "expected a path string")),
+    };
+    Ok(Some(if hide_path { file.hide_path() } else { file }))
+}

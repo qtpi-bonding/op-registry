@@ -1,5 +1,6 @@
 //! Notices: out-of-band messages an operation sends while it runs.
 
+use crate::Redactor;
 use std::sync::Arc;
 
 /// A message an operation sends to its caller while it runs.
@@ -37,7 +38,36 @@ impl std::fmt::Debug for Notices {
     }
 }
 
+struct RedactingSink {
+    inner: Arc<dyn NoticeSink>,
+    redactor: Redactor,
+}
+
+impl NoticeSink for RedactingSink {
+    fn send(&self, notice: Notice) {
+        self.inner.send(match notice {
+            Notice::Text(text) => Notice::Text(self.redactor.redact(&text)),
+            Notice::Progress { done, total, label } => Notice::Progress {
+                done,
+                total,
+                label: self.redactor.redact(&label),
+            },
+        });
+    }
+}
+
 impl Notices {
+    /// A handle whose text and labels are redacted before they reach the sink.
+    pub(crate) fn redacting(self, redactor: &Redactor) -> Self {
+        match self.0 {
+            Some(inner) if !redactor.is_empty() => Self(Some(Arc::new(RedactingSink {
+                inner,
+                redactor: redactor.clone(),
+            }))),
+            other => Self(other),
+        }
+    }
+
     /// Creates a handle that sends to `sink`.
     pub fn new(sink: Arc<dyn NoticeSink>) -> Self {
         Self(Some(sink))

@@ -19,6 +19,8 @@ pub enum Base {
     Input,
     /// `op_registry::Ref`: a reference resolved before the op runs.
     Ref,
+    /// `op_registry::SecretFile`: secret bytes from a path or stdin.
+    SecretFile,
 }
 
 impl Base {
@@ -33,6 +35,7 @@ impl Base {
             Base::Json => quote!(::op_registry::Json),
             Base::Input => quote!(::op_registry::Input),
             Base::Ref => quote!(::op_registry::Ref),
+            Base::SecretFile => quote!(::op_registry::SecretFile),
         }
     }
 
@@ -40,7 +43,7 @@ impl Base {
     /// resolved (file, stdin) at decode time.
     pub fn clap_ty(&self) -> proc_macro2::TokenStream {
         match self {
-            Base::Json | Base::Input | Base::Ref => quote::quote!(::std::string::String),
+            Base::Json | Base::Input | Base::Ref | Base::SecretFile => quote::quote!(::std::string::String),
             b => b.ty(),
         }
     }
@@ -103,6 +106,7 @@ fn base(ty: &Type, value_enum: bool) -> Option<Base> {
         "Json" => Base::Json,
         "Input" => Base::Input,
         "Ref" => Base::Ref,
+        "SecretFile" => Base::SecretFile,
         "i32" | "i64" => Base::Int {
             ty: ty.clone(),
             signed: true,
@@ -128,13 +132,13 @@ pub fn classify(ty: &Type, value_enum: bool) -> Option<Shape> {
             }
             "Vec" => {
                 return match base(inner, value_enum)? {
-                    Base::Bool | Base::Input => None,
+                    Base::Bool | Base::Input | Base::SecretFile => None,
                     b => Some(Shape::Repeated(b)),
                 }
             }
             "Patch" => {
                 return match base(inner, value_enum)? {
-                    Base::Bool | Base::Json | Base::Input | Base::Ref => None,
+                    Base::Bool | Base::Json | Base::Input | Base::Ref | Base::SecretFile => None,
                     b => Some(Shape::Patch(b)),
                 }
             }

@@ -3,7 +3,7 @@
 use syn::ext::IdentExt;
 use syn::{Expr, ExprArray, ExprLit, Ident, Lit};
 
-use super::types::{classify, Shape};
+use super::types::{classify, Base, Shape};
 
 pub struct Field {
     pub ident: Ident,
@@ -18,6 +18,8 @@ pub struct Field {
     /// A closed key set for map fields.
     pub keys: Option<Vec<String>>,
     pub secret: bool,
+    /// A `SecretFile` that also takes `{"inline": base64}` on JSON paths.
+    pub secret_inline: bool,
     /// `(group, optional)` from `one_of` / `one_of_optional`.
     pub one_of: Option<(String, bool)>,
     /// The Rust name of the field this one is required with.
@@ -46,6 +48,7 @@ impl Field {
         let mut value_enum = false;
         let mut keys = None;
         let mut secret = false;
+        let mut secret_inline = false;
         let mut one_of: Option<(String, bool)> = None;
         let mut requires_if = None;
         let mut clearable = false;
@@ -61,6 +64,7 @@ impl Field {
                     "default" => default = Some(m.value()?.parse::<Expr>()?),
                     "value_enum" => value_enum = true,
                     "secret" => secret = true,
+                    "secret_inline" => secret_inline = true,
                     "clearable" => clearable = true,
                     "flatten" => flatten = true,
                     "id_only" => id_only = true,
@@ -125,7 +129,7 @@ impl Field {
         }
 
         if flatten {
-            return Self::flatten(f, ident, rust_name, secret || default.is_some() || value_enum
+            return Self::flatten(f, ident, rust_name, secret || secret_inline || default.is_some() || value_enum
                 || keys.is_some() || clearable || one_of.is_some() || requires_if.is_some()
                 || subject.is_some() || kind.is_some() || id_only || scope.is_some());
         }
@@ -145,6 +149,22 @@ impl Field {
                 format!(
                     "field `{rust_name}`: `#[op(clearable)]` and a `Patch<T>` field type go together"
                 ),
+            ));
+        }
+        let is_secret_file = matches!(
+            shape,
+            Shape::Plain(Base::SecretFile) | Shape::Optional(Base::SecretFile)
+        );
+        if secret_inline && !is_secret_file {
+            return Err(syn::Error::new_spanned(
+                &f.ty,
+                format!("field `{rust_name}`: secret_inline applies only to a `SecretFile` field"),
+            ));
+        }
+        if secret && is_enum_shape_any(&shape) {
+            return Err(syn::Error::new_spanned(
+                &f.ty,
+                format!("field `{rust_name}`: secret does not apply to a value_enum field"),
             ));
         }
         let reference = ref_info(&f.ty, &rust_name, &shape, subject, kind, id_only, scope, default.is_some())?;
@@ -195,6 +215,7 @@ impl Field {
             default,
             keys,
             secret,
+            secret_inline,
             one_of,
             requires_if,
             reference,
@@ -229,6 +250,7 @@ impl Field {
             default: None,
             keys: None,
             secret: false,
+            secret_inline: false,
             one_of: None,
             requires_if: None,
             reference: None,
@@ -267,7 +289,6 @@ fn ref_info(
     scope: Option<Vec<String>>,
     has_default: bool,
 ) -> syn::Result<Option<RefInfo>> {
-    use super::types::Base;
     let is_ref = matches!(
         shape,
         Shape::Plain(Base::Ref) | Shape::Optional(Base::Ref) | Shape::Repeated(Base::Ref)
@@ -300,8 +321,17 @@ fn ref_info(
     }
 }
 
+fn is_enum_shape_any(shape: &Shape) -> bool {
+    matches!(
+        shape,
+        Shape::Plain(Base::Enum(_))
+            | Shape::Optional(Base::Enum(_))
+            | Shape::Repeated(Base::Enum(_))
+            | Shape::Patch(Base::Enum(_))
+    )
+}
+
 fn is_enum_shape(shape: &Shape) -> bool {
-    use super::types::Base;
     matches!(
         shape,
         Shape::Plain(Base::Enum(_)) | Shape::Optional(Base::Enum(_)) | Shape::Repeated(Base::Enum(_))
@@ -345,7 +375,6 @@ fn doc(f: &syn::Field) -> String {
 impl Field {
     /// The declared default as an expression of the field's type.
     pub fn default_value(&self) -> Option<proc_macro2::TokenStream> {
-        use super::types::Base;
         use quote::quote;
         let e = self.default.as_ref()?;
         let name = &self.rust_name;

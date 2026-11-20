@@ -125,6 +125,14 @@ fn decode(f: &Field) -> TokenStream {
                     .map(|s| #rt::input_arg(_cx, #flag, s))
                     .transpose()?
             },
+            Base::SecretFile => {
+                let hide = f.secret;
+                quote! {
+                    m.get_one::<#ty>(#id)
+                        .map(|s| #rt::secret_file_arg(_cx, #flag, s, #hide))
+                        .transpose()?
+                }
+            }
             Base::Ref => quote!(m.get_one::<#ty>(#id).cloned().map(::op_registry::Ref::new)),
             _ => quote!(m.get_one::<#ty>(#id).cloned()),
         }

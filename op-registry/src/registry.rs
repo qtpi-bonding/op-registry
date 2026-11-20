@@ -148,6 +148,8 @@ pub(crate) struct Entry<C> {
     pub decode_matches: fn(&clap::ArgMatches, &mut ParseCx) -> Result<Box<dyn Any + Send>>,
     /// Resolves the refs of erased parameters in place.
     pub resolve_refs: ResolveRefs<C>,
+    /// The secrets of erased parameters, for redaction.
+    pub secrets: fn(&(dyn Any + Send)) -> Vec<Vec<u8>>,
     pub run: Run<C>,
 }
 
@@ -455,6 +457,12 @@ impl<C: Resolve + 'static> Registry<C> {
                     .expect("the entry's decoder and resolver share one parameter type");
                 Box::pin(registry.resolve_refs(ctx, params))
             },
+            secrets: |params| {
+                params
+                    .downcast_ref::<P>()
+                    .expect("the entry's decoder and secrets share one parameter type")
+                    .secrets()
+            },
             run: Run::Unary(run),
         });
     }
@@ -542,6 +550,12 @@ impl<C: Resolve + 'static> Registry<C> {
                     .downcast_mut::<P>()
                     .expect("the entry's decoder and resolver share one parameter type");
                 Box::pin(registry.resolve_refs(ctx, params))
+            },
+            secrets: |params| {
+                params
+                    .downcast_ref::<P>()
+                    .expect("the entry's decoder and secrets share one parameter type")
+                    .secrets()
             },
             run: Run::Stream(run),
         });

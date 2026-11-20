@@ -19,10 +19,28 @@ pub use descriptor::*;
 pub use hook::{CallHook, CallInfo, CallPath, NoHook};
 pub use notices::{Notice, NoticeSink, Notices};
 pub use op_registry_derive::OpParams;
-pub use output::OutputSchema;
+pub use output::{write_private, OutputSchema};
 pub use params::*;
 pub use refs::{Ref, RefSlot, Resolve, Resolved, Scope};
 pub use registry::{OpSpec, Registry};
+
+/// Fails the build of a `SecretFile` field when the `secrets` feature is off.
+#[cfg(not(feature = "secrets"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __require_secrets {
+    () => {
+        compile_error!("a `SecretFile` field needs op-registry's `secrets` feature: enable it");
+    };
+}
+
+/// Nothing to check when the `secrets` feature is on.
+#[cfg(feature = "secrets")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __require_secrets {
+    () => {};
+}
 
 #[doc(hidden)]
 pub mod __private {

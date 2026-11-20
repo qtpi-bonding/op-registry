@@ -13,7 +13,7 @@ fn json_path() -> TokenStream {
 fn base_schema(base: &Base) -> TokenStream {
     let json = json_path();
     match base {
-        Base::String | Base::Path | Base::Ref => quote!(#json::json!({"type": "string"})),
+        Base::String | Base::Path | Base::Ref | Base::SecretFile => quote!(#json::json!({"type": "string"})),
         Base::Int { signed: true, .. } => quote!(#json::json!({"type": "integer"})),
         Base::Int { signed: false, .. } => {
             quote!(#json::json!({"type": "integer", "minimum": 0}))
@@ -32,6 +32,17 @@ fn base_schema(base: &Base) -> TokenStream {
 fn shape_schema(f: &Field) -> TokenStream {
     let json = json_path();
     match &f.shape {
+        Shape::Plain(Base::SecretFile) | Shape::Optional(Base::SecretFile) if f.secret_inline => {
+            quote!(#json::json!({"oneOf": [
+                {"type": "string"},
+                {
+                    "type": "object",
+                    "properties": {"inline": {"type": "string", "contentEncoding": "base64"}},
+                    "required": ["inline"],
+                    "additionalProperties": false,
+                },
+            ]}))
+        }
         Shape::Plain(b) | Shape::Optional(b) => base_schema(b),
         Shape::Patch(b) => {
             let base = base_schema(b);
@@ -65,6 +76,9 @@ fn default_schema(f: &Field) -> TokenStream {
     let (Some(e), Shape::Plain(base)) = (&f.default, &f.shape) else {
         return quote!();
     };
+    if f.secret {
+        return quote!();
+    }
     let value = match base {
         Base::Enum(ty) => quote!(#json::json!(::op_registry::__private::rt::enum_name::<#ty>(&(#e)))),
         _ => quote!(#json::to_value(&(#e)).expect("op-registry: default is not serialisable")),
@@ -87,6 +101,11 @@ pub fn input_schema_fn(fields: &[Field]) -> TokenStream {
             quote!(object.insert("description".to_owned(), #json::json!(#help));)
         };
         let default = default_schema(f);
+        let default = if f.secret {
+            quote!(object.insert("writeOnly".to_owned(), #json::json!(true));)
+        } else {
+            default
+        };
         let any_json = matches!(&f.shape, Shape::Plain(Base::Json) | Shape::Optional(Base::Json))
             && f.help.is_empty();
         let description = if any_json {
@@ -168,6 +187,9 @@ pub fn fields_fn(fields: &[Field]) -> TokenStream {
             _ if f.reference.is_some() => quote!(Ref),
             Shape::Plain(Base::Json) | Shape::Optional(Base::Json) => quote!(Json),
             Shape::Plain(Base::Input) | Shape::Optional(Base::Input) => quote!(Input),
+            Shape::Plain(Base::SecretFile) | Shape::Optional(Base::SecretFile) => {
+                quote!(SecretFile)
+            }
             Shape::Plain(_) | Shape::Optional(_) | Shape::Patch(_) => quote!(Scalar),
             Shape::Switch => quote!(Switch),
             Shape::TriState => quote!(TriState),
@@ -230,6 +252,30 @@ pub fn validate_fn(fields: &[Field]) -> TokenStream {
             #(#requires)*
             #(#nested)*
             ::std::result::Result::Ok(())
+        }
+    }
+}
+
+/// `secrets()`: the bytes of every `SecretFile` and `#[op(secret)]` field,
+/// then each flattened group's own.
+pub fn secrets_fn(fields: &[Field]) -> TokenStream {
+    let rt = quote!(::op_registry::__private::rt);
+    let pushes = fields.iter().filter_map(|f| {
+        let ident = &f.ident;
+        match &f.shape {
+            Shape::Flatten(_) => Some(quote!(out.extend(::op_registry::OpParams::secrets(&self.#ident));)),
+            Shape::Plain(Base::SecretFile) | Shape::Optional(Base::SecretFile) => {
+                Some(quote!(#rt::SecretValue::push_secrets(&self.#ident, &mut out);))
+            }
+            _ if f.secret => Some(quote!(#rt::SecretValue::push_secrets(&self.#ident, &mut out);)),
+            _ => None,
+        }
+    });
+    quote! {
+        fn secrets(&self) -> ::std::vec::Vec<::std::vec::Vec<u8>> {
+            let mut out = ::std::vec::Vec::new();
+            #(#pushes)*
+            out
         }
     }
 }

@@ -198,13 +198,15 @@ pub async fn dispatch<'a, C: Resolve>(
         Ok(CliOutput::Stream(
             registry
                 .call_stream_decoded(&descriptor.name, params, ctx, opts, cursor, CallPath::Cli)
-                .await?,
+                .await
+                .result?,
         ))
     } else {
         Ok(CliOutput::Value(
             registry
                 .call_decoded(&descriptor.name, params, ctx, opts, CallPath::Cli)
-                .await?,
+                .await
+                .result?,
         ))
     }
 }
