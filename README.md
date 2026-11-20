@@ -111,6 +111,12 @@ process exit. `cli::run_with_io` takes an `Io` (`Io::memory` for tests).
 A type used in an `ops!` block must be `pub` when the block sits in a `pub`
 module; a private type there gives rustc error E0446.
 
+## Naming
+
+Before naming flags, JSON keys or error areas, read [docs/glossary.md](docs/glossary.md):
+the shared terms and what each means. It is a reference, not a rule; a product's own
+terms go in that product's repo.
+
 ## What `ops!` declares
 
 An entry is `"noun verb" => { ... }`. The last word of the path is the verb;

@@ -759,7 +759,11 @@ below) and applied in the body.
   declare extra exits.
 - D: errors are JSON on stderr. Pretty when stdout or stderr is a terminal,
   compact when piped; `--pretty`/`--compact` force it.
-- E: `--machine`, never daemon or host. F: multimatrix merges agent-room into
+- E (revised 2026-11-20): names come from the shared glossary
+  (docs/glossary.md), a reference list with meanings, nothing banned. A grorg or
+  multimatrix "machine" record is a place (`--place`), a structmuxd is a daemon
+  (`--daemon`), `--computer` is only a real computer, an address is `--addr`
+  (dial) or `--listen` (bind), never `--host`. F: multimatrix merges agent-room into
   room. G: gait auth list never prints key material. H: structmux-migrate-keyring
   is deleted.
 - I: act by default; `--dry-run` where useful; `--yes` only for bulk
