@@ -9,7 +9,7 @@ description = "Shared status types, StatusSource and a status get operation for 
 [features]
 default = []
 registry = ["dep:op-registry", "dep:clap", "dep:schemars"]
-listen = ["registry"]
+listen = ["registry", "op-listen/registry"]
 
 [dependencies]
 anyhow = { workspace = true }

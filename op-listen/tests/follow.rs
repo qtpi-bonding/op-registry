@@ -330,10 +330,15 @@ async fn healthy_idle_connection_clears_the_budget_when_first_equals_cap() {
 
 mod stream_follow {
     use super::*;
+    #[cfg(feature = "registry")]
     use crate::common::{caller, jsonify, ok, params, source, state, Ctx, StateListener};
     use futures_util::stream::BoxStream;
-    use futures_util::{FutureExt, StreamExt};
-    use op_listen::{follow_stream, Followed, ListenError, ListenFrame};
+    #[cfg(feature = "registry")]
+    use futures_util::FutureExt;
+    use futures_util::StreamExt;
+    #[cfg(feature = "registry")]
+    use op_listen::ListenFrame;
+    use op_listen::{follow_stream, Followed, ListenError};
     use serde_json::Map;
 
     fn default_marker(cursor: Option<&ListenCursor>, resync: bool) -> Map<String, Value> {
@@ -502,6 +507,7 @@ mod stream_follow {
         assert_eq!(out.len(), 4);
     }
 
+    #[cfg(feature = "registry")]
     #[tokio::test(start_paused = true)]
     async fn resnapshot_overflow_under_follow_stream() {
         let l = StateListener::new(1, state(&[("a", "1")]), 2)
@@ -533,6 +539,7 @@ mod stream_follow {
         assert_eq!(code_of(&err), "op_listen.ended");
     }
 
+    #[cfg(feature = "registry")]
     fn jsonify_frames<'a>(
         s: BoxStream<
             'a,

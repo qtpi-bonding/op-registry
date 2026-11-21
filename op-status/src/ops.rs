@@ -15,6 +15,10 @@ use crate::source::StatusSource;
 use crate::types::StatusFilter;
 use crate::types::StatusSnapshot;
 
+/// Summary of the `status` group. A consumer that declares its own `status`
+/// group uses this text so [`Registry::merge`] accepts both.
+pub const GROUP_SUMMARY: &str = "Component status.";
+
 /// Options for [`status_registry`].
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -104,7 +108,7 @@ pub fn status_registry<C: StatusSource + op_registry::Resolve + 'static>(
     let max = opts.max_components;
     let watch = opts.watch;
     let audience = opts.audience;
-    registry.group("status", "Component status.");
+    registry.group("status", GROUP_SUMMARY);
     registry.push_op(
         OpSpec::<GetParams, StatusSnapshot> {
             access: Access::reads(),

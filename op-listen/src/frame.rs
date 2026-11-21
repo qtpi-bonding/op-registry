@@ -2,7 +2,8 @@
 
 use crate::{ListenCursor, Resumable};
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "registry", derive(schemars::JsonSchema))]
 #[serde(
     tag = "frame",
     rename_all = "snake_case",

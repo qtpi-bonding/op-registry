@@ -1,7 +1,9 @@
 //! Cursors used to resume listen streams.
 
 use crate::ListenError;
+#[cfg(feature = "registry")]
 use op_registry::Cursor;
+#[cfg(feature = "registry")]
 use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
@@ -61,6 +63,7 @@ fn bad_cursor(text: &str) -> anyhow::Error {
     })
 }
 
+#[cfg(feature = "registry")]
 impl From<ListenCursor> for Cursor {
     fn from(cursor: ListenCursor) -> Self {
         Cursor::new(cursor.to_string())
@@ -80,6 +83,7 @@ impl<'de> serde::Deserialize<'de> for ListenCursor {
     }
 }
 
+#[cfg(feature = "registry")]
 impl schemars::JsonSchema for ListenCursor {
     fn schema_name() -> Cow<'static, str> {
         Cow::Borrowed("ListenCursor")
@@ -98,6 +102,7 @@ impl schemars::JsonSchema for ListenCursor {
     }
 }
 
+#[cfg(feature = "registry")]
 impl TryFrom<&Cursor> for ListenCursor {
     type Error = anyhow::Error;
 

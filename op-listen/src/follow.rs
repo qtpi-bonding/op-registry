@@ -12,7 +12,6 @@ use crate::ListenFrame;
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use futures_util::{FutureExt, StreamExt};
-use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::VecDeque;
@@ -397,7 +396,8 @@ where
 
 /// One value of a [`follow_stream`]: a frame of the followed stream, or the
 /// marker that precedes the first frame of a reconnection.
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize)]
+#[cfg_attr(feature = "registry", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum Followed<F> {
     /// An item of the followed stream.

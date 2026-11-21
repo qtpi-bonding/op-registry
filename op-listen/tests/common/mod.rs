@@ -3,14 +3,26 @@
 
 pub mod follow;
 
-use futures_util::future::BoxFuture;
 use futures_util::stream::{self, BoxStream};
-use futures_util::{FutureExt, StreamExt};
-use op_listen::{Grant, ListenCursor, Listener, Opened, OverflowPolicy};
+use futures_util::StreamExt;
+use op_listen::ListenCursor;
+use std::collections::BTreeMap;
+
+#[cfg(feature = "registry")]
+use futures_util::future::BoxFuture;
+#[cfg(feature = "registry")]
+use futures_util::FutureExt;
+#[cfg(feature = "registry")]
+use op_listen::{Grant, Listener, Opened, OverflowPolicy};
+#[cfg(feature = "registry")]
 use op_registry::{Caller, OpParams};
-use std::collections::{BTreeMap, VecDeque};
+#[cfg(feature = "registry")]
+use std::collections::VecDeque;
+#[cfg(feature = "registry")]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(feature = "registry")]
 use std::sync::Mutex;
+#[cfg(feature = "registry")]
 use std::time::Duration;
 
 pub struct Ctx;
@@ -39,17 +51,20 @@ pub fn code_of(err: &anyhow::Error) -> &'static str {
     coded_error::facts_anyhow(err).code
 }
 
+#[cfg(feature = "registry")]
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, OpParams)]
 pub struct TopicParams {
     pub topic: String,
 }
 
+#[cfg(feature = "registry")]
 pub fn params(topic: &str) -> TopicParams {
     TopicParams {
         topic: topic.to_owned(),
     }
 }
 
+#[cfg(feature = "registry")]
 pub fn caller(name: &str) -> Caller {
     Caller(name.to_owned())
 }
@@ -58,6 +73,7 @@ pub fn lc(epoch: u64, seq: u64) -> ListenCursor {
     ListenCursor::new(epoch, seq)
 }
 
+#[cfg(feature = "registry")]
 pub fn grant(not_before: Option<ListenCursor>, recheck_every: Option<Duration>) -> Grant {
     let mut g = Grant::default();
     g.not_before = not_before;
@@ -78,6 +94,7 @@ pub fn ok(seq: u64, text: &str) -> anyhow::Result<(u64, String)> {
 pub type OpenCall = (Option<ListenCursor>, Option<ListenCursor>);
 
 /// A replay listener over an in-memory log, epoch 0.
+#[cfg(feature = "registry")]
 pub struct LogListener {
     pub log: Vec<(u64, String)>,
     pub grant: Grant,
@@ -99,6 +116,7 @@ pub struct LogListener {
     pub events: Mutex<Vec<&'static str>>,
 }
 
+#[cfg(feature = "registry")]
 impl LogListener {
     pub fn new(log: Vec<(u64, &str)>) -> Self {
         Self {
@@ -141,6 +159,7 @@ impl LogListener {
     }
 }
 
+#[cfg(feature = "registry")]
 impl Listener<Ctx> for LogListener {
     type Params = TopicParams;
     type Snapshot = ();
@@ -229,6 +248,7 @@ impl Listener<Ctx> for LogListener {
     }
 }
 
+#[cfg(feature = "registry")]
 pub struct Plan {
     pub state: BTreeMap<String, String>,
     pub seq: u64,
@@ -244,6 +264,7 @@ pub fn state(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 
 /// A snapshot listener over a state map. Each `open` consumes the next
 /// queued `Plan`; with none queued it snapshots `state`/`seq` and ends.
+#[cfg(feature = "registry")]
 pub struct StateListener {
     pub epoch: u64,
     pub state: BTreeMap<String, String>,
@@ -255,6 +276,7 @@ pub struct StateListener {
     pub opens: Mutex<Vec<OpenCall>>,
 }
 
+#[cfg(feature = "registry")]
 impl StateListener {
     pub fn new(epoch: u64, state: BTreeMap<String, String>, seq: u64) -> Self {
         Self {
@@ -292,6 +314,7 @@ impl StateListener {
     }
 }
 
+#[cfg(feature = "registry")]
 impl Listener<Ctx> for StateListener {
     type Params = TopicParams;
     type Snapshot = BTreeMap<String, String>;

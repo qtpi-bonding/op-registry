@@ -69,6 +69,7 @@ pub fn lagged(skipped: u64) -> anyhow::Error {
 ///
 /// Matches on the error type, not on the code string, so an error from another
 /// source that merely carries the same code is not treated as lag.
+#[cfg(feature = "registry")]
 pub(crate) fn is_lagged(error: &anyhow::Error) -> bool {
     matches!(
         coded_error::downcast_ref::<ListenError>(error),

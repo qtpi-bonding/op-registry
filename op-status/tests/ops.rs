@@ -4,7 +4,9 @@ use op_registry::cli::{self, Parsed};
 use op_registry::testing::{assert_parity, Mount};
 use op_registry::{mcp, Audience, CallOptions, OpParams, OpSpec, Registry};
 use op_status::ops::{status_registry, StatusOptions};
-use op_status::{Component, ServiceInfo, State, StatusFilter, StatusSource};
+use op_status::{
+    Component, ServiceInfo, State, StatusFilter, StatusSnapshot, StatusSource, GROUP_SUMMARY,
+};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -350,4 +352,76 @@ fn error_message_cannot_carry_a_long_payload_through_status_get_or_watch() {
         let msg = v["components"][0]["lastErrorMessage"].as_str().unwrap();
         assert!(msg.len() <= 256, "{}", msg.len());
     }
+}
+
+struct RemoteSource;
+
+impl op_registry::Resolve for RemoteSource {}
+
+impl StatusSource for RemoteSource {
+    fn service(&self) -> ServiceInfo {
+        ServiceInfo {
+            name: "local".into(),
+            version: "0.0.0".into(),
+        }
+    }
+    fn epoch(&self) -> u64 {
+        1
+    }
+    fn snapshot<'a>(
+        &'a self,
+        _filter: &'a StatusFilter,
+        _max: usize,
+    ) -> BoxFuture<'a, anyhow::Result<Vec<Component>>> {
+        Box::pin(async { panic!("the local snapshot must not be read") })
+    }
+    fn remote_snapshot<'a>(
+        &'a self,
+        _filter: &'a StatusFilter,
+        _max: usize,
+    ) -> Option<BoxFuture<'a, anyhow::Result<StatusSnapshot>>> {
+        Some(Box::pin(async {
+            Ok(StatusSnapshot {
+                service: "daemon".into(),
+                version: "9.9.9".into(),
+                taken_at_unix_ms: 42,
+                epoch: 3,
+                components: vec![
+                    Component::new("room", "far", State::Down).attr("not_allowed_here", "kept")
+                ],
+                truncated: true,
+            })
+        }))
+    }
+    fn allowed_attr_keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+}
+
+#[test]
+fn remote_snapshot_returned_unchanged_by_status_get() {
+    let reg = status_registry::<RemoteSource>(StatusOptions::new());
+    let v = futures_executor::block_on(reg.call(
+        "status_get",
+        json!({}),
+        &RemoteSource,
+        CallOptions::default(),
+    ))
+    .map_err(op_registry::CallFailure::into_inner)
+    .unwrap();
+    assert_eq!(v["service"], "daemon");
+    assert_eq!(v["version"], "9.9.9");
+    assert_eq!(v["takenAtUnixMs"], 42);
+    assert_eq!(v["epoch"], 3);
+    assert_eq!(v["truncated"], true);
+    assert_eq!(v["components"][0]["id"], "far");
+    assert_eq!(v["components"][0]["attrs"]["not_allowed_here"], "kept");
+}
+
+#[test]
+fn merge_with_group_from_group_summary_passes() {
+    let mut app: Registry<ToySource> = Registry::new();
+    app.group("status", GROUP_SUMMARY);
+    app.merge(status_registry::<ToySource>(StatusOptions::new()));
+    assert_eq!(app.names(), vec!["status_get"]);
 }

@@ -129,6 +129,9 @@ pub(crate) async fn take_snapshot<S: StatusSource + ?Sized>(
     filter: &StatusFilter,
     limit: usize,
 ) -> Result<StatusSnapshot> {
+    if let Some(remote) = source.remote_snapshot(filter, limit) {
+        return remote.await;
+    }
     let mut rows = source.snapshot(filter, limit).await?;
     let truncated = rows.len() > limit;
     rows.truncate(limit);

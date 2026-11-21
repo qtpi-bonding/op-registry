@@ -12,6 +12,8 @@ pub use types::*;
 
 #[cfg(feature = "registry")]
 pub mod ops;
+#[cfg(feature = "registry")]
+pub use ops::GROUP_SUMMARY;
 
 #[cfg(feature = "listen")]
 pub mod listen;

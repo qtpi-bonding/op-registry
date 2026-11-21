@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 
-use crate::types::{Component, ServiceInfo, StatusFilter};
+use crate::types::{Component, ServiceInfo, StatusFilter, StatusSnapshot};
 
 /// The retained sequence window of a source.
 ///
@@ -47,6 +47,19 @@ pub trait StatusSource: Send + Sync {
         filter: &'a StatusFilter,
         max: usize,
     ) -> BoxFuture<'a, anyhow::Result<Vec<Component>>>;
+
+    /// A whole snapshot taken elsewhere, such as a daemon's, for a source that
+    /// only proxies. When this returns `Some`, `status get` returns that
+    /// snapshot unchanged and never calls [`StatusSource::snapshot`]. Defaults
+    /// to `None`.
+    fn remote_snapshot<'a>(
+        &'a self,
+        filter: &'a StatusFilter,
+        max: usize,
+    ) -> Option<BoxFuture<'a, anyhow::Result<StatusSnapshot>>> {
+        let _ = (filter, max);
+        None
+    }
 
     /// Returns the changes with seq greater than `from_seq`.
     ///

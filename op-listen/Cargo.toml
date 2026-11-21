@@ -7,22 +7,51 @@ license.workspace = true
 description = "Shared listener for op-registry: cursors, frames, per-app gates and a reconnecting follower"
 
 [dependencies]
-op-registry = { path = "../op-registry", version = "0.3.2" }
+op-registry = { path = "../op-registry", version = "0.3.2", optional = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 futures-util = { workspace = true }
-schemars = { workspace = true }
+schemars = { workspace = true, optional = true }
 coded-error = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["time", "macros", "sync"] }
 
 [features]
-default = ["detach"]
-detach = ["tokio/rt"]
+default = ["registry", "detach"]
+registry = ["dep:op-registry", "dep:schemars"]
+detach = ["registry", "tokio/rt"]
 testkit = ["detach"]
 
 [dev-dependencies]
 op-registry = { path = "../op-registry", version = "0.3.2", features = ["testing"] }
 tokio = { workspace = true, features = ["test-util", "rt", "macros", "time"] }
 futures-executor = { workspace = true }
+
+[[test]]
+name = "casing"
+required-features = ["registry"]
+
+[[test]]
+name = "cursor_frame"
+required-features = ["registry"]
+
+[[test]]
+name = "frame_golden"
+required-features = ["registry"]
+
+[[test]]
+name = "gate"
+required-features = ["registry"]
+
+[[test]]
+name = "overflow"
+required-features = ["registry"]
+
+[[test]]
+name = "registry"
+required-features = ["registry"]
+
+[[test]]
+name = "resume"
+required-features = ["registry"]
