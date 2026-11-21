@@ -1,7 +1,7 @@
 //! Extra commands and the FlagsOnly / FreeText root fallbacks.
 
 use futures_util::future::BoxFuture;
-use op_registry::cli::{self, edit_distance, Io, NoHooks};
+use op_registry::cli::{self, edit_distance, Io, NoHooks, Outcome, RunHooks};
 use op_registry::{CallOptions, CliContext, OpGlobals, OpParams, OpSpec, Registry};
 use serde::Serialize;
 use std::cell::RefCell;
@@ -16,6 +16,9 @@ struct G {
     /// The region, read from the environment only by `extra_env_fallback`.
     #[op(env = "OPREG_FALLBACK_TEST_REGION")]
     region: Option<String>,
+    /// A secret the error line must not show.
+    #[op(secret)]
+    token: Option<String>,
 }
 
 struct Ctx;
@@ -69,10 +72,10 @@ fn flags_only(r: &mut Registry<Ctx>) {
     r.fallback_flags_only(
         "fix",
         "Fix things.\nMore text.",
-        |args: Vec<OsString>| -> BoxFuture<'static, u8> {
+        |args: Vec<OsString>| -> BoxFuture<'static, anyhow::Result<u8>> {
             Box::pin(async move {
                 log(format!("flags_only {:?}", strings(&args)));
-                7
+                Ok(7)
             })
         },
     );
@@ -127,14 +130,14 @@ fn last_err(r: &Ran) -> serde_json::Value {
 fn serve(r: &mut Registry<Ctx>) {
     r.push_extra(
         clap::Command::new("serve").arg(clap::Arg::new("port").long("port")),
-        |g: &G, m: &clap::ArgMatches| -> BoxFuture<'_, u8> {
+        |g: &G, m: &clap::ArgMatches| -> BoxFuture<'_, anyhow::Result<u8>> {
             Box::pin(async move {
                 log(format!(
                     "serve {:?} {:?}",
                     g.endpoint,
                     m.get_one::<String>("port")
                 ));
-                3
+                Ok(3)
             })
         },
     );
@@ -158,10 +161,10 @@ fn extra_env_fallback() {
     let mut r = base();
     r.push_extra(
         clap::Command::new("where"),
-        |g: &G, _: &clap::ArgMatches| -> BoxFuture<'_, u8> {
+        |g: &G, _: &clap::ArgMatches| -> BoxFuture<'_, anyhow::Result<u8>> {
             Box::pin(async move {
                 log(format!("where {:?}", g.region));
-                4
+                Ok(4)
             })
         },
     );
@@ -178,7 +181,9 @@ fn extra_clashing_with_op_word_panics() {
         let mut r = base();
         r.push_extra(
             clap::Command::new("build"),
-            |_: &G, _: &clap::ArgMatches| -> BoxFuture<'_, u8> { Box::pin(async { 0 }) },
+            |_: &G, _: &clap::ArgMatches| -> BoxFuture<'_, anyhow::Result<u8>> {
+                Box::pin(async { Ok(0) })
+            },
         );
     });
     let message = *result.unwrap_err().downcast::<String>().unwrap();
@@ -369,4 +374,79 @@ fn edit_distance_cases() {
     assert_eq!(edit_distance("bulid", "build"), 2);
     assert_eq!(edit_distance("kitten", "sitting"), 3);
     assert_eq!(edit_distance("refactor", "build"), 8);
+}
+
+/// Records the hooks that fire, in order, and the exit the outcome carries.
+#[derive(Default)]
+struct Rec(std::sync::Mutex<Vec<String>>);
+
+impl RunHooks for Rec {
+    fn on_usage_error(&self, _: &cli::UsageFailure) {
+        self.0.lock().unwrap().push("on_usage_error".to_owned());
+    }
+    fn post_run(&self, outcome: &Outcome) {
+        let tag = match outcome {
+            Outcome::Ok { exit, .. } => format!("post_run_ok {exit}"),
+            Outcome::Err { .. } => "post_run_err".to_owned(),
+            _ => "post_run_other".to_owned(),
+        };
+        self.0.lock().unwrap().push(tag);
+    }
+}
+
+fn run_hooked(r: &Registry<Ctx>, args: &[&str], hooks: &dyn RunHooks) -> Ran {
+    let argv: Vec<OsString> = std::iter::once("app")
+        .chain(args.iter().copied())
+        .map(OsString::from)
+        .collect();
+    let (io, cap) = Io::memory(b"", false, false);
+    let code = futures_executor::block_on(cli::run_with_io(r, argv, hooks, io));
+    Ran {
+        code,
+        out: cap.stdout(),
+        err: cap.stderr(),
+    }
+}
+
+#[test]
+fn flags_only_fallback_err_post_run_sees_err() {
+    let mut r = base();
+    r.fallback_flags_only(
+        "fix",
+        "Fix things.",
+        |_args: Vec<OsString>| -> BoxFuture<'static, anyhow::Result<u8>> {
+            Box::pin(async {
+                Err(op_registry::usage(op_registry::UsageError::InvalidField {
+                    name: "x".to_owned(),
+                    reason: "bad".to_owned(),
+                }))
+            })
+        },
+    );
+    let rec = Rec::default();
+    let ran = run_hooked(&r, &["--weird"], &rec);
+    assert_eq!(ran.code, 2);
+    assert_eq!(*rec.0.lock().unwrap(), ["on_usage_error", "post_run_err"]);
+    assert_eq!(last_err(&ran)["code"], "op_registry.usage.invalid");
+    assert_eq!(ran.out, "");
+}
+
+#[test]
+fn extra_err_redacts_secret_globals() {
+    let mut r = base();
+    r.push_extra(
+        clap::Command::new("leak"),
+        |g: &G, _: &clap::ArgMatches| -> BoxFuture<'_, anyhow::Result<u8>> {
+            Box::pin(
+                async move { anyhow::bail!("rejected {}", g.token.clone().unwrap_or_default()) },
+            )
+        },
+    );
+    let ran = run(&r, &["leak", "--token", "s3cretvalue"]);
+    assert_eq!(ran.code, 70);
+    assert!(!ran.err.contains("s3cretvalue"), "{}", ran.err);
+    assert!(last_err(&ran)["message"]
+        .as_str()
+        .unwrap()
+        .contains("<secret>"));
 }

@@ -5,7 +5,24 @@ use crate::{CliContext, OpGlobals, OpKind, Registry, Surface};
 use clap::{Arg, ArgAction, Command};
 
 /// Names the library owns on every command.
-const LIBRARY_FLAGS: [&str; 5] = ["pretty", "compact", "text", "help", "version"];
+pub(super) const LIBRARY_FLAGS: [&str; 5] = ["pretty", "compact", "text", "help", "version"];
+
+/// Panics when an extra's command, or a subcommand of it, has a long flag that
+/// a registry global or the library owns.
+pub(super) fn check_extra_flags<C: CliContext>(command: &Command) {
+    let globals = <C::Globals as OpGlobals>::fields();
+    let mut stack = vec![command];
+    while let Some(cmd) = stack.pop() {
+        for flag in cmd.get_arguments().filter_map(Arg::get_long) {
+            assert!(
+                !LIBRARY_FLAGS.contains(&flag) && !globals.iter().any(|f| f.flag == flag),
+                "extra `{}`: --{flag} is already a global flag",
+                command.get_name()
+            );
+        }
+        stack.extend(cmd.get_subcommands());
+    }
+}
 
 /// A node of the tree: a group of children or a leaf op (an entry index).
 enum Node {
@@ -72,8 +89,9 @@ pub(crate) fn top_words<C>(registry: &Registry<C>) -> Vec<String> {
 ///
 /// Panics when a `C::Globals` flag is one the library owns (`--pretty`,
 /// `--compact`, `--text`, `--help`, `--version`), when a free-text fallback
-/// declares a flag that a global already has, or when an extra's name is an
-/// op or group word.
+/// declares a flag that a global already has, when an extra's name is an
+/// op or group word, or when an extra (merged in) has a long flag that a
+/// global or the library owns.
 pub fn command<C: CliContext>(registry: &Registry<C>) -> Command {
     for field in <C::Globals as OpGlobals>::fields() {
         assert!(
@@ -151,6 +169,7 @@ pub fn command<C: CliContext>(registry: &Registry<C>) -> Command {
         root = root.subcommand(to_command(registry, std::slice::from_ref(&word), node));
     }
     for extra in &registry.extras {
+        check_extra_flags::<C>(&extra.command);
         root = root.subcommand(extra.command.clone());
     }
     root
@@ -280,4 +299,46 @@ fn decorate<C: Sync>(registry: &Registry<C>, index: usize, cmd: Command) -> Comm
         );
     }
     cmd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::Extra;
+    use std::sync::Arc;
+
+    #[derive(crate::OpGlobals)]
+    #[allow(dead_code)]
+    struct G {
+        /// The endpoint.
+        endpoint: Option<String>,
+    }
+
+    struct Ctx;
+    impl crate::Resolve for Ctx {}
+    impl CliContext for Ctx {
+        type Globals = G;
+        fn from_globals(_: &G) -> anyhow::Result<Self> {
+            Ok(Ctx)
+        }
+    }
+
+    /// `merge` copies another registry's extras without `push_extra`'s check, so
+    /// `command` repeats it. The two registries share one `C::Globals`, so no
+    /// public call can build the clash: the extra is placed directly.
+    #[test]
+    fn merged_extra_clash_panics_at_command() {
+        let mut registry = Registry::<Ctx>::new();
+        registry.extras.push(Extra {
+            command: Command::new("serve").arg(Arg::new("e").long("endpoint")),
+            run: Arc::new(|_| Box::pin(async { Ok(0) })),
+        });
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| command(&registry)))
+            .unwrap_err();
+        let message = payload.downcast::<String>().unwrap();
+        assert!(
+            message.contains("extra `serve`: --endpoint is already a global flag"),
+            "{message}"
+        );
+    }
 }

@@ -140,8 +140,8 @@ fn watch_op(
     Box::pin(async { Ok(stream::iter(vec![Ok(item())]).boxed()) })
 }
 
-fn doctor(_g: &NoGlobals, _m: &clap::ArgMatches) -> BoxFuture<'static, u8> {
-    Box::pin(async { 0 })
+fn doctor(_g: &NoGlobals, _m: &clap::ArgMatches) -> BoxFuture<'static, anyhow::Result<u8>> {
+    Box::pin(async { Ok(0) })
 }
 
 /// A registry with a get, a list pair, a stream, a hidden op, an op declared on typed only

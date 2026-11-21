@@ -18,12 +18,44 @@ use std::io::{ErrorKind, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
 
+/// What a successfully parsed command line selected.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Selected {
+    /// A registered op.
+    Op {
+        /// The op's name.
+        name: String,
+    },
+    /// An extra command.
+    Extra {
+        /// The extra's name.
+        name: String,
+    },
+    /// The root fallback.
+    Fallback {
+        /// The fallback's name.
+        name: &'static str,
+        /// The raw arguments it will get.
+        args: Vec<OsString>,
+    },
+    /// Help text.
+    Help,
+    /// The version line.
+    Version,
+}
+
 /// Callbacks around a run, for apps that start telemetry or record usage.
 /// Every method has a no-op default.
 pub trait RunHooks {
     /// Before parsing.
     fn pre_parse(&self, argv: &[OsString]) {
         let _ = argv;
+    }
+    /// Once a parse succeeds: before the context is built and before an extra
+    /// or the fallback runs. A usage failure never reaches it.
+    fn on_selected(&self, selected: &Selected) {
+        let _ = selected;
     }
     /// A run that fails with exit 2, wherever the failure came from (clap,
     /// decode, validate, or an op returning an `op_registry.usage.*` error).
@@ -152,6 +184,7 @@ pub async fn run_with_io<C: CliContext + Resolve>(
             return finish_err(&mut io, Some(hooks), None, error, &Redactor::default()).exit_code();
         }
     };
+    hooks.on_selected(&selected(registry, &parsed));
     if let Parsed::Help(text) | Parsed::Version(text) = &parsed {
         let _ = write_line(&mut io, text.trim_end());
         return exit::OK;
@@ -175,6 +208,24 @@ pub async fn run_with_io<C: CliContext + Resolve>(
     execute(registry, &ctx, parsed, &mut io, Some(hooks))
         .await
         .exit_code()
+}
+
+/// What `parsed` selected, for the `on_selected` hook.
+fn selected<C>(registry: &Registry<C>, parsed: &Parsed) -> Selected {
+    match parsed {
+        Parsed::Op { name, .. } => Selected::Op { name: name.clone() },
+        Parsed::Extra { name, .. } => Selected::Extra { name: name.clone() },
+        Parsed::Fallback { args, .. } => Selected::Fallback {
+            name: registry
+                .fallback
+                .as_ref()
+                .map(Fallback::name)
+                .expect("parse gives a fallback only when the registry has one"),
+            args: args.clone(),
+        },
+        Parsed::Help(_) => Selected::Help,
+        Parsed::Version(_) => Selected::Version,
+    }
 }
 
 /// Runs one parsed command against a built context and writes its result or
@@ -318,7 +369,7 @@ async fn run_unrouted<C>(
             (name, result)
         }
         Parsed::Fallback { args, matches } => match registry.fallback.as_ref() {
-            Some(Fallback::FlagsOnly { name, run, .. }) => (name.to_string(), Ok(run(args).await)),
+            Some(Fallback::FlagsOnly { name, run, .. }) => (name.to_string(), run(args).await),
             Some(Fallback::FreeText { name, run, .. }) => {
                 (name.to_string(), run(&matches, args).await)
             }

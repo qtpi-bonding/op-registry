@@ -4,7 +4,7 @@ mod common;
 
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
-use op_registry::cli::{self, Io, NoHooks, Outcome, RunHooks, UsageFailure};
+use op_registry::cli::{self, Io, NoHooks, Outcome, RunHooks, Selected, UsageFailure};
 use op_registry::{
     CallHook, CallInfo, CallOptions, Caller, CliContext, OpGlobals, OpParams, OpSpec, Page,
     PageRequest, Registry, SecretFile,
@@ -687,4 +687,180 @@ fn each_stderr_and_stdout_line_is_one_write() {
             }
         }
     }
+}
+
+fn coded_err_extra(_: &G, _: &clap::ArgMatches) -> BoxFuture<'static, anyhow::Result<u8>> {
+    Box::pin(async { Err(coded_error::into_anyhow(Down::Backend)) })
+}
+
+/// `reg()` plus extras and a flags-only fallback.
+fn reg_ext() -> Registry<Ctx> {
+    let mut r = reg();
+    r.push_extra(clap::Command::new("boom"), coded_err_extra);
+    r.push_extra(
+        clap::Command::new("five"),
+        |_: &G, _: &clap::ArgMatches| -> BoxFuture<'_, anyhow::Result<u8>> {
+            Box::pin(async { Ok(5) })
+        },
+    );
+    r.push_extra(
+        clap::Command::new("misuse"),
+        |_: &G, _: &clap::ArgMatches| -> BoxFuture<'_, anyhow::Result<u8>> {
+            Box::pin(async {
+                Err(op_registry::usage(op_registry::UsageError::InvalidField {
+                    name: "x".to_owned(),
+                    reason: "the extra says so".to_owned(),
+                }))
+            })
+        },
+    );
+    r.fallback_flags_only(
+        "fix",
+        "Fix things.",
+        |_: Vec<OsString>| -> BoxFuture<'static, anyhow::Result<u8>> { Box::pin(async { Ok(6) }) },
+    );
+    r
+}
+
+fn run_ext(args: &[&str], hooks: &dyn RunHooks) -> Ran {
+    let (io, cap) = Io::memory(b"", false, false);
+    let code = futures_executor::block_on(cli::run_with_io(&reg_ext(), argv(args), hooks, io));
+    Ran {
+        code,
+        out: cap.stdout(),
+        err: cap.stderr(),
+    }
+}
+
+#[test]
+fn extra_err_writes_error_line_and_exits_by_class() {
+    let rec = Rec::default();
+    let r = run_ext(&["boom"], &rec);
+    assert_eq!(r.code, 69);
+    assert_eq!(r.out, "");
+    assert_eq!(r.last_err()["error"]["code"], "runner.test.down");
+    assert_eq!(rec.log(), ["pre_parse", "post_run_err"]);
+    // A usage code exits 2 and reaches on_usage_error once.
+    let rec = Rec::default();
+    let r = run_ext(&["misuse"], &rec);
+    assert_eq!(r.code, 2);
+    assert_eq!(rec.log(), ["pre_parse", "on_usage_error", "post_run_err"]);
+    assert_eq!(r.last_err()["error"]["code"], "op_registry.usage.invalid");
+}
+
+#[test]
+fn extra_ok_exits_n() {
+    let rec = Rec::default();
+    let r = run_ext(&["five"], &rec);
+    assert_eq!(r.code, 5);
+    assert_eq!(r.err, "");
+    assert_eq!(rec.log(), ["pre_parse", "post_run_ok"]);
+}
+
+fn panic_message(f: impl FnOnce() + std::panic::UnwindSafe) -> String {
+    let payload = std::panic::catch_unwind(f).expect_err("expected a panic");
+    match payload.downcast::<String>() {
+        Ok(s) => *s,
+        Err(p) => p.downcast::<&str>().map(|s| s.to_string()).unwrap(),
+    }
+}
+
+fn noop(_: &G, _: &clap::ArgMatches) -> BoxFuture<'static, anyhow::Result<u8>> {
+    Box::pin(async { Ok(0) })
+}
+
+#[test]
+fn extra_with_pretty_flag_panics() {
+    for flag in [
+        "pretty",
+        "compact",
+        "text",
+        "help",
+        "version",
+        "fail-context",
+    ] {
+        let message = panic_message(|| {
+            let mut r = reg();
+            r.push_extra(
+                clap::Command::new("serve").arg(clap::Arg::new("x").long(flag)),
+                noop,
+            );
+        });
+        assert!(
+            message.contains(&format!("extra `serve`: --{flag} is already a global flag")),
+            "{message}"
+        );
+    }
+    // A subcommand's flag counts too.
+    let message = panic_message(|| {
+        let mut r = reg();
+        r.push_extra(
+            clap::Command::new("serve")
+                .subcommand(clap::Command::new("now").arg(clap::Arg::new("x").long("pretty"))),
+            noop,
+        );
+    });
+    assert!(
+        message.contains("--pretty is already a global flag"),
+        "{message}"
+    );
+}
+
+#[test]
+fn extra_with_name_flag_ok() {
+    let mut r = reg();
+    r.push_extra(
+        clap::Command::new("serve").arg(clap::Arg::new("name").long("name")),
+        noop,
+    );
+    cli::command(&r);
+}
+
+#[derive(Default)]
+struct Sel(Mutex<Vec<Selected>>);
+
+impl RunHooks for Sel {
+    fn on_selected(&self, selected: &Selected) {
+        self.0.lock().unwrap().push(selected.clone());
+    }
+}
+
+#[test]
+fn on_selected_once_per_kind() {
+    let cases: [(&[&str], Selected); 5] = [
+        (
+            &["ping"],
+            Selected::Op {
+                name: "ping".to_owned(),
+            },
+        ),
+        (
+            &["five"],
+            Selected::Extra {
+                name: "five".to_owned(),
+            },
+        ),
+        (
+            &["--weird", "x"],
+            Selected::Fallback {
+                name: "fix",
+                args: vec![OsString::from("--weird"), OsString::from("x")],
+            },
+        ),
+        (&["--help"], Selected::Help),
+        (&["--version"], Selected::Version),
+    ];
+    for (args, want) in cases {
+        let sel = Sel::default();
+        run_ext(args, &sel);
+        assert_eq!(*sel.0.lock().unwrap(), [want], "{args:?}");
+    }
+}
+
+#[test]
+fn usage_failure_does_not_call_on_selected() {
+    let sel = Sel::default();
+    let r = run_ext(&["nonesuch"], &sel);
+    assert_eq!(r.code, 2);
+    assert!(sel.0.lock().unwrap().is_empty());
 }

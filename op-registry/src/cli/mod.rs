@@ -11,7 +11,7 @@ mod tree;
 pub use fallback::edit_distance;
 pub use io::{Captured, Io, SharedWriter};
 pub use parse::{parse, Parsed, UsageFailure};
-pub use run::{dispatch, run, run_with_io, NoHooks, Outcome, RunHooks};
+pub use run::{dispatch, run, run_with_io, NoHooks, Outcome, RunHooks, Selected};
 pub use tree::command;
 
 pub(crate) use extra::Extra;

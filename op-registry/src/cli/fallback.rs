@@ -22,7 +22,7 @@ pub(crate) enum Fallback {
     FlagsOnly {
         name: &'static str,
         help: &'static str,
-        run: fn(Vec<OsString>) -> BoxFuture<'static, u8>,
+        run: fn(Vec<OsString>) -> BoxFuture<'static, anyhow::Result<u8>>,
     },
     /// Gets everything that is not a command, after the registry's globals.
     FreeText {
@@ -59,7 +59,9 @@ impl Fallback {
 impl<C: CliContext + Sync> Registry<C> {
     /// Sets the root fallback that gets the raw arguments of an empty command
     /// line or one whose first argument starts with `-`. A first bare word
-    /// that is not a command stays a usage error. `run` returns the exit code.
+    /// that is not a command stays a usage error. `run` returns the exit code;
+    /// an `Err` ends the run like a failed op (`post_run`, the error line, the
+    /// exit code of its class).
     ///
     /// # Panics
     ///
@@ -68,7 +70,7 @@ impl<C: CliContext + Sync> Registry<C> {
         &mut self,
         name: &'static str,
         help: &'static str,
-        run: fn(Vec<OsString>) -> BoxFuture<'static, u8>,
+        run: fn(Vec<OsString>) -> BoxFuture<'static, anyhow::Result<u8>>,
     ) {
         self.set_fallback(Fallback::FlagsOnly { name, help, run });
     }
