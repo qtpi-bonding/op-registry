@@ -161,7 +161,7 @@ builds pass.
 With the `listen` feature (off by default)
 `status_registry` also registers `status watch` when `StatusOptions::watch` is
 on (the default) and the source returns `true` from `provides_watch()`. It is a
-CLI-only streaming entry (never an MCP tool), `reads` access, with the
+streaming entry on the default paths (never an MCP tool, as for every stream), `reads` access, with the
 audience from the options. Parameters are those of `status get`.
 
 The stream is an `op-listen` stream: it shares the `epoch:seq` cursor, the

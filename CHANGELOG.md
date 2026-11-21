@@ -65,8 +65,8 @@ Also:
   wrapping `pub struct MissingUnless { name, unless }` (code
   `op_registry.usage.missing`): match it as `UsageError::MissingUnless(m)`. The
   pinned coded-error derive rejects two variants with one code, which is why it
-  is not a struct variant. `UsageError`, `ListenError` and the new `ListError`
-  are `#[non_exhaustive]`.
+  is not a struct variant. `UsageError` gains variants and `ListenError` gains
+  `Stopped`; the new `ListError` is `#[non_exhaustive]`.
 
 ### Additive
 

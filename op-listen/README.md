@@ -212,7 +212,8 @@ the body of a stream op. It shares the rules above, plus:
 - The marker is yielded before the first item that follows a failed first open
   or any earlier connection. A connection that yields nothing gets no marker.
   An empty connection that lived for `backoff.healthy_after` resets the failure
-  count, so such connections never add up toward `max_retries`.
+  count, so such connections never add up toward `max_retries`; it is still
+  counted as one failure itself, so `max_retries = Some(0)` ends after it.
 - A stop item is yielded once, then the stream ends with `op_listen.stopped`
   (Logical, exit 65 on the CLI). An error whose code is in `stop_codes`, mid-stream
   or on open, ends it the same way with no frame, and `Stopped { code }` names it.

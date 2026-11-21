@@ -19,7 +19,7 @@ over an earlier one. The appendix maps every row and finding to the change that 
 ## 1. Intent, goals, non-goals
 
 ### Intent
-0.4.0 is the one library release that lets all five consumers (grorg, gait, multimatrix, structmux, archegraph) and
+0.4.0 is the one library release that lets all four consumers (grorg, gait, multimatrix, archegraph) and
 concordium-app port onto op-registry v2 without hand-written workarounds, and that turns gp's 2026-11-20 decisions
 into library behaviour. It is breaking; consumers migrate once.
 
@@ -1635,8 +1635,7 @@ Each item belongs to the named consumer. Callers outside the pillars are in the 
 - `local` ops: `--id` optional subject, `hide_default`; fold all blocks into one `ops!` with `#[cfg]`.
 - Tag free-text fields `allow_hyphen` (or struct-level).
 - Keep gait's own `manual` group (do not call `with_manual` in full gait).
-- `GAIT_AGENT_DIR` to `GAIT_IDENTITY_DIR`, `daemons` to `processes` (addendum A1-A4), deployed with structmux and
-  concordium.
+- `GAIT_AGENT_DIR` to `GAIT_IDENTITY_DIR`, `daemons` to `processes` (addendum A1-A4), deployed with concordium.
 - Optional: implement `Resolve` for `session` so lookups go through the resolver.
 
 ### archegraph

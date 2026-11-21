@@ -138,12 +138,12 @@ Entry keys:
   (`agent`, `owner` or `dev`, one word or a list: `audience: [agent, owner]`).
 - Optional: `errors: [ErrType]` (the coded error types the op may return, whose
   codes are its contract), `fields:` (a function giving span fields from the
-  params), `exits: { 3 => "meaning" }` (extra exit codes, 3 to 63), `text: true`
+  params), `exits: { 3 => "meaning" }` (extra exit codes, 3 to 63; `{ 3 => "timed out" on
+  "pillar.object.code" }` makes it an error exit for that code), `text: true`
   (the output implements `RenderText` for text output), `hidden: true`,
   `default: true` (runs when the group is named with no verb, at most one per
   group), `paths: [..]` (see "Paths"), `globals: [gait_dir]` (globals the op
-  needs on the command line; see "Params"), `exits: { 3 => "timed out" on
-  "pillar.object.code" }` (an error code with a declared exit), and, for a
+  needs on the command line; see "Params"), and, for a
   `stream:`, `cursor: true`; for a `list:`, `cap:`, `page_size:` and
   `follow_page:` (the page size of the follow-all half). `unpaged: true` marks a
   non-list op with the verb `list`, so `assert_help_complete` does not warn about it.
@@ -372,8 +372,9 @@ daemon path with `Registry::fallback_flags_only_before_runtime(name, help)` (no
 runner; `cli::run` reaching it exits 70), then:
 
 ```rust,ignore
+// Both arms are an `ExitCode`: `daemon_main(args)` returns the same type as `cli::run`.
 match op_registry::cli::select(&registry, &argv) {
-    Ok(Selected::Fallback { args, .. }) => daemon_main(args),   // forks, builds its own runtime
+    Ok(cli::Selected::Fallback { args, .. }) => daemon_main(args), // forks, builds its own runtime
     _ => current_thread_runtime().block_on(cli::run(&registry, argv, &hooks)),
 }
 ```
