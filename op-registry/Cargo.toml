@@ -21,7 +21,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
 futures-util = { workspace = true, features = ["sink"] }
-futures-channel = { workspace = true }
+futures-channel = { workspace = true, features = ["sink"] }
 coded-error = { workspace = true }
 thiserror = { workspace = true }
 schemars = { workspace = true, optional = true }
