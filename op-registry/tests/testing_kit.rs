@@ -6,7 +6,7 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::{self, BoxStream, StreamExt};
 use op_registry::testing::{
     assert_canonical, assert_casing, assert_help_complete, assert_parity, parity_report,
-    sample_params, Casing, HelpRules, Mount, Reach,
+    sample_params, sample_params_seeded, Casing, HelpRules, Mount, Reach,
 };
 use op_registry::{
     Access, Audience, CallOptions, CliContext, Cursor, OpGlobals, OpParams, OpSpec, Page,
@@ -1562,4 +1562,423 @@ fn tagged_enum_list_get_no_spurious_warning() {
     );
     let warnings = assert_help_complete(&r, &rules());
     assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+// ---- KIT-3, KIT-4: not_found by subject, sampling that decodes ----
+
+mod kit_sampling {
+    use super::*;
+    use op_registry::testing::{assert_local_ops_offline, assert_unknown_ref_not_found};
+    use op_registry::{ParseCx, Ref, Resolved, Scope};
+    use serde_json::{json, Map, Value};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    fn seed(pairs: &[(&str, Value)]) -> Map<String, Value> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.clone()))
+            .collect()
+    }
+
+    fn decodes<P: OpParams>(sample: Value) -> P {
+        P::from_json(sample.clone(), &mut ParseCx::default())
+            .unwrap_or_else(|e| panic!("{sample} did not decode: {e:#}"))
+    }
+
+    // ---- the sampler rules, on hand-built schemas ----
+
+    #[test]
+    fn sampler_takes_examples_first() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"a": {"type": "string", "examples": ["hello", "other"]}},
+            "required": ["a"],
+        });
+        assert_eq!(sample_params(&schema), json!({"a": "hello"}));
+    }
+
+    #[test]
+    fn sampler_gives_const_true_for_a_switch_member() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"on": {"type": "boolean"}, "id": {"type": ["string", "null"]}},
+            "oneOf": [
+                {"required": ["on"], "properties": {"on": {"const": true}}},
+                {"required": ["id"], "properties": {"id": {"not": {"type": "null"}}}},
+            ],
+        });
+        assert_eq!(sample_params(&schema), json!({"on": true}));
+    }
+
+    #[test]
+    fn sampler_gives_min_items_items() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "two": {"type": "array", "items": {"type": "string"}, "minItems": 2},
+            },
+            "required": ["two"],
+            "oneOf": [{
+                "required": ["tags"],
+                "properties": {"tags": {"type": "array", "minItems": 3}},
+            }],
+        });
+        assert_eq!(
+            sample_params(&schema),
+            json!({"two": ["x", "x"], "tags": ["x", "x", "x"]})
+        );
+    }
+
+    #[test]
+    fn sampler_gives_min_properties_a_pair() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"labels": {"type": "object", "additionalProperties": {"type": "string"}}},
+            "anyOf": [{
+                "required": ["labels"],
+                "properties": {"labels": {"type": "object", "minProperties": 1}},
+            }],
+        });
+        assert_eq!(sample_params(&schema), json!({"labels": {"k": "x"}}));
+    }
+
+    #[test]
+    fn sampler_gives_a_non_null_value_for_not_null() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"s": {"type": ["string", "null"]}},
+            "oneOf": [{"required": ["s"], "properties": {"s": {"not": {"type": "null"}}}}],
+        });
+        assert_eq!(sample_params(&schema), json!({"s": "x"}));
+    }
+
+    #[test]
+    fn sampler_adds_then_when_if_key_is_present() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"uri": {"type": ["string", "null"]}, "coll": {"type": ["string", "null"]}},
+            "if": {"required": ["uri"], "properties": {"uri": {"not": {"type": "null"}}}},
+            "then": {"required": ["coll"], "properties": {"coll": {"not": {"type": "null"}}}},
+        });
+        assert_eq!(sample_params(&schema), json!({}));
+        assert_eq!(
+            sample_params_seeded(&schema, seed(&[("uri", json!("u"))])),
+            json!({"uri": "u", "coll": "x"})
+        );
+    }
+
+    #[test]
+    fn sampler_avoids_a_key_that_completes_not_all_of() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"a": {"type": "string"}, "b": {"type": "string"}, "c": {"type": "string"}},
+            "required": ["a"],
+            "allOf": [
+                {"anyOf": [{"required": ["b"]}, {"required": ["c"]}]},
+                {"not": {"allOf": [{"required": ["a"]}, {"required": ["b"]}]}},
+            ],
+        });
+        assert_eq!(sample_params(&schema), json!({"a": "x", "c": "x"}));
+    }
+
+    #[test]
+    fn sampler_keeps_seeded_keys_first() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"a": {"type": "string"}, "id": {"type": "string"}},
+            "required": ["a"],
+        });
+        let sample = sample_params_seeded(&schema, seed(&[("id", json!("seeded"))]));
+        let keys: Vec<&String> = sample.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["id", "a"]);
+        assert_eq!(sample["id"], "seeded");
+        // A seed wins over the sampled value of a required key.
+        let sample = sample_params_seeded(&schema, seed(&[("a", json!("mine"))]));
+        assert_eq!(sample, json!({"a": "mine"}));
+    }
+
+    // ---- real derived fragments ----
+
+    #[derive(Debug, OpParams)]
+    struct IdOrAll {
+        #[op(one_of = "t")]
+        id: Option<String>,
+        #[op(one_of = "t")]
+        all: bool,
+    }
+
+    #[derive(Debug, OpParams)]
+    struct AllOrId {
+        #[op(one_of = "t")]
+        all: bool,
+        #[op(one_of = "t")]
+        id: Option<String>,
+    }
+
+    #[derive(Debug, OpParams)]
+    struct TagsOrId {
+        #[op(one_of = "t")]
+        tags: Vec<String>,
+        #[op(one_of = "t")]
+        id: Option<String>,
+    }
+
+    #[derive(Debug, OpParams)]
+    struct LabelsOrId {
+        #[op(one_of = "t")]
+        labels: BTreeMap<String, String>,
+        #[op(one_of = "t")]
+        id: Option<String>,
+    }
+
+    #[test]
+    fn one_of_id_or_all_samples_one_member() {
+        let a = sample_params(&IdOrAll::input_schema());
+        decodes::<IdOrAll>(a.clone());
+        assert_eq!(a.as_object().unwrap().len(), 1, "{a}");
+        // A switch first: `false` would count as absent.
+        let b = sample_params(&AllOrId::input_schema());
+        assert_eq!(b, json!({"all": true}));
+        decodes::<AllOrId>(b);
+        let c = sample_params(&TagsOrId::input_schema());
+        assert_eq!(c, json!({"tags": ["x"]}));
+        decodes::<TagsOrId>(c);
+        let d = sample_params(&LabelsOrId::input_schema());
+        assert_eq!(d, json!({"labels": {"k": "x"}}));
+        decodes::<LabelsOrId>(d);
+    }
+
+    #[derive(Debug, OpParams)]
+    struct Needs {
+        #[op(required, sample = "t1")]
+        tags: Vec<String>,
+    }
+
+    #[derive(Debug, OpParams)]
+    struct NeedsPlain {
+        #[op(required)]
+        tags: Vec<String>,
+    }
+
+    #[test]
+    fn required_vec_gets_one_item() {
+        let sample = sample_params(&NeedsPlain::input_schema());
+        assert_eq!(sample, json!({"tags": ["x"]}));
+        assert_eq!(decodes::<NeedsPlain>(sample).tags.len(), 1);
+        // `sample` sits on `items.examples`, so the item takes it.
+        let sample = sample_params(&Needs::input_schema());
+        assert_eq!(sample, json!({"tags": ["t1"]}));
+        decodes::<Needs>(sample);
+    }
+
+    #[derive(Debug, OpParams)]
+    struct Lookup {
+        uri: Option<String>,
+        #[op(requires_if = "uri")]
+        collection: Option<String>,
+    }
+
+    #[test]
+    fn derived_requires_if_is_honoured_for_a_seed() {
+        let sample = sample_params_seeded(&Lookup::input_schema(), seed(&[("uri", json!("u"))]));
+        assert_eq!(sample, json!({"uri": "u", "collection": "x"}));
+        decodes::<Lookup>(sample);
+    }
+
+    // ---- temp dirs and decoding, through the kit ----
+
+    #[derive(OpParams)]
+    struct WriteOut {
+        /// Where to write.
+        out: PathBuf,
+    }
+
+    static WROTE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    #[test]
+    fn pathbuf_output_lands_in_kit_dir() {
+        let mut r = Registry::<Ctx>::new();
+        r.group("tool", "Tools.");
+        r.push_local(
+            OpSpec::<WriteOut, Item>::new("tool write", "Writes a file."),
+            |_c: &Ctx, p: WriteOut, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Item>> {
+                Box::pin(async move {
+                    std::fs::write(&p.out, "data")?;
+                    WROTE.lock().unwrap().push(p.out);
+                    Ok(item())
+                })
+            },
+        );
+        futures_executor::block_on(assert_local_ops_offline(&r, &Ctx, &[]));
+        let wrote = WROTE.lock().unwrap().clone();
+        assert_eq!(wrote.len(), 1, "{wrote:?}");
+        let path = &wrote[0];
+        assert!(path.starts_with(std::env::temp_dir()), "{path:?}");
+        let dir = path.parent().unwrap();
+        assert!(
+            dir.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("op-registry-kit-"),
+            "{path:?}"
+        );
+        assert!(!dir.exists(), "the kit dir is removed afterwards: {dir:?}");
+    }
+
+    #[derive(OpParams)]
+    struct Listen {
+        /// The address.
+        #[op(from_str, sample = "127.0.0.1:7000")]
+        addr: std::net::SocketAddr,
+    }
+
+    #[derive(OpParams)]
+    struct ListenBare {
+        /// The address.
+        #[op(from_str)]
+        addr: std::net::SocketAddr,
+    }
+
+    #[test]
+    fn from_str_with_sample_decodes() {
+        let mut r = Registry::<Ctx>::new();
+        r.group("tool", "Tools.");
+        r.push_local(
+            OpSpec::<Listen, Item>::new("tool listen", "Listens."),
+            |_c: &Ctx, _p: Listen, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Item>> {
+                Box::pin(async { Ok(item()) })
+            },
+        );
+        futures_executor::block_on(assert_local_ops_offline(&r, &Ctx, &[]));
+    }
+
+    #[test]
+    fn from_str_without_sample_reported_did_not_decode() {
+        let mut r = Registry::<Ctx>::new();
+        r.group("tool", "Tools.");
+        r.push_local(
+            OpSpec::<ListenBare, Item>::new("tool listen", "Listens."),
+            |_c: &Ctx, _p: ListenBare, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Item>> {
+                Box::pin(async { Ok(item()) })
+            },
+        );
+        let text =
+            panic_text(|| futures_executor::block_on(assert_local_ops_offline(&r, &Ctx, &[])));
+        assert!(
+            text.contains("tool_listen: the sampled arguments did not decode (op_registry.usage."),
+            "{text}"
+        );
+        assert!(text.contains("give a Fixture"), "{text}");
+        // A fixture wins.
+        let fixtures = [Fixture {
+            op: "tool_listen",
+            args: json!({"addr": "127.0.0.1:1"}),
+        }];
+        futures_executor::block_on(assert_local_ops_offline(&r, &Ctx, &fixtures));
+    }
+
+    // ---- not_found by subject ----
+
+    #[derive(Debug, thiserror::Error, coded_error::CodedError)]
+    #[coded(namespace = "fix.thing")]
+    enum ThingError {
+        #[error("no thing {0}")]
+        #[coded(code = "not_found", class = Logical)]
+        NotFound(String),
+    }
+
+    #[derive(OpParams)]
+    struct IdOnly {
+        #[op(subject = "thing", id_only)]
+        id: Ref,
+    }
+
+    #[derive(OpParams)]
+    struct AbsentOk {
+        #[op(subject = "thing", absent_ok)]
+        id: Ref,
+    }
+
+    #[derive(OpParams)]
+    struct OptionalSubject {
+        #[op(subject = "thing")]
+        id: Option<Ref>,
+    }
+
+    fn registry_of<P: OpParams + Send + 'static>(
+        f: fn(&Ctx, P, CallOptions) -> BoxFuture<'_, anyhow::Result<Item>>,
+    ) -> Registry<Ctx> {
+        let mut r = Registry::<Ctx>::new();
+        r.group("thing", "Things.");
+        r.push_op(OpSpec::<P, Item>::new("thing get", "Show a thing."), f);
+        r
+    }
+
+    #[test]
+    fn id_only_subject_answering_value_fails_not_found() {
+        let r = registry_of::<IdOnly>(|_c, _p, _o| Box::pin(async { Ok(item()) }));
+        let text =
+            panic_text(|| futures_executor::block_on(assert_unknown_ref_not_found(&r, &Ctx, &[])));
+        assert!(text.contains("thing_get"), "{text}");
+        assert!(text.contains("did not fail"), "{text}");
+    }
+
+    #[test]
+    fn id_only_subject_answering_not_found_passes() {
+        let r = registry_of::<IdOnly>(|_c, p: IdOnly, _o| {
+            Box::pin(async move {
+                Err(coded_error::into_anyhow(ThingError::NotFound(
+                    p.id.as_raw().to_owned(),
+                )))
+            })
+        });
+        futures_executor::block_on(assert_unknown_ref_not_found(&r, &Ctx, &[]));
+    }
+
+    static ABSENT_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn absent_ok_subject_not_run() {
+        let r = registry_of::<AbsentOk>(|_c, _p, _o| {
+            ABSENT_CALLS.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(item()) })
+        });
+        futures_executor::block_on(assert_unknown_ref_not_found(&r, &Ctx, &[]));
+        assert_eq!(ABSENT_CALLS.load(Ordering::SeqCst), 0);
+    }
+
+    static OPTIONAL_SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    #[test]
+    fn optional_subject_run_with_id_set() {
+        struct Strict;
+        impl op_registry::Resolve for Strict {
+            fn resolve<'a>(
+                &'a self,
+                _k: &'a str,
+                r: &'a Ref,
+                _s: &'a Scope,
+            ) -> BoxFuture<'a, anyhow::Result<Resolved>> {
+                let raw = r.as_raw().to_owned();
+                OPTIONAL_SEEN.lock().unwrap().push(raw.clone());
+                Box::pin(async move { Err(coded_error::into_anyhow(ThingError::NotFound(raw))) })
+            }
+        }
+        let mut r = Registry::<Strict>::new();
+        r.group("thing", "Things.");
+        r.push_op(
+            OpSpec::<OptionalSubject, Item>::new("thing get", "Show a thing."),
+            |_c: &Strict,
+             _p: OptionalSubject,
+             _o: CallOptions|
+             -> BoxFuture<'_, anyhow::Result<Item>> { Box::pin(async { Ok(item()) }) },
+        );
+        futures_executor::block_on(assert_unknown_ref_not_found(&r, &Strict, &[]));
+        let seen = OPTIONAL_SEEN.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert_eq!(seen[0].len(), 16, "{seen:?}");
+    }
 }

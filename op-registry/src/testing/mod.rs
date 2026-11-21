@@ -20,7 +20,7 @@ pub use help::{assert_help_complete, HelpRules};
 pub use offline::assert_local_ops_offline;
 pub use parity::{assert_canonical, assert_parity, parity_report, Mount, ParityLine, Reach};
 pub use refs::assert_unknown_ref_not_found;
-pub use sample::sample_params;
+pub use sample::{sample_params, sample_params_seeded};
 pub use secrets::{assert_secrets_not_echoed, SecretSentinel};
 pub use snapshot::{assert_manual_snapshot, check_manual_snapshot};
 
@@ -53,6 +53,99 @@ pub(crate) fn kit_path(d: &crate::Descriptor) -> Option<crate::CallPath> {
     } else {
         None
     }
+}
+
+/// A fresh directory under the system temp dir, `op-registry-kit-<pid>-<n>`,
+/// removed with everything in it when dropped. A kit runner makes one per run,
+/// so sampled `Path` and `SecretFile` arguments never touch the crate.
+pub(crate) struct KitDir {
+    path: std::path::PathBuf,
+}
+
+impl KitDir {
+    /// Creates the directory.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the directory cannot be created.
+    pub(crate) fn new() -> Self {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "op-registry-kit-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&path)
+            .unwrap_or_else(|e| panic!("the kit cannot create {}: {e}", path.display()));
+        Self { path }
+    }
+}
+
+impl Drop for KitDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// The line `SecretFile` samples hold.
+const SECRET_SAMPLE: &str = "op-registry-kit-sample\n";
+
+/// `sampled` arguments of `d`, with each sampled `Path` field pointing at
+/// `<dir>/<key>` and each sampled `SecretFile` field at a file in `dir` that
+/// holds a fixed sample line. Keys the sample left out stay out.
+pub(crate) fn kit_args(
+    _d: &crate::Descriptor,
+    fields: &[crate::FieldMeta],
+    mut sampled: serde_json::Value,
+    dir: &KitDir,
+) -> serde_json::Value {
+    use crate::FieldKind;
+    let Some(map) = sampled.as_object_mut() else {
+        return sampled;
+    };
+    for field in fields {
+        if !matches!(field.kind, FieldKind::Path | FieldKind::SecretFile)
+            || !map.get(&field.key).is_some_and(|v| v.is_string())
+        {
+            continue;
+        }
+        let file = dir.path.join(&field.key);
+        if field.kind == FieldKind::SecretFile {
+            std::fs::write(&file, SECRET_SAMPLE)
+                .unwrap_or_else(|e| panic!("the kit cannot write {}: {e}", file.display()));
+        }
+        map.insert(
+            field.key.clone(),
+            serde_json::Value::String(file.to_string_lossy().into_owned()),
+        );
+    }
+    sampled
+}
+
+/// The problem for an op whose sampled arguments a validator or parser
+/// rejected: the first error of `errors` with an `op_registry.usage.*` code.
+pub(crate) fn decode_problem(name: &str, errors: &[anyhow::Error]) -> Option<String> {
+    errors.iter().find_map(|err| {
+        let code = coded_error::facts_anyhow(err).code;
+        code.starts_with("op_registry.usage.").then(|| {
+            format!(
+                "{name}: the sampled arguments did not decode ({code}: {err:#}); give a Fixture"
+            )
+        })
+    })
+}
+
+/// The `FieldMeta` of op `d`: its first entry's parameter fields.
+pub(crate) fn fields_of<'a, C>(
+    registry: &'a crate::Registry<C>,
+    d: &crate::Descriptor,
+) -> &'a [crate::FieldMeta] {
+    registry
+        .entries
+        .iter()
+        .find(|e| e.descriptor.name == d.name)
+        .map_or(&[], |e| e.param_fields.as_slice())
 }
 
 /// The line a runner prints, and adds to its report, for an op it cannot call.
