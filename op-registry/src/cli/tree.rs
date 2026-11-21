@@ -1,6 +1,6 @@
 //! The clap command tree of a registry.
 
-use super::{Fallback, ID_COMPACT, ID_PRETTY, ID_TEXT};
+use super::{Fallback, FallbackFlag, ID_COMPACT, ID_PRETTY, ID_TEXT};
 use crate::{CliContext, OpGlobals, OpKind, Registry, Surface};
 use clap::{Arg, ArgAction, Command};
 
@@ -82,6 +82,26 @@ pub(crate) fn top_words<C>(registry: &Registry<C>) -> Vec<String> {
     words
 }
 
+/// Panics when a free-text fallback's flag reuses a long or short name of a
+/// registry global or the library (`-h` included).
+fn check_fallback_flags(root: &Command, name: &str, flags: &[FallbackFlag]) {
+    let globals = || root.get_arguments().filter(|a| a.is_global_set());
+    for flag in flags {
+        assert!(
+            !LIBRARY_FLAGS.contains(&flag.long)
+                && !globals().any(|a| a.get_long() == Some(flag.long)),
+            "fallback `{name}` flag --{} clashes with a registry global",
+            flag.long
+        );
+        if let Some(short) = flag.short {
+            assert!(
+                short != 'h' && !globals().any(|a| a.get_short() == Some(short)),
+                "fallback `{name}` flag -{short} clashes with a registry global"
+            );
+        }
+    }
+}
+
 /// Builds the clap command for a registry: the binary's name, about and
 /// version, the globals, and one group per noun word with a leaf per op.
 ///
@@ -100,16 +120,6 @@ pub fn command<C: CliContext>(registry: &Registry<C>) -> Command {
             field.rust_name,
             field.flag
         );
-    }
-    if let Some(Fallback::FreeText { name, flags, .. }) = &registry.fallback {
-        let globals = <C::Globals as OpGlobals>::fields();
-        for flag in flags.iter() {
-            let flag = flag.trim_start_matches('-');
-            assert!(
-                !LIBRARY_FLAGS.contains(&flag) && !globals.iter().any(|f| f.flag == flag),
-                "fallback `{name}` flag --{flag} clashes with a registry global"
-            );
-        }
     }
     let mut root = Command::new(registry.bin())
         .about(registry.about())
@@ -139,8 +149,11 @@ pub fn command<C: CliContext>(registry: &Registry<C>) -> Command {
                 .help("Print the JSON output on one line."),
         );
     root = <C::Globals as OpGlobals>::add_args(root);
+    if let Some(Fallback::FreeText { name, flags, .. }) = &registry.fallback {
+        check_fallback_flags(&root, name, flags);
+    }
     if let Some(fallback) = &registry.fallback {
-        root = root.after_help(fallback.listing());
+        root = root.after_help(fallback.listing(registry.bin()));
     }
 
     let mut top: Vec<(String, Node)> = Vec::new();

@@ -1,7 +1,7 @@
 //! Extra commands and the FlagsOnly / FreeText root fallbacks.
 
 use futures_util::future::BoxFuture;
-use op_registry::cli::{self, edit_distance, Io, NoHooks, Outcome, RunHooks};
+use op_registry::cli::{self, edit_distance, FallbackFlag, Io, NoHooks, Outcome, RunHooks};
 use op_registry::{CallOptions, CliContext, OpGlobals, OpParams, OpSpec, Registry};
 use serde::Serialize;
 use std::cell::RefCell;
@@ -57,7 +57,7 @@ fn base() -> Registry<Ctx> {
     r.set_bin("app", "1.2.3", "A test app.");
     r.group("build", "Builds.");
     r.group("task", "Tasks.");
-    for path in ["ping", "build run", "task log", "log"] {
+    for path in ["ping", "build run", "task log", "log", "stats"] {
         r.push_op(
             OpSpec::<Nothing, Out>::new(path, "Does it."),
             |_c: &Ctx, _p: Nothing, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Out>> {
@@ -81,18 +81,41 @@ fn flags_only(r: &mut Registry<Ctx>) {
     );
 }
 
-fn free_text(r: &mut Registry<Ctx>) {
+const FLAGS: &[FallbackFlag] = &[
+    FallbackFlag {
+        long: "codebase",
+        short: Some('c'),
+        takes_value: true,
+    },
+    FallbackFlag {
+        long: "allow",
+        short: None,
+        takes_value: true,
+    },
+    FallbackFlag {
+        long: "dry",
+        short: Some('d'),
+        takes_value: false,
+    },
+];
+
+fn free_text_with(r: &mut Registry<Ctx>, near_miss: bool) {
     r.fallback_free_text(
         "ask",
         "Ask the agent.\nMore text.",
-        &["codebase"],
-        |g: &G, args: Vec<OsString>| -> BoxFuture<'_, u8> {
+        FLAGS,
+        near_miss,
+        |g: &G, args: Vec<OsString>| -> BoxFuture<'_, anyhow::Result<u8>> {
             Box::pin(async move {
                 log(format!("free_text {:?} {:?}", g.endpoint, strings(&args)));
-                9
+                Ok(9)
             })
         },
     );
+}
+
+fn free_text(r: &mut Registry<Ctx>) {
+    free_text_with(r, true);
 }
 
 fn strings(args: &[OsString]) -> Vec<String> {
@@ -255,7 +278,11 @@ fn root_help_lists_fallback() {
     let mut r = base();
     flags_only(&mut r);
     let ran = run(&r, &["--help"]);
-    assert!(ran.out.contains("fix: Fix things."), "{}", ran.out);
+    assert!(
+        ran.out.contains("fix: Fix things. (more: app help fix)"),
+        "{}",
+        ran.out
+    );
     assert!(!ran.out.contains("More text."), "{}", ran.out);
 }
 
@@ -347,12 +374,181 @@ fn free_text_flag_clash_panics() {
         r.fallback_free_text(
             "ask",
             "Ask.",
-            &["endpoint"],
-            |_: &G, _: Vec<OsString>| -> BoxFuture<'_, u8> { Box::pin(async { 0 }) },
+            &[FallbackFlag {
+                long: "endpoint",
+                short: None,
+                takes_value: true,
+            }],
+            true,
+            |_: &G, _: Vec<OsString>| -> BoxFuture<'_, anyhow::Result<u8>> {
+                Box::pin(async { Ok(0) })
+            },
         );
         cli::command(&r);
     });
     assert!(result.is_err());
+}
+
+#[test]
+fn short_flag_clash_panics() {
+    // `-h` belongs to the library.
+    let result = std::panic::catch_unwind(|| {
+        let mut r = base();
+        r.fallback_free_text(
+            "ask",
+            "Ask.",
+            &[FallbackFlag {
+                long: "hello",
+                short: Some('h'),
+                takes_value: false,
+            }],
+            true,
+            |_: &G, _: Vec<OsString>| -> BoxFuture<'_, anyhow::Result<u8>> {
+                Box::pin(async { Ok(0) })
+            },
+        );
+        cli::command(&r);
+    });
+    let message = *result.unwrap_err().downcast::<String>().unwrap();
+    assert!(message.contains("-h"), "{message}");
+}
+
+#[test]
+fn empty_argv_reaches_fallback_with_empty_vec() {
+    let mut r = base();
+    free_text(&mut r);
+    assert_eq!(run(&r, &[]).code, 9);
+    assert_eq!(logged(), vec!["free_text None []"]);
+}
+
+#[test]
+fn globals_only_reaches_fallback_with_empty_vec() {
+    let mut r = base();
+    free_text(&mut r);
+    assert_eq!(run(&r, &["--endpoint", "e", "--pretty"]).code, 9);
+    assert_eq!(logged(), vec![r#"free_text Some("e") []"#]);
+}
+
+#[test]
+fn trailing_globals_taken_from_tail() {
+    let mut r = base();
+    free_text(&mut r);
+    assert_eq!(run(&r, &["fix it", "--endpoint", "e", "--pretty"]).code, 9);
+    assert_eq!(run(&r, &["-x", "word", "--endpoint=e2"]).code, 9);
+    assert_eq!(
+        logged(),
+        vec![
+            r#"free_text Some("e") ["fix it"]"#,
+            r#"free_text Some("e2") ["-x", "word"]"#
+        ]
+    );
+}
+
+#[test]
+fn value_flag_value_spelling_a_global_kept() {
+    let mut r = base();
+    free_text(&mut r);
+    assert_eq!(
+        run(
+            &r,
+            &["go", "--allow", "--pretty", "-c", "--endpoint", "--dry"]
+        )
+        .code,
+        9
+    );
+    assert_eq!(
+        logged(),
+        vec![r#"free_text None ["go", "--allow", "--pretty", "-c", "--endpoint", "--dry"]"#]
+    );
+}
+
+#[test]
+fn double_dash_stops_scan() {
+    let mut r = base();
+    free_text(&mut r);
+    assert_eq!(
+        run(&r, &["go", "--endpoint", "e", "--", "--endpoint", "x"]).code,
+        9
+    );
+    assert_eq!(
+        logged(),
+        vec![r#"free_text Some("e") ["go", "--", "--endpoint", "x"]"#]
+    );
+}
+
+#[test]
+fn near_miss_false_sends_stat_to_fallback() {
+    let mut r = base();
+    free_text_with(&mut r, false);
+    // `stat` is within distance 2 of `stats`.
+    assert_eq!(run(&r, &["stat"]).code, 9);
+    assert_eq!(logged(), vec![r#"free_text None ["stat"]"#]);
+}
+
+#[test]
+fn near_miss_true_refuses_stat() {
+    let mut r = base();
+    free_text_with(&mut r, true);
+    let ran = run(&r, &["stat"]);
+    assert_eq!(ran.code, 2);
+    assert_eq!(last_err(&ran)["code"], "op_registry.cli.unknown_command");
+    assert!(logged().is_empty());
+}
+
+#[test]
+fn free_text_err_goes_through_the_error_path() {
+    let mut r = base();
+    r.fallback_free_text(
+        "ask",
+        "Ask.",
+        &[],
+        true,
+        |g: &G, _: Vec<OsString>| -> BoxFuture<'_, anyhow::Result<u8>> {
+            Box::pin(
+                async move { anyhow::bail!("rejected {}", g.token.clone().unwrap_or_default()) },
+            )
+        },
+    );
+    let rec = Rec::default();
+    let ran = run_hooked(&r, &["hello", "--token", "s3cretvalue"], &rec);
+    assert_eq!(ran.code, 70);
+    assert_eq!(*rec.0.lock().unwrap(), ["post_run_err"]);
+    assert!(!ran.err.contains("s3cretvalue"), "{}", ran.err);
+}
+
+#[test]
+fn root_help_has_fallback_pointer() {
+    for free in [false, true] {
+        let mut r = base();
+        if free {
+            free_text(&mut r);
+        } else {
+            flags_only(&mut r);
+        }
+        let name = if free { "ask" } else { "fix" };
+        let ran = run(&r, &["--help"]);
+        assert!(
+            ran.out.contains(&format!("(more: app help {name})")),
+            "{}",
+            ran.out
+        );
+    }
+}
+
+#[test]
+fn fallback_help_replaces_bin() {
+    let mut r = Registry::<Ctx>::new();
+    r.set_pillar("fix");
+    r.set_bin("gait-min", "1.0.0", "Min.");
+    r.fallback_flags_only(
+        "turn",
+        "Run a turn.\nUsage: {bin} \"task\"",
+        |_: Vec<OsString>| -> BoxFuture<'static, anyhow::Result<u8>> { Box::pin(async { Ok(0) }) },
+    );
+    let ran = run(&r, &["help", "turn"]);
+    assert_eq!(ran.code, 0);
+    assert!(ran.out.contains("Usage: gait-min \"task\""), "{}", ran.out);
+    assert!(!ran.out.contains("{bin}"), "{}", ran.out);
 }
 
 #[test]

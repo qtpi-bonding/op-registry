@@ -8,7 +8,7 @@ mod parse;
 mod run;
 mod tree;
 
-pub use fallback::edit_distance;
+pub use fallback::{edit_distance, FallbackFlag};
 pub use io::{Captured, Io, SharedWriter};
 pub use parse::{parse, Parsed, UsageFailure};
 pub use run::{dispatch, run, run_with_io, NoHooks, Outcome, RunHooks, Selected};
