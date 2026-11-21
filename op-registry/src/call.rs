@@ -19,6 +19,10 @@ pub struct CallOptions {
     pub(crate) path: Option<CallPath>,
     /// The audience of the server making the call, set by `mcp::call_tool`.
     pub(crate) serving: Option<Audience>,
+    /// The call's redactor. The pipeline extends the handle already here with
+    /// the call's secrets and never replaces it, so an op that passes a
+    /// clone of its options to a nested call shares one handle with it.
+    pub(crate) redactor: Redactor,
 }
 
 /// Identifies the caller of an operation.
@@ -65,6 +69,18 @@ impl CallOptions {
     pub fn with_max_retries(mut self, n: u32) -> Self {
         self.max_retries = Some(n);
         self
+    }
+
+    /// Registers a secret the op learned while running (a key file it read):
+    /// the value, its trimmed form and each trimmed line are replaced by
+    /// `<secret>` in every error line, notice, hook and outcome of the call,
+    /// and in those of the calls that share these options (a clone shares
+    /// the handle).
+    ///
+    /// Register a secret before you print anything that may contain it: what
+    /// was already sent is not redacted after the fact.
+    pub fn redact(&self, bytes: &[u8]) {
+        self.redactor.add(bytes);
     }
 }
 

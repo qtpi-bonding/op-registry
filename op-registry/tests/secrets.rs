@@ -156,7 +156,7 @@ fn hidden_path_is_not_printed() {
 
 #[test]
 fn redactor_redacts_value_and_lines() {
-    let mut r = Redactor::default();
+    let r = Redactor::default();
     r.add(b"line-one-key\nline-two-key");
     assert_eq!(
         r.redact("failed with line-two-key here"),
@@ -164,7 +164,7 @@ fn redactor_redacts_value_and_lines() {
     );
     assert_eq!(r.redact("all: line-one-key\nline-two-key"), "all: <secret>");
     // short values are skipped
-    let mut short = Redactor::default();
+    let short = Redactor::default();
     short.add(b"abc");
     assert_eq!(short.redact("abc"), "abc");
     assert!(!format!("{r:?}").contains("line-one"));

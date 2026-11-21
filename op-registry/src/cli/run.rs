@@ -216,7 +216,7 @@ pub async fn run_with_io<C: CliContext + Resolve>(
     let ctx = match C::from_globals(&globals) {
         Ok(ctx) => ctx,
         Err(error) => {
-            let mut redactor = parsed_secrets::<C>(&parsed);
+            let redactor = parsed_secrets::<C>(&parsed);
             redactor.extend(&scrub());
             return finish_err(registry, &mut io, Some(hooks), None, error, &redactor).exit_code();
         }
@@ -380,7 +380,7 @@ fn parsed_secrets<C: CliContext>(parsed: &Parsed) -> Redactor {
 
 /// The raw values given to the op's secret arguments.
 fn matches_redactor(ids: &[String], matches: &clap::ArgMatches) -> Redactor {
-    let mut redactor = Redactor::default();
+    let redactor = Redactor::default();
     for id in ids {
         if let Ok(Some(values)) = matches.try_get_raw(id) {
             for value in values {
@@ -476,7 +476,7 @@ async fn execute<C: CliContext + Resolve>(
         Ok(params) => params,
         Err(error) => {
             // Nothing is built yet, so the redactor comes from the raw values.
-            let mut redactor = matches_redactor(&entry.secret_ids, &matches);
+            let redactor = matches_redactor(&entry.secret_ids, &matches);
             redactor.extend(&secrets);
             return finish_err(registry, io, hooks, Some(name), error, &redactor);
         }
@@ -492,10 +492,12 @@ async fn execute<C: CliContext + Resolve>(
     if let Some(caller) = ctx.caller() {
         opts = opts.with_caller(caller);
     }
+    // The secret globals go into the call's one redactor handle.
+    opts.redactor.extend(&secrets);
 
     if entry.descriptor.kind == OpKind::Stream {
         let invocation = registry
-            .call_stream_decoded(&name, params, ctx, opts, cursor, CallPath::Cli, secrets)
+            .call_stream_decoded(&name, params, ctx, opts, cursor, CallPath::Cli)
             .await;
         let redactor = invocation.redactor;
         let mut stream = match invocation.result {
@@ -526,7 +528,7 @@ async fn execute<C: CliContext + Resolve>(
     }
 
     let invocation = registry
-        .call_decoded(&name, params, ctx, opts, CallPath::Cli, text, secrets)
+        .call_decoded(&name, params, ctx, opts, CallPath::Cli, text)
         .await;
     let redactor = invocation.redactor;
     let value = match invocation.result {

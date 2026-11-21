@@ -309,7 +309,7 @@ pub(super) fn secret_flags<C: CliContext>(registry: &Registry<C>) -> Vec<String>
 /// they came from argv or the environment. Globals propagate, so any level's
 /// matches will do.
 pub(super) fn globals_redactor<C: CliContext>(matches: &ArgMatches) -> Redactor {
-    let mut redactor = Redactor::default();
+    let redactor = Redactor::default();
     for field in <C::Globals as OpGlobals>::fields() {
         if !field.secret {
             continue;
@@ -326,7 +326,7 @@ pub(super) fn globals_redactor<C: CliContext>(matches: &ArgMatches) -> Redactor 
 /// A redactor for the values `argv` gives to the secret `flags`
 /// (`--flag value` and `--flag=value`).
 pub(super) fn argv_redactor(flags: &[String], argv: &[OsString]) -> Redactor {
-    let mut redactor = Redactor::default();
+    let redactor = Redactor::default();
     for (at, token) in argv.iter().enumerate() {
         let token = token.to_string_lossy();
         let Some(rest) = token.strip_prefix("--") else {

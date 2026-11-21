@@ -6,8 +6,8 @@ use futures_util::StreamExt;
 use op_registry::cli::{self, Io, NoHooks};
 use op_registry::{
     Access, Audience, CallFailure, CallHook, CallInfo, CallOptions, CallPath, Caller, CliContext,
-    Notice, NoticeSink, Notices, Op, OpGlobals, OpParams, OpSpec, Paths, Registry, Surface,
-    TraceParent,
+    Notice, NoticeSink, Notices, Op, OpGlobals, OpParams, OpSpec, Paths, Ref, Registry, Resolve,
+    Surface, TraceParent, UsageError,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -738,4 +738,97 @@ async fn stream_item_errors_are_mapped() {
         .err()
         .unwrap();
     assert_eq!(code_of(&err), "test.app.mapped");
+}
+
+static MAPPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Counts its calls and passes the error through.
+fn count_map(err: anyhow::Error) -> anyhow::Error {
+    MAPPED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    err
+}
+
+/// Takes the count since the last take.
+fn take_count() -> usize {
+    MAPPED.swap(0, std::sync::atomic::Ordering::SeqCst)
+}
+
+/// The mapper runs exactly once per error, on every surface. `map_io` is
+/// idempotent, so only a counter notices a second application. One test: the
+/// counter is a static.
+#[tokio::test]
+async fn mapper_runs_exactly_once_per_error() {
+    let mut r = registry();
+    r.set_error_mapper(count_map);
+    take_count();
+    r.call("io_fail", json!({"id": "a"}), &Ctx, CallOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(take_count(), 1, "call");
+    r.call_typed::<IoFail>(&Ctx, pick(), CallOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(take_count(), 1, "call_typed");
+    let items: Vec<_> = r
+        .call_stream("item_fail", json!({}), &Ctx, CallOptions::default(), None)
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    assert!(items[1].is_err());
+    assert_eq!(take_count(), 1, "call_stream item");
+    let (code, _) = run_cli(&r, &["io_fail", "--id", "a"]);
+    assert_eq!(code, 70);
+    assert_eq!(take_count(), 1, "CLI unary");
+    let (code, _) = run_cli(&r, &["item_fail"]);
+    assert_eq!(code, 70);
+    assert_eq!(take_count(), 1, "CLI stream item");
+}
+
+#[test]
+fn cli_stream_item_error_passes_through_mapper() {
+    let mut r = registry();
+    r.set_error_mapper(map_io);
+    let (code, line) = run_cli(&r, &["item_fail"]);
+    assert_eq!(code, 65, "{line}");
+    assert!(line.contains("test.app.mapped"), "{line}");
+    assert!(!line.contains("dropped"), "{line}");
+}
+
+#[derive(OpParams)]
+struct ById {
+    #[op(subject = "agent", id_only)]
+    id: Ref,
+}
+
+/// A context whose `check_id` rejects every id.
+struct BadId;
+
+impl Resolve for BadId {
+    fn check_id(&self, _kind: &str, raw: &str) -> Result<(), UsageError> {
+        Err(UsageError::InvalidField {
+            name: "id".to_owned(),
+            reason: format!("`{raw}` is not an agent id"),
+        })
+    }
+}
+
+#[tokio::test]
+async fn check_id_usage_error_in_resolution_is_not_mapped() {
+    let mut r: Registry<BadId> = Registry::new();
+    r.set_error_mapper(map_all);
+    r.push_op(
+        OpSpec::<ById, serde_json::Value>::new("by_id", "Takes an id."),
+        |_c: &BadId,
+         _p: ById,
+         _o: CallOptions|
+         -> BoxFuture<'_, anyhow::Result<serde_json::Value>> {
+            Box::pin(async { Ok(json!({})) })
+        },
+    );
+    let err = r
+        .call("by_id", json!({"id": "x"}), &BadId, CallOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(code_of(&err), "op_registry.usage.invalid");
 }

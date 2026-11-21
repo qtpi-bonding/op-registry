@@ -33,20 +33,24 @@ pub(crate) struct Invocation<T> {
 }
 
 impl<T> Invocation<T> {
-    /// A failure before any parameters exist: nothing to redact.
-    fn failed(err: anyhow::Error) -> Self {
+    /// A failure before any parameters exist: only what the caller's options
+    /// already hold is redacted.
+    fn failed(err: anyhow::Error, redactor: Redactor) -> Self {
         Self {
             result: Err(err),
-            redactor: Redactor::default(),
+            redactor,
             exit: 0,
             text: None,
         }
     }
 }
 
-/// The redactor for a call: every secret its parameters hold.
-fn redactor_of(secrets: Vec<Vec<u8>>) -> Redactor {
-    let mut redactor = Redactor::default();
+/// The one redactor of a call: the handle the caller's options already
+/// carry, extended with every secret the parameters hold. The handle is never
+/// replaced, so an op that passes a clone of its options to a nested call
+/// shares it with that call. Every output site of the call gets a clone.
+fn call_redactor(opts: &CallOptions, secrets: Vec<Vec<u8>>) -> Redactor {
+    let redactor = opts.redactor.clone();
     for secret in secrets {
         redactor.add(&secret);
     }
@@ -129,18 +133,10 @@ impl<C: Resolve> Registry<C> {
     ) -> Invocation<Value> {
         match self.decode_json(name, args, &path, false) {
             Ok(params) => {
-                self.call_decoded(
-                    name,
-                    params,
-                    ctx,
-                    opts,
-                    path,
-                    want_text,
-                    Redactor::default(),
-                )
-                .await
+                self.call_decoded(name, params, ctx, opts, path, want_text)
+                    .await
             }
-            Err(err) => Invocation::failed(err),
+            Err(err) => Invocation::failed(err, opts.redactor),
         }
     }
 
@@ -159,9 +155,9 @@ impl<C: Resolve> Registry<C> {
         let path = json_path(&opts);
         let params = self
             .decode_json(name, args, &path, true)
-            .map_err(CallFailure::plain)?;
+            .map_err(|error| CallFailure::new(error, opts.redactor.clone()))?;
         let invocation = self
-            .call_stream_decoded(name, params, ctx, opts, cursor, path, Redactor::default())
+            .call_stream_decoded(name, params, ctx, opts, cursor, path)
             .await;
         let redactor = invocation.redactor;
         match invocation.result {
@@ -184,10 +180,10 @@ impl<C: Resolve> Registry<C> {
     ) -> Invocation<BoxStream<'a, Result<Value>>> {
         match self.decode_json(name, args, &path, true) {
             Ok(params) => {
-                self.call_stream_decoded(name, params, ctx, opts, cursor, path, Redactor::default())
+                self.call_stream_decoded(name, params, ctx, opts, cursor, path)
                     .await
             }
-            Err(err) => Invocation::failed(err),
+            Err(err) => Invocation::failed(err, opts.redactor),
         }
     }
 
@@ -207,9 +203,8 @@ impl<C: Resolve> Registry<C> {
     }
 
     /// Runs a unary op on decoded parameters (the decoder has validated them).
-    /// `secrets` holds what the caller knows to be secret besides the
-    /// parameters (the command line's secret globals).
-    #[allow(clippy::too_many_arguments)]
+    /// What the caller knows to be secret besides the parameters (the command
+    /// line's secret globals) is already in `opts`' redactor.
     pub(crate) async fn call_decoded(
         &self,
         name: &str,
@@ -218,20 +213,18 @@ impl<C: Resolve> Registry<C> {
         mut opts: CallOptions,
         path: CallPath,
         want_text: bool,
-        secrets: Redactor,
     ) -> Invocation<Value> {
         let entry = match self.entry(name) {
             Ok(entry) => entry,
-            Err(err) => return Invocation::failed(err),
+            Err(err) => return Invocation::failed(err, opts.redactor),
         };
         if let Err(err) = check_path(entry, name, path.surface()) {
-            return Invocation::failed(err);
+            return Invocation::failed(err, opts.redactor);
         }
         let Run::Unary(run) = &entry.run else {
-            return Invocation::failed(wrong_shape(name));
+            return Invocation::failed(wrong_shape(name), opts.redactor);
         };
-        let mut redactor = secrets;
-        redactor.extend(&redactor_of((entry.secrets)(&*params)));
+        let redactor = call_redactor(&opts, (entry.secrets)(&*params));
         opts.notices = opts.notices.redacting(&redactor);
         opts.path = Some(path.clone());
         let info = self.info(entry, &*params, path, &opts, &redactor);
@@ -262,9 +255,8 @@ impl<C: Resolve> Registry<C> {
         }
     }
 
-    /// Runs a streaming op on decoded parameters; `secrets` as for
+    /// Runs a streaming op on decoded parameters; the redactor as for
     /// [`Registry::call_decoded`].
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn call_stream_decoded<'a>(
         &'a self,
         name: &str,
@@ -273,20 +265,18 @@ impl<C: Resolve> Registry<C> {
         mut opts: CallOptions,
         cursor: Option<Cursor>,
         path: CallPath,
-        secrets: Redactor,
     ) -> Invocation<BoxStream<'a, Result<Value>>> {
         let entry = match self.entry(name) {
             Ok(entry) => entry,
-            Err(err) => return Invocation::failed(err),
+            Err(err) => return Invocation::failed(err, opts.redactor),
         };
         if let Err(err) = check_path(entry, name, path.surface()) {
-            return Invocation::failed(err);
+            return Invocation::failed(err, opts.redactor);
         }
         let Run::Stream(run) = &entry.run else {
-            return Invocation::failed(wrong_shape(name));
+            return Invocation::failed(wrong_shape(name), opts.redactor);
         };
-        let mut redactor = secrets;
-        redactor.extend(&redactor_of((entry.secrets)(&*params)));
+        let redactor = call_redactor(&opts, (entry.secrets)(&*params));
         opts.notices = opts.notices.redacting(&redactor);
         opts.path = Some(path.clone());
         let info = self.info(entry, &*params, path, &opts, &redactor);
@@ -412,13 +402,14 @@ impl<C: Resolve + 'static> Registry<C> {
         mut params: O::Params,
         mut opts: CallOptions,
     ) -> std::result::Result<O::Output, CallFailure> {
-        let entry = self.entry(O::NAME).map_err(CallFailure::plain)?;
-        check_path(entry, O::NAME, Surface::Typed).map_err(CallFailure::plain)?;
+        let plain = |error: anyhow::Error| CallFailure::new(error, opts.redactor.clone());
+        let entry = self.entry(O::NAME).map_err(plain)?;
+        check_path(entry, O::NAME, Surface::Typed).map_err(plain)?;
         let f = entry
             .typed
             .downcast_ref::<TypedUnary<C, O::Params, O::Output>>()
-            .ok_or_else(|| CallFailure::plain(wrong_shape(O::NAME)))?;
-        let redactor = redactor_of(params.secrets());
+            .ok_or_else(|| plain(wrong_shape(O::NAME)))?;
+        let redactor = call_redactor(&opts, params.secrets());
         crate::OpParams::validate(&params)
             .map_err(|error| CallFailure::new(error, redactor.clone()))?;
         opts.notices = opts.notices.redacting(&redactor);
@@ -448,13 +439,14 @@ impl<C: Resolve + 'static> Registry<C> {
         cursor: Option<Cursor>,
     ) -> std::result::Result<BoxStream<'a, std::result::Result<O::Output, CallFailure>>, CallFailure>
     {
-        let entry = self.entry(O::NAME).map_err(CallFailure::plain)?;
-        check_path(entry, O::NAME, Surface::Typed).map_err(CallFailure::plain)?;
+        let plain = |error: anyhow::Error| CallFailure::new(error, opts.redactor.clone());
+        let entry = self.entry(O::NAME).map_err(plain)?;
+        check_path(entry, O::NAME, Surface::Typed).map_err(plain)?;
         let f = entry
             .typed
             .downcast_ref::<TypedStream<C, O::Params, O::Output>>()
-            .ok_or_else(|| CallFailure::plain(wrong_shape(O::NAME)))?;
-        let redactor = redactor_of(params.secrets());
+            .ok_or_else(|| plain(wrong_shape(O::NAME)))?;
+        let redactor = call_redactor(&opts, params.secrets());
         crate::OpParams::validate(&params)
             .map_err(|error| CallFailure::new(error, redactor.clone()))?;
         opts.notices = opts.notices.redacting(&redactor);

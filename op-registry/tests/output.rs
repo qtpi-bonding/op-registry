@@ -25,7 +25,7 @@ enum E {
 }
 
 fn redactor(secret: &str) -> Redactor {
-    let mut r = Redactor::default();
+    let r = Redactor::default();
     r.add(secret.as_bytes());
     r
 }

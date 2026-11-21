@@ -336,7 +336,7 @@ impl<C: Sync> Registry<C> {
     /// codes, the CLI exit and every surface's output. It never sees decode,
     /// validate or other `op_registry.usage.*` errors. `merge` keeps the
     /// receiver's mapper.
-    pub fn set_error_mapper(&mut self, mapper: ErrorMapper) {
+    pub fn set_error_mapper(&mut self, mapper: fn(anyhow::Error) -> anyhow::Error) {
         self.error_mapper = Some(mapper);
     }
 

@@ -71,18 +71,17 @@ impl ParseCx {
 
 /// Replaces known secret strings in text with `<secret>`.
 ///
-/// Built from `OpParams::secrets()` for each call; it keeps exact strings
-/// only, so text an app has transformed (cut, re-encoded) is not caught.
+/// A shared handle: a clone sees every secret added to any of its clones, so
+/// one call hands the same redactor to every place that prints. It keeps
+/// exact strings only, so text an app has transformed (cut, re-encoded) is
+/// not caught. [`Redactor::detached`] gives an independent copy.
 #[derive(Clone, Default)]
-pub struct Redactor {
-    /// Longest first.
-    secrets: Vec<String>,
-}
+pub struct Redactor(std::sync::Arc<std::sync::RwLock<Vec<String>>>);
 
 impl std::fmt::Debug for Redactor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Redactor")
-            .field("secrets", &self.secrets.len())
+            .field("secrets", &self.read().len())
             .finish()
     }
 }
@@ -91,37 +90,67 @@ impl Redactor {
     /// The shortest value worth redacting; shorter ones would mangle text.
     const MIN_LEN: usize = 4;
 
-    /// Adds a secret: the whole value and each non-empty line of it, read as
-    /// UTF-8 (lossy). Values shorter than 4 bytes are skipped.
-    pub fn add(&mut self, bytes: &[u8]) {
+    /// An empty redactor.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The secrets, longest first. A poisoned lock still holds a whole list:
+    /// every writer leaves it consistent.
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, Vec<String>> {
+        self.0.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn write(&self) -> std::sync::RwLockWriteGuard<'_, Vec<String>> {
+        self.0.write().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Adds a secret: the whole value and each non-empty trimmed line of it,
+    /// read as UTF-8 (lossy). Values shorter than 4 bytes are skipped. Every
+    /// clone of this handle sees it.
+    pub fn add(&self, bytes: &[u8]) {
         let text = String::from_utf8_lossy(bytes);
         let lines = text.lines().map(str::trim);
+        let mut secrets = self.write();
         for candidate in std::iter::once(text.as_ref()).chain(lines) {
-            if candidate.len() >= Self::MIN_LEN && !self.secrets.iter().any(|s| s == candidate) {
-                self.secrets.push(candidate.to_owned());
+            if candidate.len() >= Self::MIN_LEN && !secrets.iter().any(|s| s == candidate) {
+                secrets.push(candidate.to_owned());
             }
         }
-        self.secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
+        secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
     }
 
     /// Adds every secret of `other`.
-    pub fn extend(&mut self, other: &Redactor) {
-        for secret in &other.secrets {
-            if !self.secrets.contains(secret) {
-                self.secrets.push(secret.clone());
+    pub fn extend(&self, other: &Redactor) {
+        if std::sync::Arc::ptr_eq(&self.0, &other.0) {
+            return;
+        }
+        let incoming = other.read().clone();
+        let mut secrets = self.write();
+        for secret in incoming {
+            if !secrets.contains(&secret) {
+                secrets.push(secret);
             }
         }
-        self.secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
+        secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
     }
 
     /// Whether nothing is to be redacted.
     pub fn is_empty(&self) -> bool {
-        self.secrets.is_empty()
+        self.read().is_empty()
+    }
+
+    /// An independent copy of the secrets so far: later additions to either
+    /// side do not reach the other.
+    pub fn detached(&self) -> Redactor {
+        Redactor(std::sync::Arc::new(std::sync::RwLock::new(
+            self.read().clone(),
+        )))
     }
 
     /// `text` with each secret replaced by `<secret>`, longest first.
     pub fn redact(&self, text: &str) -> String {
-        self.secrets.iter().fold(text.to_owned(), |out, s| {
+        self.read().iter().fold(text.to_owned(), |out, s| {
             out.replace(s.as_str(), "<secret>")
         })
     }

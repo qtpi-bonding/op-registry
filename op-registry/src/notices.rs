@@ -57,14 +57,15 @@ impl NoticeSink for RedactingSink {
 }
 
 impl Notices {
-    /// A handle whose text and labels are redacted before they reach the sink.
+    /// A handle whose text and labels are redacted before they reach the sink,
+    /// at send time: a secret registered after this call still counts.
     pub(crate) fn redacting(self, redactor: &Redactor) -> Self {
         match self.0 {
-            Some(inner) if !redactor.is_empty() => Self(Some(Arc::new(RedactingSink {
+            Some(inner) => Self(Some(Arc::new(RedactingSink {
                 inner,
                 redactor: redactor.clone(),
             }))),
-            other => Self(other),
+            None => Self(None),
         }
     }
 
