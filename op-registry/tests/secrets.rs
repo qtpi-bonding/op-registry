@@ -23,6 +23,15 @@ struct Inline {
 }
 
 #[derive(Debug, OpParams)]
+struct InlineEither {
+    #[op(secret_inline)]
+    #[op(one_of = "src")]
+    key: Option<SecretFile>,
+    #[op(one_of = "src")]
+    name: Option<String>,
+}
+
+#[derive(Debug, OpParams)]
 struct Token {
     /// An API token.
     #[op(secret)]
@@ -137,6 +146,22 @@ fn secret_inline_accepts_base64_object() {
     );
     let schema = Inline::input_schema();
     assert!(schema["properties"]["key"]["oneOf"].is_array(), "{schema}");
+}
+
+#[test]
+fn secret_inline_relation_member_schema_accepts_null() {
+    // `from_json` reads null as absent, so the schema must accept it too.
+    let schema = InlineEither::input_schema();
+    let value = json!({"key": null, "name": "n"});
+    InlineEither::from_json(value.clone(), &mut ParseCx::default()).unwrap();
+    assert!(jsonschema::is_valid(&schema, &value), "{schema}");
+    assert!(
+        schema["properties"]["key"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"type": "null"})),
+        "{schema}"
+    );
 }
 
 #[test]

@@ -210,6 +210,14 @@ pub fn nullable(mut schema: Value) -> Value {
                 values.push(Value::Null);
             }
         }
+        for key in ["oneOf", "anyOf"] {
+            if let Some(Value::Array(branches)) = object.get_mut(key) {
+                let null = serde_json::json!({"type": "null"});
+                if !branches.contains(&null) {
+                    branches.push(null);
+                }
+            }
+        }
     }
     schema
 }
