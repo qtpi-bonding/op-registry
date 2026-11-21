@@ -619,3 +619,174 @@ mod prompting {
         );
     }
 }
+
+// ---- KIT-5 / SEC-2: the kit's secret sentinel ----
+
+#[cfg(feature = "testing")]
+mod kit {
+    use super::*;
+    use op_registry::testing::{assert_secrets_not_echoed, SecretSentinel};
+    use op_registry::{CliContext, OpGlobals};
+    use serde_json::Value;
+    use std::path::PathBuf;
+
+    const SENTINEL: &str = "SENTINEL-token-4471";
+    const KEY_LINES: &str = "KEYLINE-alpha-9921\nKEYLINE-beta-9922\n";
+
+    /// A context that needs `--hub`, like a binary whose ops fail without
+    /// their address.
+    #[derive(Debug, OpGlobals)]
+    struct Needs {
+        /// The hub address.
+        hub: String,
+    }
+
+    struct Ctx;
+    impl op_registry::Resolve for Ctx {}
+    impl CliContext for Ctx {
+        type Globals = Needs;
+        fn from_globals(g: &Needs) -> anyhow::Result<Self> {
+            anyhow::ensure!(!g.hub.is_empty(), "no hub");
+            Ok(Ctx)
+        }
+    }
+
+    #[derive(Debug, OpParams)]
+    struct Tokened {
+        /// A token.
+        #[op(secret)]
+        token: Option<String>,
+    }
+
+    #[derive(Debug, OpParams)]
+    struct KeyPath {
+        /// A key file the op reads itself.
+        #[op(secret)]
+        key_file: PathBuf,
+    }
+
+    #[derive(Debug, OpParams)]
+    struct Prompted {
+        /// The key.
+        #[op(prompt)]
+        key: SecretFile,
+    }
+
+    fn key_file(name: &str) -> PathBuf {
+        temp_file(name, KEY_LINES.as_bytes())
+    }
+
+    fn registry_with(f: impl FnOnce(&mut Registry<Ctx>)) -> Registry<Ctx> {
+        let mut r = Registry::<Ctx>::new();
+        r.set_pillar("fix");
+        r.set_bin("fixd", "1.0.0", "A fixture.");
+        f(&mut r);
+        r
+    }
+
+    fn panic_text(f: impl FnOnce()) -> String {
+        let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+            .expect_err("expected a panic");
+        err.downcast_ref::<String>().cloned().unwrap_or_default()
+    }
+
+    fn check(r: &Registry<Ctx>, sentinel: &SecretSentinel<'_>) {
+        futures_executor::block_on(assert_secrets_not_echoed(r, None, sentinel));
+    }
+
+    #[test]
+    fn sentinel_globals_reach_argv() {
+        let file = key_file("kit-globals.pem");
+        // Echoes the token it was given; without `--hub` it never runs.
+        let r = registry_with(|r| {
+            r.push_op(
+                OpSpec::<Tokened, Value>::new("leak", "Echoes the token."),
+                |_c: &Ctx, p: Tokened, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Value>> {
+                    Box::pin(async move { Ok(json!({"said": p.token})) })
+                },
+            );
+        });
+        check(&r, &SecretSentinel::new(SENTINEL, &file));
+        let sentinel = SecretSentinel::new(SENTINEL, &file).with_globals(&["--hub", "h"]);
+        let text = panic_text(|| check(&r, &sentinel));
+        assert!(text.contains("stdout of the CLI run of leak"), "{text}");
+        assert!(text.contains("sentinel value"), "{text}");
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    fn key_path_registry(register: bool, echo: bool) -> Registry<Ctx> {
+        registry_with(|r| {
+            r.push_op(
+                OpSpec::<KeyPath, Value>::new("sign", "Signs with the key file."),
+                move |_c: &Ctx,
+                      p: KeyPath,
+                      o: CallOptions|
+                      -> BoxFuture<'_, anyhow::Result<Value>> {
+                    Box::pin(async move {
+                        let contents = std::fs::read(&p.key_file)?;
+                        if register {
+                            o.redact(&contents);
+                        }
+                        let text = String::from_utf8_lossy(&contents).into_owned();
+                        if echo {
+                            return Ok(json!({"key": text}));
+                        }
+                        anyhow::bail!("bad key {text}")
+                    })
+                },
+            );
+        })
+    }
+
+    #[test]
+    fn secret_path_op_reading_and_registering_passes() {
+        let file = key_file("kit-path-ok.pem");
+        let sentinel = SecretSentinel::new(SENTINEL, &file).with_globals(&["--hub", "h"]);
+        check(&key_path_registry(true, false), &sentinel);
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn secret_path_op_echoing_contents_fails() {
+        let file = key_file("kit-path-leak.pem");
+        let sentinel = SecretSentinel::new(SENTINEL, &file).with_globals(&["--hub", "h"]);
+        let text = panic_text(|| check(&key_path_registry(false, true), &sentinel));
+        assert!(text.contains("stdout of the CLI run of sign"), "{text}");
+        assert!(text.contains("KEYLINE-beta-9922"), "{text}");
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn prompted_field_exercised_with_fake_prompter() {
+        let file = key_file("kit-prompt.pem");
+        // Leaks only what the prompter answered, never the key file.
+        let r = registry_with(|r| {
+            r.push_op(
+                OpSpec::<Prompted, Value>::new("ask", "Echoes a prompted key."),
+                |_c: &Ctx, p: Prompted, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Value>> {
+                    Box::pin(async move {
+                        let got = String::from_utf8_lossy(p.key.bytes()).into_owned();
+                        Ok(json!({"got": if got == SENTINEL { got } else { "other".into() }}))
+                    })
+                },
+            );
+        });
+        let sentinel = SecretSentinel::new(SENTINEL, &file).with_globals(&["--hub", "h"]);
+        let text = panic_text(|| check(&r, &sentinel));
+        assert!(text.contains("with `--key` left out"), "{text}");
+        assert!(text.contains("sentinel value"), "{text}");
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    fn outcome_message_with_sentinel_fails() {
+        let file = key_file("kit-outcome.pem");
+        // The error line carries the unregistered contents, so the message
+        // the `post_run` hook sees does too.
+        let sentinel = SecretSentinel::new(SENTINEL, &file).with_globals(&["--hub", "h"]);
+        let text = panic_text(|| check(&key_path_registry(false, false), &sentinel));
+        assert!(text.contains("the `post_run` outcome message"), "{text}");
+        assert!(text.contains("KEYLINE-alpha-9921"), "{text}");
+        std::fs::remove_file(&file).unwrap();
+    }
+}

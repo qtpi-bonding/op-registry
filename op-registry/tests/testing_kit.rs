@@ -1096,10 +1096,7 @@ mod secrets_kit {
     #[test]
     fn secrets_sentinel_never_echoed_passes() {
         let key_file = sentinel_file("key-passes.pem");
-        let sentinel = SecretSentinel {
-            value: SENTINEL,
-            key_file: &key_file,
-        };
+        let sentinel = SecretSentinel::new(SENTINEL, &key_file);
         let r = vault_registry(Leak::Nothing);
         futures_executor::block_on(assert_secrets_not_echoed(&r, None, &sentinel));
         futures_executor::block_on(assert_secrets_not_echoed(
@@ -1113,10 +1110,7 @@ mod secrets_kit {
     #[test]
     fn secrets_check_catches_leaky_op() {
         let key_file = sentinel_file("key-leaky.pem");
-        let sentinel = SecretSentinel {
-            value: SENTINEL,
-            key_file: &key_file,
-        };
+        let sentinel = SecretSentinel::new(SENTINEL, &key_file);
         let token = vault_registry(Leak::Token);
         let text = panic_text(|| {
             futures_executor::block_on(assert_secrets_not_echoed(&token, None, &sentinel))
@@ -1134,16 +1128,49 @@ mod secrets_kit {
         std::fs::remove_file(&key_file).unwrap();
     }
 
+    #[derive(OpParams)]
+    struct Plain {
+        /// A key file.
+        key: SecretFile,
+    }
+
+    /// The kit writes the fixed sample line to a `SecretFile` sample's file.
+    #[test]
+    fn kit_secret_file_sample_holds_the_sample_line() {
+        use std::sync::{Arc, Mutex};
+        let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+        let mut r = Registry::<Ctx>::new();
+        r.set_pillar("fix");
+        r.group("vault", "Vaults.");
+        let sink = seen.clone();
+        r.push_local(
+            OpSpec::<Plain, Said>::new("vault read", "Reads the key file."),
+            move |_c: &Ctx, p: Plain, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Said>> {
+                let text = String::from_utf8_lossy(p.key.bytes()).into_owned();
+                assert_eq!(text, "op-registry-kit-sample\n");
+                sink.lock().unwrap().push(text);
+                Box::pin(async {
+                    Ok(Said {
+                        said: "read".to_owned(),
+                    })
+                })
+            },
+        );
+        futures_executor::block_on(op_registry::testing::assert_local_ops_offline(
+            &r,
+            &Ctx,
+            &[],
+        ));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
     #[test]
     fn secrets_check_catches_secret_in_help() {
         let key_file = sentinel_file("key-help.pem");
         let r = vault_registry(Leak::Nothing);
         // "Open the vault." is help text: a sentinel found there is reported for
         // the help, the manual and the schemas' descriptions.
-        let sentinel = SecretSentinel {
-            value: "Open the vault.",
-            key_file: &key_file,
-        };
+        let sentinel = SecretSentinel::new("Open the vault.", &key_file);
         let text = panic_text(|| {
             futures_executor::block_on(assert_secrets_not_echoed(&r, None, &sentinel))
         });

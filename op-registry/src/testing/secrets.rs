@@ -3,22 +3,78 @@
 
 use super::fail_on;
 use super::sample_params;
-use crate::cli::{run_with_io, Io, NoHooks};
+use crate::cli::{run_with_io, Io, Outcome, RunHooks, UsageFailure};
 use crate::manual::{render, Manual};
 use crate::{CliContext, FieldKind, FieldMeta, ParseCx, Registry, Resolve};
 use clap::Command;
 use serde_json::{Map, Value};
 use std::ffi::OsString;
 use std::path::Path;
+use std::sync::Mutex;
 
 /// A made-up secret and a file holding made-up key material. Each non-empty
 /// line of the file is searched for on its own, so the lines must be
 /// distinctive (a short or common line would match ordinary text).
+#[non_exhaustive]
 pub struct SecretSentinel<'a> {
-    /// The sentinel secret value, given to every secret flag.
+    /// The sentinel secret value, given to every secret flag, and the answer
+    /// of the fake prompter.
     pub value: &'a str,
-    /// A file whose contents are the sentinel, given to every `SecretFile`.
+    /// A file whose contents are the sentinel, given to every `SecretFile`
+    /// and every `#[op(secret)]` `Path` field.
     pub key_file: &'a Path,
+    /// Global arguments put right after the binary name in every command
+    /// line the check runs.
+    pub globals: Vec<OsString>,
+}
+
+impl<'a> SecretSentinel<'a> {
+    /// A sentinel with no global arguments.
+    pub fn new(value: &'a str, key_file: &'a Path) -> Self {
+        Self {
+            value,
+            key_file,
+            globals: Vec::new(),
+        }
+    }
+
+    /// Sets the global arguments every command line starts with, for apps
+    /// whose ops fail without them (`--addr`, `--dir`).
+    #[must_use]
+    pub fn with_globals(mut self, globals: &[&str]) -> Self {
+        self.globals = globals.iter().map(OsString::from).collect();
+        self
+    }
+}
+
+/// Records the messages the hooks see.
+#[derive(Default)]
+struct Recorder {
+    usage: Mutex<Vec<String>>,
+    outcomes: Mutex<Vec<String>>,
+}
+
+impl RunHooks for Recorder {
+    fn on_usage_error(&self, failure: &UsageFailure) {
+        self.usage.lock().unwrap().push(failure.message.clone());
+    }
+
+    fn post_run(&self, outcome: &Outcome) {
+        if let Some(message) = outcome.message() {
+            self.outcomes.lock().unwrap().push(message.to_owned());
+        }
+    }
+}
+
+/// A prompter that answers the sentinel value to every question.
+#[cfg(feature = "secrets")]
+struct Answers(String);
+
+#[cfg(feature = "secrets")]
+impl crate::cli::Prompter for Answers {
+    fn read_secret(&self, _label: &str) -> std::io::Result<zeroize::Zeroizing<String>> {
+        Ok(zeroize::Zeroizing::new(self.0.clone()))
+    }
 }
 
 /// What must never appear, each with its name for the report.
@@ -66,19 +122,21 @@ fn is_secret(field: &FieldMeta) -> bool {
     field.secret || field.kind == FieldKind::SecretFile
 }
 
-/// Sample arguments for an op with every secret field set: `SecretFile`
-/// fields to the key file, other secret fields to the sentinel.
+/// Sample arguments for an op with every secret field set: `SecretFile` and
+/// `Path` fields to the key file, other secret fields to the sentinel.
 fn secret_args(schema: &Value, fields: &[FieldMeta], sentinel: &SecretSentinel<'_>) -> Value {
     let mut args = match sample_params(schema) {
         Value::Object(map) => map,
         _ => Map::new(),
     };
     for field in fields.iter().filter(|f| is_secret(f)) {
-        let text = Value::String(if field.kind == FieldKind::SecretFile {
-            sentinel.key_file.to_string_lossy().into_owned()
-        } else {
-            sentinel.value.to_owned()
-        });
+        let text = Value::String(
+            if matches!(field.kind, FieldKind::SecretFile | FieldKind::Path) {
+                sentinel.key_file.to_string_lossy().into_owned()
+            } else {
+                sentinel.value.to_owned()
+            },
+        );
         let value = match field.kind {
             FieldKind::Repeated => Value::Array(vec![text]),
             FieldKind::Map => Value::Object(Map::from_iter([("k".to_owned(), text)])),
@@ -140,13 +198,27 @@ fn argv_of(bin: &str, path: &[String], fields: &[FieldMeta], args: &Value) -> Ve
     argv
 }
 
-/// Runs `argv` on in-memory streams: stderr and stdout.
+/// Runs `argv` with the sentinel's globals after the binary name, on
+/// in-memory streams: stderr and stdout. `ask` installs a prompter that
+/// answers the sentinel value.
 async fn run<C: CliContext + Resolve>(
     registry: &Registry<C>,
-    argv: Vec<OsString>,
+    mut argv: Vec<OsString>,
+    sentinel: &SecretSentinel<'_>,
+    hooks: &Recorder,
+    ask: bool,
 ) -> (String, String) {
+    argv.splice(1..1, sentinel.globals.iter().cloned());
     let (io, captured) = Io::memory(b"", false, false);
-    run_with_io(registry, argv, &NoHooks, io).await;
+    #[cfg(feature = "secrets")]
+    let io = if ask {
+        io.with_prompter(std::sync::Arc::new(Answers(sentinel.value.to_owned())))
+    } else {
+        io
+    };
+    #[cfg(not(feature = "secrets"))]
+    let _ = ask;
+    run_with_io(registry, argv, hooks, io).await;
     (captured.stderr(), captured.stdout())
 }
 
@@ -157,8 +229,16 @@ async fn run<C: CliContext + Resolve>(
 ///   and output schema;
 /// - the clap error of a bad use of each secret flag;
 /// - the error line, the notices and stdout of a CLI run of each op with
-///   secret fields, given `sample_params` with those fields set;
-/// - the JSON decode error, if any, of those same arguments.
+///   secret fields, given `sample_params` with those fields set (and, for
+///   an op with a prompted `SecretFile`, once more with that flag left out
+///   and a prompter that answers the sentinel value);
+/// - the JSON decode error, if any, of those same arguments;
+/// - every message a `RunHooks` sees through `on_usage_error` and the
+///   `post_run` outcome in those runs.
+///
+/// Every command line starts with the sentinel's globals. A `#[op(secret)]`
+/// `Path` field gets the key file's path. The check is about absence only:
+/// it does not require that an op registers what it reads.
 ///
 /// # Panics
 ///
@@ -172,6 +252,7 @@ pub async fn assert_secrets_not_echoed<C: CliContext + Resolve>(
     let needles = needles(sentinel);
     let mut places: Vec<(String, String)> = Vec::new();
     let mut problems = Vec::new();
+    let hooks = Recorder::default();
 
     let mut root = crate::cli::command(registry);
     root.build();
@@ -221,7 +302,7 @@ pub async fn assert_secrets_not_echoed<C: CliContext + Resolve>(
                 bad_uses.push(twice);
             }
             for argv in bad_uses {
-                let (stderr, stdout) = run(registry, argv).await;
+                let (stderr, stdout) = run(registry, argv, sentinel, &hooks, false).await;
                 let what = format!("the clap error of a bad `{flag}` on `{}`", d.path.join(" "));
                 places.push((what.clone(), stderr));
                 places.push((what, stdout));
@@ -229,12 +310,35 @@ pub async fn assert_secrets_not_echoed<C: CliContext + Resolve>(
         }
         if fields.iter().any(is_secret) {
             let args = secret_args(&d.input_schema, fields, sentinel);
-            let (stderr, stdout) = run(registry, argv_of(bin, &d.path, fields, &args)).await;
+            let argv = argv_of(bin, &d.path, fields, &args);
+            let (stderr, stdout) = run(registry, argv, sentinel, &hooks, false).await;
             places.push((
                 format!("the error line or notices of the CLI run of {}", d.name),
                 stderr,
             ));
             places.push((format!("stdout of the CLI run of {}", d.name), stdout));
+            let prompted: Vec<&FieldMeta> = fields
+                .iter()
+                .filter(|f| f.kind == FieldKind::SecretFile && f.prompt.is_some())
+                .collect();
+            if cfg!(feature = "secrets") && !prompted.is_empty() {
+                let mut left_out = args.clone();
+                for field in &prompted {
+                    if let Some(map) = left_out.as_object_mut() {
+                        map.remove(&field.key);
+                    }
+                }
+                let flags = prompted
+                    .iter()
+                    .map(|f| format!("`--{}`", f.flag))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let argv = argv_of(bin, &d.path, fields, &left_out);
+                let (stderr, stdout) = run(registry, argv, sentinel, &hooks, true).await;
+                let what = format!("the CLI run of {} with {flags} left out", d.name);
+                places.push((format!("the error line or notices of {what}"), stderr));
+                places.push((format!("stdout of {what}"), stdout));
+            }
             if let Err(err) = (entry.decode_json)(args, &mut ParseCx::default()) {
                 places.push((
                     format!("the JSON decode error of {}", d.name),
@@ -242,6 +346,13 @@ pub async fn assert_secrets_not_echoed<C: CliContext + Resolve>(
                 ));
             }
         }
+    }
+
+    for message in hooks.usage.lock().unwrap().iter() {
+        places.push(("the `on_usage_error` message".to_owned(), message.clone()));
+    }
+    for message in hooks.outcomes.lock().unwrap().iter() {
+        places.push(("the `post_run` outcome message".to_owned(), message.clone()));
     }
 
     for (place, text) in &places {
