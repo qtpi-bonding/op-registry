@@ -1,8 +1,9 @@
 //! `assert_parity` and `assert_canonical`: every op on every path.
 
-use super::fail_on;
+use super::{fail_on, fields_of};
 use crate::mcp::tool_list;
-use crate::{Audience, CliContext, Descriptor, OpKind, Registry, Surface};
+use crate::shape::{root_class, RootClass};
+use crate::{Audience, CliContext, Descriptor, FieldKind, OpKind, Registry, Surface};
 use std::collections::BTreeSet;
 
 /// A mounted surface: a named place (REST, a typed client) that serves a set
@@ -75,6 +76,42 @@ fn hidden_problem<C: Sync>(registry: &Registry<C>, d: &Descriptor) -> Option<&'s
     }
 }
 
+fn audience_name(a: Audience) -> &'static str {
+    match a {
+        Audience::Agent => "agent",
+        Audience::Owner => "owner",
+        Audience::Dev => "dev",
+    }
+}
+
+/// What is wrong with the output root, if it is not an object (a missing
+/// schema says nothing and passes).
+fn non_object_root(d: &Descriptor) -> Option<&'static str> {
+    match root_class(d.output_schema.as_ref()?) {
+        RootClass::NonObject(what) => Some(what),
+        RootClass::Object | RootClass::Any => None,
+    }
+}
+
+/// Whether the root input property `key` has a `oneOf` object branch that
+/// requires `inline`. Only the root property is read, never a relation
+/// fragment inside `oneOf`, `anyOf` or `allOf`.
+fn takes_inline(d: &Descriptor, key: &str) -> bool {
+    let pointer = format!("/properties/{}", key.replace('~', "~0").replace('/', "~1"));
+    d.input_schema
+        .pointer(&pointer)
+        .and_then(|p| p.get("oneOf"))
+        .and_then(|b| b.as_array())
+        .is_some_and(|branches| {
+            branches.iter().any(|b| {
+                b.get("type").and_then(|t| t.as_str()) == Some("object")
+                    && b.get("required")
+                        .and_then(|r| r.as_array())
+                        .is_some_and(|r| r.iter().any(|v| v == "inline"))
+            })
+        })
+}
+
 /// Every op on every surface, and the problems that are not one op on one
 /// surface (extras, unknown mount names, ops declared on a surface they are not on).
 fn analyse<C: CliContext>(
@@ -117,7 +154,19 @@ fn analyse<C: CliContext>(
                 ));
             }
         }
-        lines.push(if !d.paths.contains(Surface::Mcp) {
+        let wrong_audience: Vec<Audience> = tools
+            .iter()
+            .filter(|(a, names)| !d.audiences.contains(a) && names.contains(&d.name))
+            .map(|(a, _)| *a)
+            .collect();
+        for a in wrong_audience {
+            problems.push(format!(
+                "op {} is on the MCP tools of audience {} but is not of that audience",
+                d.name,
+                audience_name(a)
+            ));
+        }
+        let mcp = if !d.paths.contains(Surface::Mcp) {
             if on_mcp {
                 problems.push(format!("op {} is on MCP but does not declare mcp", d.name));
             }
@@ -129,13 +178,27 @@ fn analyse<C: CliContext>(
                 None => reachable(&d.name, "mcp"),
                 Some(why) => absent(&d.name, "mcp", why),
             }
-        } else if tool_names(d.audience).contains(&d.name) {
+        } else if d.audiences.iter().all(|a| tool_names(*a).contains(&d.name)) {
             reachable(&d.name, "mcp")
         } else {
             absent(&d.name, "mcp", "missing from tool_list")
-        });
-        for mount in mounts.iter().filter(|m| m.audience == d.audience) {
+        };
+        let mut on_surface = mcp.reach == Reach::Reachable;
+        lines.push(mcp);
+        let mcp_reachable = on_surface;
+        for mount in mounts {
             let here = mount.ops.contains(&d.name.as_str());
+            if !d.audiences.contains(&mount.audience) {
+                if here {
+                    problems.push(format!(
+                        "op {} is in mount {} but is not of audience {}",
+                        d.name,
+                        mount.name,
+                        audience_name(mount.audience)
+                    ));
+                }
+                continue;
+            }
             if !d.paths.contains(Surface::Json) {
                 if here {
                     problems.push(format!(
@@ -147,6 +210,7 @@ fn analyse<C: CliContext>(
                 continue;
             }
             lines.push(if here {
+                on_surface = true;
                 reachable(&d.name, mount.name)
             } else if d.kind == OpKind::Stream {
                 // A mount is a unary transport; a stream has a reason to be absent.
@@ -154,6 +218,27 @@ fn analyse<C: CliContext>(
             } else {
                 absent(&d.name, mount.name, "missing from mount")
             });
+        }
+        if on_surface {
+            if let Some(what) = non_object_root(d) {
+                problems.push(format!(
+                    "{}: the output root is {what}; give it an object form",
+                    d.name
+                ));
+            }
+        }
+        if mcp_reachable {
+            for field in fields_of(registry, d)
+                .iter()
+                .filter(|f| f.kind == FieldKind::SecretFile)
+            {
+                if !takes_inline(d, &field.key) {
+                    problems.push(format!(
+                        "{}: --{} is a SecretFile on mcp; add #[op(secret_inline)] or leave mcp out of paths",
+                        d.name, field.flag
+                    ));
+                }
+            }
         }
     }
 
@@ -185,7 +270,9 @@ pub fn parity_report<C: CliContext>(
 /// op declaring `mcp` is in `tool_list` (a stream or a hidden op excepted; a
 /// hidden op must still be callable); that every op declaring `json` is in
 /// every mount of its audience; that an op is on no surface it does not
-/// declare; and that every mount name is an op.
+/// declare, per audience for an op of several; that no op reachable on `mcp`
+/// or a mount has a non-object output root; that an op reachable on `mcp`
+/// takes every `SecretFile` inline; and that every mount name is an op.
 ///
 /// # Panics
 ///

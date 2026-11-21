@@ -1982,3 +1982,349 @@ mod kit_sampling {
         assert_eq!(seen[0].len(), 16, "{seen:?}");
     }
 }
+
+// ---- KIT-6, SEC-8, MAN-6, MAN-7: exact parity, object roots, help per kind ----
+
+mod exact_parity {
+    use super::*;
+
+    const REST: Mount<'static> = Mount {
+        name: "rest",
+        audience: Audience::Agent,
+        ops: &["thing_show"],
+    };
+
+    fn out_registry<O: Serialize + op_registry::OutputSchema + Default + Send + 'static>(
+    ) -> Registry<Ctx> {
+        let mut r = Registry::<Ctx>::new();
+        r.group("thing", "Things.");
+        r.push_op(
+            OpSpec::<Filter, O>::new("thing show", "Show a thing."),
+            filter_op::<O>,
+        );
+        r
+    }
+
+    #[test]
+    fn parity_declared_but_absent() {
+        let r = out_registry::<Item2>();
+        let mounts = [Mount {
+            name: "rest",
+            audience: Audience::Agent,
+            ops: &[],
+        }];
+        let text = panic_text(|| assert_parity(&r, &mounts));
+        assert!(
+            text.contains("thing_show on rest: missing from mount"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn parity_present_but_not_declared() {
+        let mut r = Registry::<Ctx>::new();
+        r.group("thing", "Things.");
+        let mut spec = OpSpec::<Filter, Item2>::new("thing show", "Show a thing.");
+        spec.paths = Paths::of(&[Surface::Cli, Surface::Mcp]);
+        r.push_op(spec, filter_op::<Item2>);
+        let text = panic_text(|| assert_parity(&r, &[REST]));
+        assert!(
+            text.contains("op thing_show is in mount rest but does not declare json"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn parity_allows_stream_and_page_half() {
+        // The fixture has a stream on every surface it declares and a list pair.
+        let r = fixture();
+        let mounts = [Mount {
+            name: "rest",
+            audience: Audience::Agent,
+            ops: &AGENT_OPS,
+        }];
+        assert_parity(&r, &mounts);
+        let lines = parity_report(&r, &mounts);
+        let stream = |path: &str| {
+            lines
+                .iter()
+                .find(|l| l.name == "status_watch" && l.path == path)
+                .unwrap()
+                .reach
+                .clone()
+        };
+        let stream_absent = Reach::Absent {
+            reason: "stream".into(),
+        };
+        assert_eq!(stream("mcp"), stream_absent);
+        assert_eq!(stream("rest"), stream_absent);
+        assert_eq!(stream("cli"), Reach::Reachable);
+    }
+
+    #[test]
+    fn value_output_passes_root_check() {
+        assert_parity(&out_registry::<serde_json::Value>(), &[REST]);
+    }
+
+    #[test]
+    fn u32_output_fails_root_check() {
+        let text = panic_text(|| assert_parity(&out_registry::<u32>(), &[REST]));
+        assert!(
+            text.contains("thing_show: the output root is scalar; give it an object form"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn optional_vec_output_fails_parity_root() {
+        let text = panic_text(|| assert_parity(&out_registry::<Option<Vec<Item2>>>(), &[REST]));
+        assert!(
+            text.contains("thing_show: the output root is nullable; give it an object form"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn root_check_skips_an_op_on_neither_mcp_nor_json() {
+        let mut r = Registry::<Ctx>::new();
+        r.group("thing", "Things.");
+        let mut spec = OpSpec::<Filter, u32>::new("thing show", "Show a thing.");
+        spec.paths = Paths::of(&[Surface::Cli, Surface::Typed]);
+        r.push_op(spec, filter_op::<u32>);
+        assert_parity(&r, &[]);
+    }
+
+    #[test]
+    fn parity_report_names_declared_paths() {
+        let mut r = Registry::<Ctx>::new();
+        r.group("thing", "Things.");
+        let mut spec = OpSpec::<Filter, Item2>::new("thing show", "Show a thing.");
+        spec.paths = Paths::of(&[Surface::Cli, Surface::Typed]);
+        r.push_op(spec, filter_op::<Item2>);
+        let lines = parity_report(&r, &[REST]);
+        let find = |path: &str| {
+            lines
+                .iter()
+                .find(|l| l.name == "thing_show" && l.path == path)
+                .unwrap_or_else(|| panic!("no line on {path}"))
+                .reach
+                .clone()
+        };
+        assert_eq!(find("cli"), Reach::Reachable);
+        let undeclared = Reach::Absent {
+            reason: "not declared".into(),
+        };
+        assert_eq!(find("mcp"), undeclared);
+        assert_eq!(find("rest"), undeclared);
+        let text = format!("{lines:?}");
+        assert!(!text.contains("cli only"), "{text}");
+    }
+
+    #[test]
+    fn parity_multi_audience_op_checked_per_audience() {
+        let mut r = Registry::<Ctx>::new();
+        r.group("thing", "Things.");
+        let mut spec = OpSpec::<Filter, Item2>::new("thing show", "Show a thing.");
+        spec.audience = Audience::Agent;
+        spec.more_audiences = vec![Audience::Owner];
+        r.push_op(spec, filter_op::<Item2>);
+        let mount = |name, audience, ops| Mount {
+            name,
+            audience,
+            ops,
+        };
+        let both = ["thing_show"];
+        // Reachable on each audience's mount and absent from the others.
+        assert_parity(
+            &r,
+            &[
+                mount("agent-rest", Audience::Agent, &both),
+                mount("owner-rest", Audience::Owner, &both),
+                mount("dev-rest", Audience::Dev, &[]),
+            ],
+        );
+        // The secondary audience's mount lacks it.
+        let text = panic_text(|| {
+            assert_parity(
+                &r,
+                &[
+                    mount("agent-rest", Audience::Agent, &both),
+                    mount("owner-rest", Audience::Owner, &[]),
+                ],
+            )
+        });
+        assert!(
+            text.contains("thing_show on owner-rest: missing from mount"),
+            "{text}"
+        );
+        // A mount of an audience the op is not in lists it.
+        let text = panic_text(|| {
+            assert_parity(
+                &r,
+                &[
+                    mount("agent-rest", Audience::Agent, &both),
+                    mount("owner-rest", Audience::Owner, &both),
+                    mount("dev-rest", Audience::Dev, &both),
+                ],
+            )
+        });
+        assert!(
+            text.contains("op thing_show is in mount dev-rest but is not of audience dev"),
+            "{text}"
+        );
+    }
+
+    #[cfg(feature = "secrets")]
+    mod secret_file {
+        use super::*;
+        use op_registry::SecretFile;
+
+        #[derive(Clone, OpParams)]
+        struct Plain {
+            /// The key file.
+            key: SecretFile,
+        }
+
+        #[derive(Clone, OpParams)]
+        struct Inline {
+            /// The key file.
+            #[op(secret_inline)]
+            key: SecretFile,
+        }
+
+        fn registry<P: OpParams + Send + 'static>(paths: Paths) -> Registry<Ctx> {
+            let mut r = Registry::<Ctx>::new();
+            r.group("thing", "Things.");
+            let mut spec = OpSpec::<P, Item2>::new("thing sign", "Sign with a key.");
+            spec.paths = paths;
+            r.push_op(
+                spec,
+                |_c: &Ctx, _p: P, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Item2>> {
+                    Box::pin(async { Ok(Item2::default()) })
+                },
+            );
+            r
+        }
+
+        #[test]
+        fn mcp_secret_file_fails_parity() {
+            let r = registry::<Plain>(Paths::of(&[Surface::Cli, Surface::Mcp]));
+            let text = panic_text(|| assert_parity(&r, &[]));
+            assert!(
+                text.contains(
+                    "thing_sign: --key is a SecretFile on mcp; add #[op(secret_inline)] or leave mcp out of paths"
+                ),
+                "{text}"
+            );
+        }
+
+        #[test]
+        fn mcp_secret_inline_passes() {
+            let r = registry::<Inline>(Paths::of(&[Surface::Cli, Surface::Mcp]));
+            assert_parity(&r, &[]);
+        }
+
+        #[test]
+        fn cli_only_secret_file_passes() {
+            let r = registry::<Plain>(Paths::of(&[Surface::Cli]));
+            assert_parity(&r, &[]);
+        }
+    }
+}
+
+mod help_kinds {
+    use super::*;
+
+    #[derive(Clone, OpParams)]
+    struct SessionId {
+        /// The session.
+        #[op(subject = "session")]
+        id: op_registry::Ref,
+    }
+
+    #[derive(Clone, OpParams)]
+    struct ProviderId {
+        /// The provider.
+        #[op(subject = "provider")]
+        id: op_registry::Ref,
+    }
+
+    #[derive(Clone, OpParams)]
+    struct ProviderIdAgain {
+        /// Which provider.
+        #[op(subject = "provider")]
+        id: op_registry::Ref,
+    }
+
+    #[derive(Clone, OpParams)]
+    struct PolicyVersion {
+        version: Option<String>,
+    }
+
+    #[derive(Clone, OpParams)]
+    struct PolicyVersionDocumented {
+        /// The policy version.
+        version: Option<String>,
+    }
+
+    fn push<P: OpParams + Send + 'static>(r: &mut Registry<Ctx>, path: &'static str) {
+        r.push_op(
+            OpSpec::<P, Item>::new(path, "Do a thing."),
+            |_c: &Ctx, _p: P, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Item>> {
+                Box::pin(async { Ok(item()) })
+            },
+        );
+    }
+
+    fn base() -> Registry<Ctx> {
+        let mut r = Registry::<Ctx>::new();
+        r.set_pillar("fix");
+        r.set_bin("fixd", "1.0.0", "A fixture.");
+        r.group("session", "Sessions.");
+        r.group("provider", "Providers.");
+        r.group("policy", "Policies.");
+        r
+    }
+
+    #[test]
+    fn id_wording_per_subject_kind_passes() {
+        let mut r = base();
+        push::<SessionId>(&mut r, "session get");
+        push::<ProviderId>(&mut r, "provider get");
+        assert_help_complete(&r, &rules());
+    }
+
+    #[test]
+    fn two_id_wordings_for_one_kind_fail() {
+        let mut r = base();
+        push::<ProviderId>(&mut r, "provider get");
+        push::<ProviderIdAgain>(&mut r, "provider show");
+        let text = panic_text(|| {
+            assert_help_complete(&r, &rules());
+        });
+        assert!(
+            text.contains("flag --id for subject kind provider has 2 wordings"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn leaf_version_param_without_help_fails() {
+        let mut r = base();
+        push::<PolicyVersion>(&mut r, "policy sign");
+        let text = panic_text(|| {
+            assert_help_complete(&r, &rules());
+        });
+        assert!(
+            text.contains("--version on `policy sign` has no help"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn leaf_version_param_with_help_passes() {
+        let mut r = base();
+        push::<PolicyVersionDocumented>(&mut r, "policy sign");
+        assert_help_complete(&r, &rules());
+    }
+}

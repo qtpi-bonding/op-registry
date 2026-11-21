@@ -3,7 +3,7 @@
 use super::fail_on;
 use crate::shape::mark_object_root;
 use crate::{CliContext, Descriptor, OpKind, Registry};
-use clap::Command;
+use clap::{ArgAction, Command};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -14,7 +14,8 @@ pub struct HelpRules<'a> {
 }
 
 /// Checks the help of every visible op, group and flag: it is not empty, one
-/// flag name has one wording across all ops, and no text holds the home
+/// flag name has one wording across all ops (`--id` one wording per subject
+/// kind), and no text holds the home
 /// directory, `/Users/`, `/home/` or a banned word.
 ///
 /// Returns the warnings: a verb `list` on an op that is not a list op and not
@@ -31,12 +32,24 @@ pub fn assert_help_complete<C: CliContext>(
     let root = crate::cli::command(registry);
     let mut problems = Vec::new();
     let mut texts: Vec<(String, String)> = Vec::new();
-    let mut wordings: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
-    walk(&root, &mut vec![], &mut problems, &mut texts, &mut wordings);
+    let mut wordings: Wordings = BTreeMap::new();
+    let kinds = id_kinds(registry);
+    walk(
+        &root,
+        &mut vec![],
+        &kinds,
+        &mut problems,
+        &mut texts,
+        &mut wordings,
+    );
 
-    for (flag, by_wording) in &wordings {
+    for ((flag, kind), by_wording) in &wordings {
         if by_wording.len() > 1 {
-            let mut report = format!("flag --{flag} has {} wordings:", by_wording.len());
+            let of_kind = kind
+                .as_ref()
+                .map(|k| format!(" for subject kind {k}"))
+                .unwrap_or_default();
+            let mut report = format!("flag --{flag}{of_kind} has {} wordings:", by_wording.len());
             for (wording, places) in by_wording {
                 report.push_str(&format!("\n  \"{wording}\" on {}", places.join(", ")));
             }
@@ -71,12 +84,30 @@ pub fn assert_help_complete<C: CliContext>(
     warnings(registry)
 }
 
+/// One flag, and for `--id` the kind of the subject it names, with each
+/// wording it has and the commands that use it.
+type Wordings = BTreeMap<(String, Option<String>), BTreeMap<String, Vec<String>>>;
+
+/// The subject kind of each op's `--id`, by command path.
+fn id_kinds<C: Sync>(registry: &Registry<C>) -> BTreeMap<Vec<String>, String> {
+    registry
+        .entries
+        .iter()
+        .filter_map(|e| {
+            let field = e.param_fields.iter().find(|f| f.flag == "id")?;
+            let subject = field.subject.as_ref()?;
+            Some((e.descriptor.path.clone(), subject.kind.clone()))
+        })
+        .collect()
+}
+
 fn walk(
     cmd: &Command,
     path: &mut Vec<String>,
+    kinds: &BTreeMap<Vec<String>, String>,
     problems: &mut Vec<String>,
     texts: &mut Vec<(String, String)>,
-    wordings: &mut BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    wordings: &mut Wordings,
 ) {
     let here = if path.is_empty() {
         "the root command".to_owned()
@@ -101,7 +132,14 @@ fn walk(
     }
     for arg in cmd.get_arguments().filter(|a| !a.is_hide_set()) {
         let id = arg.get_id().as_str();
-        if id == "help" || id == "version" {
+        // Only the root's own `help` and `version`; a leaf param may be named `version`.
+        if path.is_empty() && (id == "help" || id == "version") {
+            continue;
+        }
+        if matches!(
+            arg.get_action(),
+            ArgAction::Help | ArgAction::HelpShort | ArgAction::HelpLong | ArgAction::Version
+        ) {
             continue;
         }
         let label = match arg.get_long() {
@@ -113,8 +151,13 @@ fn walk(
             problems.push(format!("{label} on {here} has no help"));
         }
         if let Some(long) = arg.get_long() {
+            let kind = if long == "id" {
+                kinds.get(path.as_slice()).cloned()
+            } else {
+                None
+            };
             wordings
-                .entry(long.to_owned())
+                .entry((long.to_owned(), kind))
                 .or_default()
                 .entry(help.clone())
                 .or_default()
@@ -130,7 +173,7 @@ fn walk(
         .filter(|c| c.get_name() != "help" && !c.is_hide_set())
     {
         path.push(sub.get_name().to_owned());
-        walk(sub, path, problems, texts, wordings);
+        walk(sub, path, kinds, problems, texts, wordings);
         path.pop();
     }
 }
