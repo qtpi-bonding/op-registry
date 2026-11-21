@@ -112,7 +112,7 @@ impl Default for FollowOptions<ListenCursor> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FollowEnd {
-    /// The listener sent a stop frame with this code.
+    /// The listener sent a stop frame, or an error whose code is in `stop_codes`.
     Stopped { code: String },
     /// The sink reported a broken pipe; the follow stopped without reconnecting.
     SinkClosed,

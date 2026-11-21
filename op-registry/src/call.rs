@@ -102,9 +102,11 @@ impl CallOptions {
     /// line ending. It is registered for redaction (as by [`redact`]) before
     /// it is returned.
     ///
-    /// Only a CLI run with a terminal can ask; typed, JSON and MCP calls and
-    /// a CLI run with no terminal return `None`, so the op falls back to its
-    /// non-interactive form. Without the `prompt` feature it always returns
+    /// Only a run that has a prompter can ask: a CLI run with a terminal (or
+    /// a host-installed prompter). JSON and MCP calls, typed calls made
+    /// directly and a CLI run with no prompter return `None`, so the op falls
+    /// back to its non-interactive form. A nested typed call made from inside
+    /// a CLI op inherits `opts.prompter` and can prompt. Without the `prompt` feature it always returns
     /// `None`, even when the host installed a prompter. An empty answer returns `None`; a read error
     /// returns `None` and sends one notice, "cannot read from the terminal".
     ///

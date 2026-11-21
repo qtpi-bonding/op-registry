@@ -94,6 +94,9 @@ Also:
 - `UsageError::{Conflicts, MissingUnless, AtLeastOne}`; library codes
   `op_registry.usage.conflicts`, `op_registry.usage.at_least_one`,
   `op_registry.list.cursor_repeated`, `op_listen.stopped`.
+- Relation errors by surface: on the CLI, relation violations are reported by
+  clap as `op_registry.usage.invalid`/`.missing` (exit 2); JSON, MCP and typed
+  callers get `.conflicts`/`.one_of`/`.at_least_one`/... (also exit 2).
 - `RegistryServer::with_ctx_factory` and `with_instructions` (feature `rmcp`).
 - `testing::sample_params_seeded`.
 - op-listen: `Listener::reconnect_marker` and `follow_options`; `follow_stream`,
@@ -149,15 +152,20 @@ Also:
   errors, notices and the `opts` clones; a nested op call shares the outer
   call's redactor through `opts`. A secret an op reads itself is registered with
   `opts.redact(..)`: register it before anything that may contain it is
-  printed. The trimmed whole value and each trimmed line are registered.
+  printed. `Redactor::add` registers the untrimmed whole value plus each
+  trimmed line (values under 4 bytes are skipped).
   `#[op(secret)]` on a `PathBuf` marks a key-file path. A secret-reading op is
   not a list (list page functions get no `CallOptions`). A `SecretFile` on an
   op reachable on `mcp` needs `#[op(secret_inline)]` or leaves `mcp` out of its
   paths (`assert_parity` checks it).
-- On the CLI a missing prompted `SecretFile` is asked for on a terminal (echo
-  off); without a terminal, or without the `prompt` feature, it is
-  `op_registry.usage.missing`. `prompt_secret` returns `None` everywhere but a
-  CLI run with a terminal, and always without `prompt`.
+- On the CLI a missing prompted `SecretFile` is asked for through the run's
+  prompter: the echo-off terminal prompter when stdin and stderr are terminals
+  (feature `prompt`), or one installed with `Io::with_prompter` (any `secrets`
+  build). With no prompter it is `op_registry.usage.missing`. Without the
+  `prompt` feature a real terminal installs no prompter, so only a
+  host-installed one is asked. `CallOptions::prompt_secret` returns `None`
+  unless the run has a prompter (a nested typed call inherits it), and always
+  `None` without `prompt`.
 - Errors: `set_error_mapper` rewrites op and stream item errors once (usage
   codes are skipped); an error code can carry a declared exit
   (`exits: { 3 => ".." on "code" }`); `RunHooks::on_usage_error` fires for every

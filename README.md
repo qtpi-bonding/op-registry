@@ -208,7 +208,10 @@ the flag:
   `op_registry::usage(err)` for the same hook behaviour). The help, the
   manual and the schema show each rule; a relation line names every enforced
   spelling ("--x or --no-x", "--x or --clear-x"). Relation schemas match
-  `validate` exactly (a flattened group keeps its relations).
+  `validate` exactly (a flattened group keeps its relations). On the CLI,
+  relation violations are reported by clap as `op_registry.usage.invalid`/`.missing`
+  (exit 2); JSON, MCP and typed callers get
+  `.conflicts`/`.one_of`/`.at_least_one`/... (also exit 2).
 - The subject of an op is `--id <REF>`, marked `#[op(subject = "concept")]` on a
   `Ref` field. Other objects are flags named by kind (`--collection`). There are
   no positional arguments. `#[op(scope = ["blueprint", "project.root"])]` on the
@@ -247,7 +250,7 @@ the flag:
   error line and notices. A JSON decode error of a secret field says only
   `invalid value`. `SecretFile` needs the `secrets` feature.
   - One redactor is shared by the whole call: `CallOptions::redact(bytes)` adds a
-    value (and its trimmed form and each trimmed line) so it is removed from the
+    value (the untrimmed whole value and each trimmed line) so it is removed from the
     CLI error line, stream item errors, notices, `CallFailure`, `tool_error` and
     every `opts` clone, including a nested op call. Register a secret before you
     print anything that may contain it.
@@ -258,10 +261,13 @@ the flag:
   - `#[op(prompt)]` or `#[op(prompt = "API key")]` on a required `SecretFile`:
     when the flag is left out and stdin and stderr are terminals, the CLI asks
     for one line with echo off (`--key-file -` still reads stdin). With no
-    terminal, or without the `prompt` feature, it is `op_registry.usage.missing`.
+    prompter it is `op_registry.usage.missing`; a prompter installed with
+    `Io::with_prompter` is used under `secrets` even without the `prompt`
+    feature, which only adds the terminal one.
     `CallOptions::prompt_secret(label)` asks the same way from inside an op and
-    returns `None` on every other surface, on a CLI run with no terminal, on an
-    empty answer, and always without the `prompt` feature. A `-` read from a
+    returns `None` when the run has no prompter (JSON, MCP and typed calls, a CLI
+    run with no terminal), on an empty answer, and always without the `prompt`
+    feature. A nested typed call made from inside a CLI op inherits the prompter. A `-` read from a
     terminal prints a hint first. Tests drive prompts with
     `Io::memory(..).with_prompter(..)` and `with_stdin_tty(true)`.
   - A `SecretFile` on an op reachable on `mcp` needs `#[op(secret_inline)]`, or
@@ -443,8 +449,9 @@ problem. Kit calls carry the caller `op-registry-kit`.
 | `rmcp` | `RegistryServer` | no |
 
 `op-registry` builds with `default-features = false`; `features = ["manual"]`
-is the smallest useful build. Without `prompt`, a prompted field is
-`op_registry.usage.missing` and `prompt_secret` returns `None`. The one lib
+is the smallest useful build. Without `prompt` no terminal prompter exists, so a
+prompted field is `op_registry.usage.missing` unless the host installs a prompter
+(`Io::with_prompter`), and `prompt_secret` returns `None`. The one lib
 dependency is `coded-error`.
 
 Cargo unifies features across a workspace build, so the `schema` feature is not
