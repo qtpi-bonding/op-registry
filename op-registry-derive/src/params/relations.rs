@@ -120,7 +120,7 @@ impl Target<'_> {
         let rt = quote!(::op_registry::__private::rt);
         match self {
             Target::Local(f) => {
-                let flag = format!("--{}", f.flag);
+                let flag = spelled(f);
                 quote!(#flag.to_owned())
             }
             Target::Dotted { group, leaf, .. } => quote!(#rt::leaf_flag::<#group>(#leaf)),
@@ -142,11 +142,21 @@ impl Target<'_> {
     }
 }
 
+/// A field's flag spellings as a relation line names them: a tri-state is
+/// `--x or --no-x`, a `Patch` `--x or --clear-x`.
+fn spelled(f: &Field) -> String {
+    match f.shape {
+        Shape::TriState => format!("--{} or --no-{}", f.flag, f.flag),
+        Shape::Patch(_) => format!("--{} or --clear-{}", f.flag, f.flag),
+        _ => format!("--{}", f.flag),
+    }
+}
+
 /// `relations()`: one plain line per relation, then each flattened group's.
 pub fn relations_fn(fields: &[Field]) -> TokenStream {
     let mut lines: Vec<TokenStream> = Vec::new();
     let flags = |members: &[&Field]| {
-        let flags: Vec<String> = members.iter().map(|f| format!("--{}", f.flag)).collect();
+        let flags: Vec<String> = members.iter().map(|f| spelled(f)).collect();
         flags.join(", ")
     };
     for (_, optional, members) in one_of_groups(fields) {
@@ -162,7 +172,7 @@ pub fn relations_fn(fields: &[Field]) -> TokenStream {
         lines.push(quote!(out.push(::std::format!("give at least one of {}", #flags));))
     }
     for f in fields {
-        let own = format!("--{}", f.flag);
+        let own = spelled(f);
         let join = |names: &[ScopeName], word: &str| {
             let flags = names.iter().map(|t| resolve(fields, t).flag());
             quote!(::std::vec![#(#flags),*].join(#word))

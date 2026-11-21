@@ -555,6 +555,13 @@ fn help_ends_with_rules() {
         ),
         "{text}"
     );
+    // Short help (`-h`) has the needs line and no Rules block.
+    let short = match cli::parse(&rules_reg(), &argv(&["send", "-h"])) {
+        Ok((Parsed::Help(text), _)) => text,
+        _ => panic!("not help"),
+    };
+    assert!(short.contains("Needs: --hub"), "{short}");
+    assert!(!short.contains("Rules:"), "{short}");
     // An op without relations has no Rules block.
     assert!(!help(&["concept", "get", "--help"]).contains("Rules:"));
 }

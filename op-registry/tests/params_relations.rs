@@ -1284,10 +1284,18 @@ fn relations_lines_for_each_kind() {
         GraphSearch::relations(),
         ["give at least one of --name, --file, --node-kind"]
     );
-    // A list of targets; a tri-state and a Patch leaf name their own flag.
+    // A tri-state and a Patch leaf name both spellings.
     assert_eq!(
         Forced::relations(),
-        ["--force conflicts with --flag, --note"]
+        ["--force conflicts with --flag or --no-flag, --note or --clear-note"]
+    );
+    // A tri-state or Patch owner and local target name both spellings too.
+    assert_eq!(
+        TriOwner::relations(),
+        [
+            "--flag or --no-flag is required unless --note or --clear-note is given",
+            "--note or --clear-note conflicts with --flag or --no-flag"
+        ]
     );
     // A flattened group's lines come with it, and a dotted target names the leaf's flag.
     assert_eq!(
@@ -1299,4 +1307,12 @@ fn relations_lines_for_each_kind() {
     );
     // Nothing to say: empty.
     assert!(Update::relations().is_empty());
+}
+
+#[derive(Debug, OpParams)]
+struct TriOwner {
+    #[op(required_unless = "note")]
+    flag: Option<bool>,
+    #[op(clearable, conflicts_with = "flag")]
+    note: Patch<String>,
 }

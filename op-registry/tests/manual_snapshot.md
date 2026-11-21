@@ -30,6 +30,49 @@ Fetch one concept by its id.
 
 Commands: `concept get`
 
+## Other commands
+
+These run from the command line only. They are not ops: no JSON, MCP or typed call reaches them.
+
+### concordd serve
+
+CLI only, not an op.
+
+```text
+Run the server.
+
+It listens until stopped.
+
+Usage: concordd serve [OPTIONS]
+
+Options:
+      --port <port>
+          The port.
+
+      --pretty
+          Indent the JSON output.
+
+      --compact
+          Print the JSON output on one line.
+
+      --hub <hub>
+          The hub address.
+          
+          [env: OPREG_MANUAL_HUB_UNIQUE]
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### ask
+
+CLI only, not an op.
+
+```text
+Ask the agent.
+More ask text.
+```
+
 ## Commands
 
 ### concordd concept get
@@ -109,6 +152,43 @@ Access: reads
 | Code | Class | Exit |
 |---|---|---|
 | fix.concept.too_many | logical | 65 |
+
+Also the common codes.
+
+### concordd concept submit
+
+```text
+Submit a concept.
+
+Usage: concordd concept submit [OPTIONS]
+
+Options:
+      --to <to>
+          The recipients.
+
+      --pretty
+          Indent the JSON output.
+
+      --signed-file <signed_file>
+          A signed message file.
+
+      --compact
+          Print the JSON output on one line.
+
+      --hub <hub>
+          The hub address.
+          
+          [env: OPREG_MANUAL_HUB_UNIQUE]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Rules:
+  --to is required unless --signed-file is given
+  --signed-file conflicts with --to
+```
+
+Access: none
 
 Also the common codes.
 

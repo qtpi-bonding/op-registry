@@ -142,10 +142,29 @@ fn render_fixture() -> String {
     render(&fixture(), &sample_manual()).unwrap()
 }
 
+/// The fixture plus an extra, a fallback and an op with relations, so the
+/// snapshot pins "## Other commands", "Rules:" and the section order.
+fn render_snapshot_fixture() -> String {
+    let mut r = fixture();
+    with_extra(&mut r);
+    r.fallback_free_text(
+        "ask",
+        "Ask the agent.\nMore ask text.",
+        &[],
+        false,
+        free_text,
+    );
+    r.push_op(
+        OpSpec::<Submit, Item>::new("concept submit", "Submit a concept."),
+        nothing::<Submit>,
+    );
+    render(&r, &sample_manual()).unwrap()
+}
+
 #[test]
 fn manual_matches_snapshot() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/manual_snapshot.md");
-    let fresh = render_fixture();
+    let fresh = render_snapshot_fixture();
     if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
         std::fs::write(path, &fresh).unwrap();
     }
