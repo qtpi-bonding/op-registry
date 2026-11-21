@@ -1,6 +1,7 @@
 //! The clap command tree of a registry.
 
 use super::{Fallback, FallbackFlag, ID_COMPACT, ID_PRETTY, ID_TEXT};
+use crate::params::FieldKind;
 use crate::{CliContext, OpGlobals, OpKind, Registry, Surface};
 use clap::{Arg, ArgAction, Command};
 
@@ -148,6 +149,7 @@ pub fn command<C: CliContext>(registry: &Registry<C>) -> Command {
                 .conflicts_with(ID_PRETTY)
                 .help("Print the JSON output on one line."),
         );
+    check_needs(registry);
     root = <C::Globals as OpGlobals>::add_args(root);
     if let Some(Fallback::FreeText { name, flags, .. }) = &registry.fallback {
         check_fallback_flags(&root, name, flags);
@@ -241,7 +243,7 @@ fn all_hidden<C>(registry: &Registry<C>, node: &Node) -> bool {
     }
 }
 
-fn to_command<C: Sync>(registry: &Registry<C>, path: &[String], node: Node) -> Command {
+fn to_command<C: CliContext>(registry: &Registry<C>, path: &[String], node: Node) -> Command {
     let word = path.last().expect("a node has a word").clone();
     match node {
         Node::Leaf(index) => {
@@ -277,9 +279,52 @@ fn to_command<C: Sync>(registry: &Registry<C>, path: &[String], node: Node) -> C
     }
 }
 
+/// The help line naming the globals an op needs: `Needs: --gait-dir (or GAIT_DIR).`
+fn needs_line<C: CliContext>(needs: &[String]) -> Option<String> {
+    if needs.is_empty() {
+        return None;
+    }
+    let fields = <C::Globals as OpGlobals>::fields();
+    let named: Vec<String> = needs
+        .iter()
+        .map(|flag| {
+            match fields
+                .iter()
+                .find_map(|f| (f.flag == *flag).then(|| f.env.as_deref()))
+            {
+                Some(Some(var)) => format!("--{flag} (or {var})"),
+                _ => format!("--{flag}"),
+            }
+        })
+        .collect();
+    Some(format!("Needs: {}.", named.join(", ")))
+}
+
+/// Panics when an op needs a global that is not a field of `C::Globals`, or
+/// one that is a switch or tri-state.
+fn check_needs<C: CliContext>(registry: &Registry<C>) {
+    let fields = <C::Globals as OpGlobals>::fields();
+    for entry in &registry.entries {
+        let d = &entry.descriptor;
+        for flag in &d.needs_globals {
+            let field = fields.iter().find(|f| f.flag == *flag).unwrap_or_else(|| {
+                panic!(
+                    "op `{}` needs --{flag}, which is not a global of the context",
+                    d.path.join(" ")
+                )
+            });
+            assert!(
+                !matches!(field.kind, FieldKind::Switch | FieldKind::TriState),
+                "op `{}` needs --{flag}: a needed global must take a value",
+                d.path.join(" ")
+            );
+        }
+    }
+}
+
 /// Adds an op's own flags to a command: its params, a list's paging flags, a
 /// declared stream cursor and `--text`.
-fn decorate<C: Sync>(registry: &Registry<C>, index: usize, cmd: Command) -> Command {
+fn decorate<C: CliContext>(registry: &Registry<C>, index: usize, cmd: Command) -> Command {
     let entry = &registry.entries[index];
     let d = &entry.descriptor;
     let mut cmd = match (&d.kind, &d.list_pair) {
@@ -302,6 +347,9 @@ fn decorate<C: Sync>(registry: &Registry<C>, index: usize, cmd: Command) -> Comm
                 .value_name("CURSOR")
                 .help("Resume after this cursor."),
         );
+    }
+    if let Some(line) = needs_line::<C>(&d.needs_globals) {
+        cmd = cmd.after_help(line);
     }
     if d.text {
         cmd = cmd.arg(

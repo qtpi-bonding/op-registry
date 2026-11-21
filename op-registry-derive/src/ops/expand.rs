@@ -3,6 +3,7 @@
 use super::parse::{Entry, Kind, Ops};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
+use syn::ext::IdentExt;
 use syn::LitStr;
 
 pub fn expand(ops: &Ops) -> TokenStream {
@@ -134,6 +135,13 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
         });
         sets.push(quote!(__spec.paths = ::op_registry::Paths::of(&[#(#surfaces),*]);));
     }
+    if !e.needs_globals.is_empty() {
+        let names = e
+            .needs_globals
+            .iter()
+            .map(|n| LitStr::new(&n.unraw().to_string(), n.span()));
+        sets.push(quote!(__spec.needs_globals = vec![#(#names),*];));
+    }
     if let Some(fields) = &e.fields {
         sets.push(quote!(__spec.fields = Some(#fields);));
     }
@@ -192,7 +200,9 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
             },
         ),
     };
+    let cfgs = &e.cfgs;
     quote! {
+        #(#cfgs)*
         {
             let mut __spec = ::op_registry::OpSpec::<#params, #output>::new(#path, #summary);
             #(#sets)*
@@ -211,9 +221,12 @@ fn alias_names(i: usize) -> (syn::Ident, syn::Ident) {
 fn aliases(i: usize, e: &Entry) -> TokenStream {
     let (p, o) = alias_names(i);
     let (params, output) = (&e.params, &e.output);
+    let cfgs = &e.cfgs;
     quote! {
+        #(#cfgs)*
         #[doc(hidden)]
         type #p = #params;
+        #(#cfgs)*
         #[doc(hidden)]
         type #o = #output;
     }
@@ -224,9 +237,12 @@ fn markers(i: usize, e: &Entry) -> TokenStream {
     let (p, o) = alias_names(i);
     let ctx = quote!(super::__OpCtx);
     let (params, output) = (quote!(super::#p), quote!(super::#o));
+    let cfgs = &e.cfgs;
     let one = |ident: syn::Ident, name: String, params: TokenStream, output: TokenStream| {
         quote! {
+            #(#cfgs)*
             pub struct #ident;
+            #(#cfgs)*
             impl ::op_registry::Op for #ident {
                 type Ctx = #ctx;
                 type Params = #params;

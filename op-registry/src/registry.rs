@@ -52,6 +52,8 @@ pub struct OpSpec<P, O> {
     pub follow_page: Option<u32>,
     /// Whether the op declares an unpaged form.
     pub unpaged: bool,
+    /// Field names (Rust) of the globals struct that the op needs on the command line.
+    pub needs_globals: Vec<&'static str>,
     /// Extra `key: value` lines for the text rendering of the parameters.
     pub fields: Option<FieldsFn<P>>,
     /// The exit code for a successful output; it must be one of `exits`.
@@ -81,6 +83,7 @@ impl<P, O> OpSpec<P, O> {
             page_size: 100,
             follow_page: None,
             unpaged: false,
+            needs_globals: Vec::new(),
             fields: None,
             ok_exit: None,
             render_text: None,
@@ -112,6 +115,7 @@ impl<P, O> OpSpec<P, O> {
             page_size: self.page_size,
             follow_page: self.follow_page,
             unpaged: self.unpaged,
+            needs_globals: self.needs_globals.clone(),
             fields,
             ok_exit: None,
             render_text: None,
@@ -571,6 +575,11 @@ impl<C: Resolve + 'static> Registry<C> {
             }),
             list_pair: None,
             unpaged: spec.unpaged,
+            needs_globals: spec
+                .needs_globals
+                .iter()
+                .map(|name| name.replace('_', "-"))
+                .collect(),
         }
     }
 

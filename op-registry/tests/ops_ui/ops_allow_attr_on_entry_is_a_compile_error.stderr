@@ -1,0 +1,5 @@
+error: only doc comments and #[cfg(..)] are allowed on an op entry
+  --> tests/ops_ui/ops_allow_attr_on_entry_is_a_compile_error.rs:23:5
+   |
+23 |     #[allow(dead_code)]
+   |     ^^^^^^^^^^^^^^^^^^^

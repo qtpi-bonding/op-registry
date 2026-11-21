@@ -21,4 +21,7 @@ fn ops_compile_failures() {
     tests.compile_fail("tests/ops_ui/ops_reason_key_is_a_compile_error.rs");
     tests.compile_fail("tests/ops_ui/ops_audience_empty_is_a_compile_error.rs");
     tests.compile_fail("tests/ops_ui/ops_audience_twice_is_a_compile_error.rs");
+    tests.compile_fail("tests/ops_ui/ops_allow_attr_on_entry_is_a_compile_error.rs");
+    tests.compile_fail("tests/ops_ui/ops_globals_twice_is_a_compile_error.rs");
+    tests.compile_fail("tests/ops_ui/ops_globals_non_ident_is_a_compile_error.rs");
 }

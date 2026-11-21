@@ -1,0 +1,5 @@
+error: `globals` takes field names of the globals struct
+  --> tests/ops_ui/ops_globals_non_ident_is_a_compile_error.rs:23:87
+   |
+23 |     "a b" => { params: P, output: O, access: reads, audience: owner, op: f, globals: ["x"] },
+   |                                                                                       ^^^

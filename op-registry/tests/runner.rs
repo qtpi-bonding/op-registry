@@ -19,6 +19,10 @@ use std::sync::{Arc, Mutex};
 struct G {
     /// Makes `from_globals` fail.
     fail_context: bool,
+    /// The data directory.
+    #[op(env = "OPREG_T23_GAIT_DIR")]
+    #[allow(dead_code)]
+    gait_dir: Option<String>,
 }
 
 struct Ctx;
@@ -154,6 +158,9 @@ fn reg() -> Registry<Ctx> {
         r.group(g, s);
     }
     unary(&mut r, OpSpec::<Nothing, Out>::new("ping", "Ping."), ok_out);
+    let mut init = OpSpec::<Nothing, Out>::new("init", "Initialises.");
+    init.needs_globals = vec!["gait_dir"];
+    unary(&mut r, init, ok_out);
     unary(
         &mut r,
         OpSpec::<Nothing, Out>::new("task fail", "Fails."),
@@ -863,4 +870,168 @@ fn usage_failure_does_not_call_on_selected() {
     let r = run_ext(&["nonesuch"], &sel);
     assert_eq!(r.code, 2);
     assert!(sel.0.lock().unwrap().is_empty());
+}
+
+const NEED_ENV: &str = "OPREG_T23_GAIT_DIR";
+
+static NEED_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// Holds the env lock, sets (or clears) the need's variable, and clears it on
+/// drop.
+struct NeedEnv(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+fn need_env(value: Option<&str>) -> NeedEnv {
+    let lock = NEED_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    match value {
+        Some(v) => std::env::set_var(NEED_ENV, v),
+        None => std::env::remove_var(NEED_ENV),
+    }
+    NeedEnv(lock)
+}
+
+impl Drop for NeedEnv {
+    fn drop(&mut self) {
+        std::env::remove_var(NEED_ENV);
+    }
+}
+
+#[test]
+fn missing_need_exits_2_with_message() {
+    let _env = need_env(None);
+    let r = run(&["init"]);
+    assert_eq!(r.code, 2);
+    assert_eq!(r.out, "");
+    let e = r.last_err();
+    assert_eq!(e["error"]["code"], "op_registry.usage.missing");
+    assert_eq!(
+        e["error"]["message"],
+        "`init` needs --gait-dir (or OPREG_T23_GAIT_DIR)"
+    );
+}
+
+#[test]
+fn env_meets_need() {
+    let _env = need_env(Some("/x"));
+    let r = run(&["init"]);
+    assert_eq!(r.code, 0, "{}", r.err);
+}
+
+#[test]
+fn empty_env_does_not_meet_need() {
+    let _env = need_env(Some(""));
+    // With an empty value the arg has no env attached: the source is neither
+    // the command line nor the environment.
+    let mut matches = cli::command(&reg())
+        .try_get_matches_from(argv(&["init"]))
+        .unwrap();
+    let (_, leaf) = matches.remove_subcommand().unwrap();
+    let source = leaf.value_source("gait_dir");
+    assert!(
+        !matches!(
+            source,
+            Some(clap::parser::ValueSource::CommandLine)
+                | Some(clap::parser::ValueSource::EnvVariable)
+        ),
+        "{source:?}"
+    );
+    let r = run(&["init"]);
+    assert_eq!(r.code, 2);
+    assert_eq!(r.last_err()["error"]["code"], "op_registry.usage.missing");
+}
+
+#[test]
+fn flag_before_or_after_verb_meets_need() {
+    let _env = need_env(None);
+    assert_eq!(run(&["--gait-dir", "/x", "init"]).code, 0);
+    assert_eq!(run(&["init", "--gait-dir", "/x"]).code, 0);
+}
+
+#[test]
+fn parse_alone_returns_need_failure() {
+    let _env = need_env(None);
+    let failure = cli::parse(&reg(), &argv(&["init"])).unwrap_err();
+    assert_eq!(failure.code, "op_registry.usage.missing");
+    assert_eq!(
+        failure.message,
+        "`init` needs --gait-dir (or OPREG_T23_GAIT_DIR)"
+    );
+    assert!(cli::parse(&reg(), &argv(&["init", "--gait-dir", "/x"])).is_ok());
+    // `select` goes through `parse`.
+    assert!(cli::select(&reg(), &argv(&["init"])).is_err());
+}
+
+#[test]
+fn help_works_without_need() {
+    let _env = need_env(None);
+    let r = run(&["init", "--help"]);
+    assert_eq!(r.code, 0, "{}", r.err);
+    assert!(
+        r.out
+            .trim_end()
+            .ends_with("Needs: --gait-dir (or OPREG_T23_GAIT_DIR)."),
+        "{}",
+        r.out
+    );
+    assert_eq!(run(&["--version"]).code, 0);
+}
+
+fn reg_needing(name: &'static str) -> Registry<Ctx> {
+    let mut r = Registry::<Ctx>::new();
+    let mut spec = OpSpec::<Nothing, Out>::new("init", "Initialises.");
+    spec.needs_globals = vec![name];
+    unary(&mut r, spec, ok_out);
+    r
+}
+
+#[test]
+fn unknown_need_panics_at_command() {
+    let r = reg_needing("nope");
+    let message = panic_message(std::panic::AssertUnwindSafe(|| {
+        cli::command(&r);
+    }));
+    assert!(message.contains("nope"), "{message}");
+    assert!(message.contains("not a global"), "{message}");
+}
+
+#[test]
+fn switch_need_panics_at_command() {
+    let r = reg_needing("fail_context");
+    let message = panic_message(std::panic::AssertUnwindSafe(|| {
+        cli::command(&r);
+    }));
+    assert!(
+        message.contains("a needed global must take a value"),
+        "{message}"
+    );
+}
+
+#[test]
+fn need_reaches_usage_hook() {
+    let _env = need_env(None);
+    let rec = Rec::default();
+    let r = run_with(&["init"], b"", false, false, &rec);
+    assert_eq!(r.code, 2);
+    assert_eq!(rec.log(), ["pre_parse", "on_usage_error", "post_run_err"]);
+}
+
+#[test]
+fn list_halves_share_needs() {
+    let mut r = Registry::<Ctx>::new();
+    r.set_pillar("fix");
+    let mut spec = OpSpec::<Filter, Item>::new("things", "Lists.");
+    spec.needs_globals = vec!["gait_dir"];
+    r.push_list(
+        spec,
+        |_c: &Ctx, _p: Filter, _r: PageRequest| -> BoxFuture<'_, anyhow::Result<Page<Item>>> {
+            Box::pin(async {
+                Ok(Page {
+                    items: vec![],
+                    next_cursor: None,
+                })
+            })
+        },
+    );
+    for name in ["things", "things_page"] {
+        assert_eq!(r.get(name).unwrap().needs_globals, ["gait-dir"], "{name}");
+    }
 }

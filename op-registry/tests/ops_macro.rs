@@ -400,3 +400,54 @@ fn marker_named_like_a_user_type_does_not_shadow_it() {
     .unwrap();
     assert_eq!(out.goal, "indexed");
 }
+
+mod cfg_fixture {
+    use super::*;
+
+    // `dup` is declared twice. If the cfg-off entry still produced a marker
+    // (or a push block), this module would not compile or `registry()` would
+    // panic on a duplicate name.
+    op_registry::ops! {
+        Ctx = Ctx;
+        /// Off.
+        #[cfg(any())]
+        "dup" => { params: PlanParams, output: Plan,
+                   access: reads, audience: agent, op: missing_function },
+        /// On.
+        #[cfg(all())]
+        "dup" => { params: PlanParams, output: Plan,
+                   access: reads, audience: agent, op: plan },
+        /// Gone.
+        #[cfg(any())]
+        "gone" => { params: PlanParams, item: Plan,
+                    access: reads, audience: agent, list: missing_function },
+        /// Always.
+        "always" => { params: Index, output: Plan,
+                      access: reads, audience: agent, op: index,
+                      globals: [gait_dir, other] },
+    }
+}
+
+#[test]
+fn cfg_off_entry_absent_and_no_marker() {
+    let r = cfg_fixture::registry();
+    assert_eq!(r.names(), vec!["dup", "always"]);
+    assert!(r.get("gone").is_none() && r.get("gone_page").is_none());
+    assert_eq!(r.get("dup").unwrap().summary, "On.");
+}
+
+#[test]
+fn cfg_on_entry_present() {
+    assert_eq!(<cfg_fixture::ops::Dup as Op>::NAME, "dup");
+    assert_eq!(<cfg_fixture::ops::Always as Op>::NAME, "always");
+}
+
+#[test]
+fn entry_globals_become_needs_flags() {
+    let r = cfg_fixture::registry();
+    assert_eq!(
+        r.get("always").unwrap().needs_globals,
+        vec!["gait-dir".to_owned(), "other".to_owned()]
+    );
+    assert!(r.get("dup").unwrap().needs_globals.is_empty());
+}

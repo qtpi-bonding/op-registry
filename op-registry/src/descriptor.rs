@@ -276,6 +276,8 @@ pub struct Descriptor {
     pub list_pair: Option<String>,
     /// Whether the op declares an unpaged form (list pairs, Task 9).
     pub unpaged: bool,
+    /// The long flags (without dashes) of the globals the op needs on the command line.
+    pub needs_globals: Vec<String>,
 }
 
 impl Descriptor {

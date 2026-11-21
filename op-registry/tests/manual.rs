@@ -544,3 +544,25 @@ fn manual_op_schema_root_is_object() {
         .expect("the manual tool");
     assert!(tool.output_schema.is_some());
 }
+
+#[test]
+fn manual_prints_needs_line() {
+    let mut r = Registry::<Ctx>::new();
+    r.set_pillar("fix");
+    r.set_bin("concordd", "1.2.3", "A concordance tool.");
+    let mut spec = OpSpec::<Filter, Item>::new("init", "Initialise.");
+    spec.needs_globals = vec!["hub"];
+    r.push_op(spec, nothing::<Filter>);
+    let text = render(&r, &sample_manual_empty()).unwrap();
+    assert!(
+        text.contains("Needs: --hub (or OPREG_MANUAL_HUB_UNIQUE)."),
+        "{text}"
+    );
+}
+
+fn sample_manual_empty() -> Manual {
+    Manual {
+        front_matter: None,
+        sections: vec![],
+    }
+}

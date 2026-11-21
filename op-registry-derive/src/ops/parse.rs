@@ -56,6 +56,10 @@ pub struct Entry {
     pub page_size: Option<LitInt>,
     pub follow_page: Option<LitInt>,
     pub unpaged: Option<LitBool>,
+    /// `globals: [..]`: field names of the globals struct the op needs.
+    pub needs_globals: Vec<Ident>,
+    /// The `#[cfg(..)]` attributes of the entry, copied onto everything it generates.
+    pub cfgs: Vec<Attribute>,
 }
 
 const ACCESS_WORDS: [&str; 5] = ["reads", "writes", "network", "spawns", "destructive"];
@@ -169,6 +173,9 @@ fn once<T>(slot: &mut Option<T>, key: &Ident, value: T) -> Result<()> {
 fn docs(attrs: &[Attribute], at: Span) -> Result<(String, String)> {
     let mut lines = Vec::new();
     for attr in attrs {
+        if attr.path().is_ident("cfg") {
+            continue;
+        }
         let text = match &attr.meta {
             Meta::NameValue(nv) if nv.path.is_ident("doc") => match &nv.value {
                 Expr::Lit(ExprLit {
@@ -179,7 +186,7 @@ fn docs(attrs: &[Attribute], at: Span) -> Result<(String, String)> {
             _ => {
                 return Err(syn::Error::new_spanned(
                     attr,
-                    "only doc comments are allowed on an op entry",
+                    "only doc comments and #[cfg(..)] are allowed on an op entry",
                 ))
             }
         };
@@ -219,6 +226,10 @@ impl Parse for Entry {
         let attrs = input.call(Attribute::parse_outer)?;
         let path: LitStr = input.parse()?;
         let (summary, long_help) = docs(&attrs, path.span())?;
+        let cfgs: Vec<Attribute> = attrs
+            .into_iter()
+            .filter(|a| a.path().is_ident("cfg"))
+            .collect();
         input.parse::<Token![=>]>()?;
         let body;
         braced!(body in input);
@@ -240,6 +251,7 @@ impl Parse for Entry {
         let mut follow_page: Option<(Ident, LitInt)> = None;
         let mut cursor_key = None;
         let mut list_only: Vec<Ident> = Vec::new();
+        let mut needs_globals: Vec<Ident> = Vec::new();
         let mut seen: Vec<String> = Vec::new();
 
         while !body.is_empty() {
@@ -386,6 +398,30 @@ impl Parse for Entry {
                     }
                     paths = Some(words);
                 }
+                "globals" => {
+                    let inner;
+                    bracketed!(inner in body);
+                    while !inner.is_empty() {
+                        if !inner.peek(Ident) {
+                            return Err(syn::Error::new(
+                                inner.span(),
+                                "`globals` takes field names of the globals struct",
+                            ));
+                        }
+                        let name: Ident = inner.parse()?;
+                        if needs_globals.iter().any(|n| n == &name) {
+                            return Err(syn::Error::new(
+                                name.span(),
+                                format!("`globals` names `{name}` twice"),
+                            ));
+                        }
+                        needs_globals.push(name);
+                        if inner.is_empty() {
+                            break;
+                        }
+                        inner.parse::<Token![,]>()?;
+                    }
+                }
                 "reason" => {
                     return Err(syn::Error::new(
                         key.span(),
@@ -424,7 +460,7 @@ impl Parse for Entry {
                         format!(
                             "unknown key `{other}`: expected params, output, item, op, local, \
                              stream, list, access, audience, errors, fields, exits, text, hidden, \
-                             default, paths, cursor, cap, page_size, follow_page or unpaged"
+                             default, paths, globals, cursor, cap, page_size, follow_page or unpaged"
                         ),
                     ))
                 }
@@ -538,6 +574,8 @@ impl Parse for Entry {
             page_size,
             follow_page: follow_page.map(|(_, n)| n),
             unpaged,
+            needs_globals,
+            cfgs,
         })
     }
 }

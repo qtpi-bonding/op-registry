@@ -168,6 +168,7 @@ pub fn parse<C: CliContext>(
     let globals = <C::Globals as OpGlobals>::from_matches(leaf).map_err(decode_failure)?;
 
     let descriptor = &registry.entries[index].descriptor;
+    check_needs::<C>(descriptor, leaf)?;
     let mut name = descriptor.name.clone();
     if let (OpKind::ListAll, Some(page)) = (descriptor.kind, &descriptor.list_pair) {
         let given = |id: &str| leaf.value_source(id) == Some(ValueSource::CommandLine);
@@ -203,6 +204,45 @@ pub fn parse<C: CliContext>(
         },
         Some(globals),
     ))
+}
+
+/// Fails with `op_registry.usage.missing` when a global the op needs was given
+/// neither on the command line nor through its env var. A default value does
+/// not count.
+fn check_needs<C: CliContext>(
+    descriptor: &crate::Descriptor,
+    leaf: &ArgMatches,
+) -> Result<(), UsageFailure> {
+    if descriptor.needs_globals.is_empty() {
+        return Ok(());
+    }
+    let fields = <C::Globals as OpGlobals>::fields();
+    let missing: Vec<String> = descriptor
+        .needs_globals
+        .iter()
+        .filter_map(|flag| {
+            let field = fields.iter().find(|f| f.flag == *flag)?;
+            let met = matches!(
+                leaf.value_source(field.rust_name),
+                Some(ValueSource::CommandLine | ValueSource::EnvVariable)
+            );
+            (!met).then(|| match &field.env {
+                Some(var) => format!("--{flag} (or {var})"),
+                None => format!("--{flag}"),
+            })
+        })
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(UsageFailure {
+        code: MISSING,
+        message: format!(
+            "`{}` needs {}",
+            descriptor.path.join(" "),
+            missing.join(", ")
+        ),
+    })
 }
 
 /// A usage failure for a decoder error.
