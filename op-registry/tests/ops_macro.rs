@@ -174,7 +174,7 @@ mod fixture {
         /// List concepts.
         "concept list" => { params: ListConcepts, item: Concept,
                             access: reads, audience: agent, list: concept_page,
-                            cap: 50, page_size: 10, text: true },
+                            cap: 50, page_size: 10, limit_help: "Rows per page.", text: true },
         /// Make a plan. Bare verb whose output type is named like its marker.
         "plan" => { params: PlanParams, output: Plan,
                     access: reads, audience: agent, op: plan },
@@ -546,4 +546,18 @@ fn list_error_exit_applies_to_both_halves() {
     }
     let get = r.get("concept_get").unwrap();
     assert_eq!(get.exits[0].on.as_deref(), Some("fix.common.busy"));
+}
+
+#[test]
+fn limit_help_key_sets_the_limit_wording() {
+    let root = op_registry::cli::command(&registry());
+    let mut list = root
+        .find_subcommand("concept")
+        .unwrap()
+        .find_subcommand("list")
+        .unwrap()
+        .clone();
+    let help = list.render_long_help().to_string();
+    assert!(help.contains("Rows per page."), "{help}");
+    assert!(help.contains("[default: 10]"), "{help}");
 }

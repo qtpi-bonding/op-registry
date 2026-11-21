@@ -21,13 +21,31 @@ use tokio::time::Instant;
 
 /// A callback for surfacing notices when a follower is about to retry.
 ///
-/// The callback receives the coded error that caused the retry.
+/// The callback receives the error code and the error message that caused the
+/// retry. The message is passed through the redactor set by
+/// [`FollowOptions::with_redactor`] or [`FollowOptions::with_redact_fn`]; without
+/// one it is the raw message, so set a redactor whenever the error may carry
+/// secrets.
 #[derive(Clone)]
-pub struct RetryHook(Arc<dyn Fn(&str) + Send + Sync>);
+pub struct RetryHook(Arc<RetryFn>);
+
+type RetryFn = dyn Fn(&str, &str) + Send + Sync;
 
 impl std::fmt::Debug for RetryHook {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("RetryHook")
+    }
+}
+
+/// A function that redacts secrets from text before it is handed to a hook.
+///
+/// Built by [`FollowOptions::with_redact_fn`] or [`FollowOptions::with_redactor`].
+#[derive(Clone)]
+pub struct RedactFn(Arc<dyn Fn(&str) -> String + Send + Sync>);
+
+impl std::fmt::Debug for RedactFn {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RedactFn")
     }
 }
 
@@ -103,6 +121,9 @@ pub struct FollowOptions<C = ListenCursor> {
     /// Callback for surfacing a "retrying" notice, called with the error code
     /// immediately before the retry event is emitted.
     pub on_retry: Option<RetryHook>,
+    /// Redactor applied to the error message before it reaches `on_retry`.
+    /// Set with [`FollowOptions::with_redactor`] or [`FollowOptions::with_redact_fn`].
+    pub redact: Option<RedactFn>,
 }
 
 impl<C> FollowOptions<C> {
@@ -114,13 +135,37 @@ impl<C> FollowOptions<C> {
             max_retries: None,
             stop_codes: Vec::new(),
             on_retry: None,
+            redact: None,
         }
     }
 
-    /// Sets a callback for surfacing "retrying" notices.
-    pub fn with_on_retry(mut self, f: impl Fn(&str) + Send + Sync + 'static) -> Self {
+    /// Sets a callback for surfacing "retrying" notices, called with the error
+    /// code and the error message.
+    ///
+    /// The message is passed through the redactor set by
+    /// [`FollowOptions::with_redactor`] or [`FollowOptions::with_redact_fn`];
+    /// without one it is the raw message, so set a redactor whenever the error
+    /// may carry secrets.
+    pub fn with_on_retry(mut self, f: impl Fn(&str, &str) + Send + Sync + 'static) -> Self {
         self.on_retry = Some(RetryHook(Arc::new(f)));
         self
+    }
+
+    /// Sets the redactor applied to retry messages before they reach the
+    /// `on_retry` hook.
+    pub fn with_redact_fn(mut self, f: impl Fn(&str) -> String + Send + Sync + 'static) -> Self {
+        self.redact = Some(RedactFn(Arc::new(f)));
+        self
+    }
+
+    /// Sets the retry-message redactor from an [`op_registry::Redactor`].
+    ///
+    /// The redactor is cloned (a shared handle), so secrets added to it later
+    /// are also redacted.
+    #[cfg(feature = "registry")]
+    pub fn with_redactor(self, redactor: &op_registry::Redactor) -> Self {
+        let redactor = redactor.clone();
+        self.with_redact_fn(move |text| redactor.redact(text))
     }
 }
 
@@ -648,7 +693,12 @@ where
                 }
                 let code = coded_error::facts_anyhow(&error).code.to_owned();
                 if let Some(on_retry) = &opts.on_retry {
-                    on_retry.0(&code);
+                    let message = format!("{error:#}");
+                    let message = match &opts.redact {
+                        Some(redact) => (redact.0)(&message),
+                        None => message,
+                    };
+                    on_retry.0(&code, &message);
                 }
                 match emit(&mut handle, Event::Retrying { code }) {
                     Ok(()) => {}

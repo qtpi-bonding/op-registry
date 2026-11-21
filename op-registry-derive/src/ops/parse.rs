@@ -57,6 +57,8 @@ pub struct Entry {
     pub cursor: Option<LitBool>,
     pub cap: Option<LitInt>,
     pub page_size: Option<LitInt>,
+    /// `limit_help: "text"`: list-only help text for the pagination limit.
+    pub limit_help: Option<LitStr>,
     pub follow_page: Option<LitInt>,
     pub unpaged: Option<LitBool>,
     /// `globals: [..]`: field names of the globals struct the op needs.
@@ -268,6 +270,7 @@ impl Parse for Entry {
         let mut default_key: Option<Ident> = None;
         let mut paths: Option<Vec<Ident>> = None;
         let (mut cursor, mut cap, mut page_size, mut unpaged) = (None, None, None, None);
+        let mut limit_help: Option<LitStr> = None;
         let mut follow_page: Option<(Ident, LitInt)> = None;
         let mut cursor_key = None;
         let mut list_only: Vec<Ident> = Vec::new();
@@ -485,6 +488,10 @@ impl Parse for Entry {
                     list_only.push(key.clone());
                     page_size = Some(body.parse::<LitInt>()?);
                 }
+                "limit_help" => {
+                    list_only.push(key.clone());
+                    limit_help = Some(body.parse::<LitStr>()?);
+                }
                 "follow_page" => {
                     let n = body.parse::<LitInt>()?;
                     if n.base10_parse::<u32>()? == 0 {
@@ -505,7 +512,7 @@ impl Parse for Entry {
                         format!(
                             "unknown key `{other}`: expected params, output, item, op, local, \
                              stream, list, access, audience, errors, fields, exits, text, hidden, \
-                             default, paths, globals, cursor, cap, page_size, follow_page or unpaged"
+                             default, paths, globals, cursor, cap, page_size, limit_help, follow_page or unpaged"
                         ),
                     ))
                 }
@@ -617,6 +624,7 @@ impl Parse for Entry {
             cursor,
             cap,
             page_size,
+            limit_help,
             follow_page: follow_page.map(|(_, n)| n),
             unpaged,
             needs_globals,

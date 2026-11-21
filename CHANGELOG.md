@@ -26,11 +26,15 @@ Added:
   runtime into op-registry, which stays runtime-agnostic.
 - `HelpRules::homonyms`: flag names that may have different wordings on
   different ops (`--name`, `--locale`); each still needs non-empty help.
-- `OpSpec::limit_help`: the wording of a paged list's `--limit` help (set it
-  directly; the `ops!` macro has no key for it yet).
-- `FollowOptions::with_on_retry(f)` and `RetryHook`: `f(code)` runs each time
-  the follower is about to retry, in every follower function including
-  `follow_stream`, so an app can print a retry notice.
+- `OpSpec::limit_help`: the wording of a paged list's `--limit` help. The
+  `ops!` macro has the matching list-only key `limit_help: "..."`.
+- `FollowOptions::with_on_retry(f)` and `RetryHook`: `f(code, message)` runs
+  each time the follower is about to retry, in every follower function
+  including `follow_stream`, so an app can print a retry notice. The message
+  goes through the redactor set by `FollowOptions::with_redactor(&Redactor)`
+  (feature `registry`) or `with_redact_fn(f)` before `f` sees it, so a plain
+  `eprintln` in the hook cannot print a secret. Without a redactor the
+  message is raw. `RedactFn` is the wrapper type.
 
 Changed:
 

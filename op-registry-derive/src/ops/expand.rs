@@ -127,6 +127,9 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
     if let Some(n) = &e.page_size {
         sets.push(quote!(__spec.page_size = #n;));
     }
+    if let Some(help) = &e.limit_help {
+        sets.push(quote!(__spec.limit_help = #help;));
+    }
     if let Some(n) = &e.follow_page {
         sets.push(quote!(__spec.follow_page = ::core::option::Option::Some(#n);));
     }

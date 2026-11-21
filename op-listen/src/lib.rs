@@ -26,7 +26,8 @@ pub use entry::{listen_entry, listen_entry_following};
 pub use error::{lagged, ListenError};
 pub use follow::{
     follow, follow_items, follow_stream, follow_typed, supervise, supervise_stream, FollowEnd,
-    FollowEvent, FollowItem, FollowOptions, Followed, Resumable, RetryHook, StreamStep, Supervised,
+    FollowEvent, FollowItem, FollowOptions, Followed, RedactFn, Resumable, RetryHook, StreamStep,
+    Supervised,
 };
 pub use frame::ListenFrame;
 #[cfg(feature = "registry")]

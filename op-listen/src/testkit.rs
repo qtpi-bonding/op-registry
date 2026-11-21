@@ -22,6 +22,7 @@ pub fn short_follow_options() -> FollowOptions {
         max_retries: None,
         stop_codes: Vec::new(),
         on_retry: None,
+        redact: None,
     }
 }
 

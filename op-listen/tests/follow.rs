@@ -15,6 +15,9 @@ enum AppError {
     #[error("try again")]
     #[coded(code = "transient", class = Transient)]
     Transient,
+    #[error("backend said {0}")]
+    #[coded(code = "leak", class = Transient)]
+    Leak(String),
 }
 
 fn denied() -> anyhow::Error {
@@ -392,12 +395,39 @@ mod stream_follow {
         ]);
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let sink = std::sync::Arc::clone(&seen);
-        let o = opts().with_on_retry(move |code| sink.lock().unwrap().push(code.to_owned()));
+        let o = opts().with_on_retry(move |code, message| {
+            sink.lock().unwrap().push(format!("{code}|{message}"))
+        });
         let _ = run(follow_stream(connect, o, default_marker)).await;
         assert_eq!(
             *seen.lock().unwrap(),
-            vec!["test.app.transient", "test.app.transient"]
+            vec![
+                "test.app.transient|try again",
+                "test.app.transient|try again"
+            ]
         );
+    }
+
+    #[cfg(feature = "registry")]
+    #[tokio::test(start_paused = true)]
+    async fn on_retry_message_is_redacted() {
+        let leak = || coded_error::into_anyhow(AppError::Leak("hunter2".into()));
+        let (connect, _) = scripted(vec![
+            Step::ConnectErr(leak()),
+            frames(vec![stop("op_listen.revoked")]),
+        ]);
+        let redactor = op_registry::Redactor::default();
+        redactor.add(b"hunter2");
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let sink = std::sync::Arc::clone(&seen);
+        let o = opts()
+            .with_redactor(&redactor)
+            .with_on_retry(move |_code, message| sink.lock().unwrap().push(message.to_owned()));
+        let _ = run(follow_stream(connect, o, default_marker)).await;
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(!seen[0].contains("hunter2"), "{seen:?}");
+        assert!(seen[0].contains("backend said"), "{seen:?}");
     }
 
     #[tokio::test(start_paused = true)]
