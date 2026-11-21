@@ -9,6 +9,8 @@ mod run;
 mod tree;
 
 pub use fallback::{edit_distance, FallbackFlag};
+#[cfg(feature = "secrets")]
+pub use io::Prompter;
 pub use io::{Captured, Io, SharedWriter};
 pub use parse::{parse, Parsed, UsageFailure};
 pub use run::{dispatch, run, run_with_io, select, NoHooks, Outcome, RunHooks, Selected};

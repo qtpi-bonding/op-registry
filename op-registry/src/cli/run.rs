@@ -468,10 +468,17 @@ async fn execute<C: CliContext + Resolve>(
         Ok(entry) => entry,
         Err(error) => return finish_err(registry, io, hooks, Some(name), error, &secrets),
     };
-    let mut cx = match io.stdin.take() {
-        Some(stdin) => ParseCx::with_stdin(stdin),
-        None => ParseCx::default(),
-    };
+    let notices = Notices::new(Arc::new(StderrSink {
+        out: io.stderr.clone(),
+        tty: io.stderr_tty,
+    }));
+    let mut cx = ParseCx::for_run(
+        io.stdin.take(),
+        io.stdin_tty,
+        notices.clone(),
+        #[cfg(feature = "secrets")]
+        io.prompter.take(),
+    );
     let params = match (entry.decode_matches)(&matches, &mut cx) {
         Ok(params) => params,
         Err(error) => {
@@ -485,10 +492,7 @@ async fn execute<C: CliContext + Resolve>(
 
     let mut opts = CallOptions::default()
         .with_trace(trace_from_env())
-        .with_notices(Notices::new(Arc::new(StderrSink {
-            out: io.stderr.clone(),
-            tty: io.stderr_tty,
-        })));
+        .with_notices(notices);
     if let Some(caller) = ctx.caller() {
         opts = opts.with_caller(caller);
     }

@@ -7,10 +7,11 @@ license.workspace = true
 description.workspace = true
 
 [features]
-default = ["schema", "manual", "secrets"]
+default = ["schema", "manual", "secrets", "prompt"]
 schema = ["dep:schemars"]
 manual = []
 secrets = ["dep:zeroize"]
+prompt = ["secrets", "dep:rpassword"]
 testing = ["manual", "dep:tokio", "tokio/time"]
 rmcp = ["dep:rmcp", "dep:tokio"]
 
@@ -26,6 +27,7 @@ coded-error = { workspace = true }
 thiserror = { workspace = true }
 schemars = { workspace = true, optional = true }
 zeroize = { workspace = true, optional = true }
+rpassword = { version = "7", optional = true }
 rmcp = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["sync"] }
 

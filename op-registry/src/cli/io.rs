@@ -32,7 +32,27 @@ impl Write for SharedWriter {
     }
 }
 
+/// Reads one secret line from a terminal with echo off.
+#[cfg(feature = "secrets")]
+pub trait Prompter: Send + Sync {
+    /// Reads one line from the terminal with echo off, without its line ending.
+    fn read_secret(&self, label: &str) -> io::Result<zeroize::Zeroizing<String>>;
+}
+
+/// The prompter of a real terminal: the prompt goes to the terminal, not to
+/// the streams of the run, and the answer is not echoed.
+#[cfg(feature = "prompt")]
+struct TtyPrompter;
+
+#[cfg(feature = "prompt")]
+impl Prompter for TtyPrompter {
+    fn read_secret(&self, label: &str) -> io::Result<zeroize::Zeroizing<String>> {
+        rpassword::prompt_password(format!("{label}: ")).map(zeroize::Zeroizing::new)
+    }
+}
+
 /// The streams of a run and whether the output ones are terminals.
+#[non_exhaustive]
 pub struct Io {
     /// Where the result is printed.
     pub stdout: Box<dyn Write + Send>,
@@ -44,6 +64,11 @@ pub struct Io {
     pub stdout_tty: bool,
     /// Whether stderr is a terminal.
     pub stderr_tty: bool,
+    /// Whether stdin is a terminal.
+    pub stdin_tty: bool,
+    /// Reads a secret from the terminal; `None` when there is none to ask.
+    #[cfg(feature = "secrets")]
+    pub prompter: Option<Arc<dyn Prompter>>,
 }
 
 /// What a memory run wrote.
@@ -90,12 +115,17 @@ impl Io {
     /// The process streams. A stream is a terminal when the process says so.
     pub fn std() -> Io {
         use std::io::IsTerminal;
+        let stdin_tty = io::stdin().is_terminal();
+        let stderr_tty = io::stderr().is_terminal();
         Io {
             stdout: Box::new(io::stdout()),
             stderr: SharedWriter::new(Box::new(io::stderr())),
             stdin: Some(Box::new(io::stdin())),
             stdout_tty: io::stdout().is_terminal(),
-            stderr_tty: io::stderr().is_terminal(),
+            stderr_tty,
+            stdin_tty,
+            #[cfg(feature = "secrets")]
+            prompter: operator_prompter(stdin_tty && stderr_tty),
         }
     }
 
@@ -112,7 +142,33 @@ impl Io {
             stdin: Some(Box::new(io::Cursor::new(stdin.to_vec()))),
             stdout_tty,
             stderr_tty,
+            stdin_tty: false,
+            #[cfg(feature = "secrets")]
+            prompter: None,
         };
         (io, captured)
     }
+
+    /// Says whether stdin is a terminal.
+    pub fn with_stdin_tty(mut self, yes: bool) -> Io {
+        self.stdin_tty = yes;
+        self
+    }
+
+    /// Sets the prompter secrets are read with.
+    #[cfg(feature = "secrets")]
+    pub fn with_prompter(mut self, prompter: Arc<dyn Prompter>) -> Io {
+        self.prompter = Some(prompter);
+        self
+    }
+}
+
+#[cfg(feature = "prompt")]
+fn operator_prompter(on_terminal: bool) -> Option<Arc<dyn Prompter>> {
+    on_terminal.then(|| Arc::new(TtyPrompter) as Arc<dyn Prompter>)
+}
+
+#[cfg(all(feature = "secrets", not(feature = "prompt")))]
+fn operator_prompter(_on_terminal: bool) -> Option<Arc<dyn Prompter>> {
+    None
 }

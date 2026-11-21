@@ -232,3 +232,42 @@ fn output_keys_keep_declaration_order() {
     .unwrap();
     assert_eq!(render(&value, Style::Compact), r#"{"zeta":1,"alpha":2}"#);
 }
+
+// --- SEC-9: durable write_private ---
+
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("op-registry-out-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn write_private_creates_parent_0700_file_0600() {
+    let dir = scratch("parents");
+    let path = dir.join("a").join("b").join("key");
+    op_registry::write_private(&path, b"k", false).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"k");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir.join("a")), 0o700);
+        assert_eq!(mode(&dir.join("a").join("b")), 0o700);
+        assert_eq!(mode(&path), 0o600);
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn write_private_refuses_existing_without_overwrite() {
+    let dir = scratch("exists");
+    let path = dir.join("key");
+    op_registry::write_private(&path, b"one", false).unwrap();
+    let err = op_registry::write_private(&path, b"two", false).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(std::fs::read(&path).unwrap(), b"one");
+    op_registry::write_private(&path, b"three", true).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"three");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

@@ -154,3 +154,92 @@ fn vec_json_is_array_of_any() {
     .unwrap();
     assert_eq!(p.items.len(), 3);
 }
+
+// --- SEC-6: a hint when `-` reads from a terminal ---
+
+mod hint {
+    use super::*;
+    use op_registry::cli::{self, Io};
+    use op_registry::{CallOptions, OpSpec, Registry};
+    use serde_json::Value;
+
+    #[derive(OpParams)]
+    #[allow(dead_code)]
+    struct Reads {
+        body: Option<Json>,
+        file: Option<Input>,
+    }
+
+    #[derive(op_registry::OpGlobals)]
+    struct NoGlobals {}
+    struct Ctx;
+    impl op_registry::Resolve for Ctx {}
+    impl op_registry::CliContext for Ctx {
+        type Globals = NoGlobals;
+        fn from_globals(_g: &NoGlobals) -> anyhow::Result<Self> {
+            Ok(Ctx)
+        }
+    }
+
+    fn registry() -> Registry<Ctx> {
+        let mut r: Registry<Ctx> = Registry::new();
+        r.set_pillar("fix");
+        r.push_op(
+            OpSpec::<Reads, Value>::new("read", "Reads."),
+            |_c: &Ctx,
+             _p: Reads,
+             _o: CallOptions|
+             -> futures_util::future::BoxFuture<'_, anyhow::Result<Value>> {
+                Box::pin(async { Ok(json!({"ok": true})) })
+            },
+        );
+        r
+    }
+
+    fn run(args: &[&str], stdin: &[u8], stdin_tty: bool, err_tty: bool) -> (u8, String) {
+        let (io, cap) = Io::memory(stdin, false, err_tty);
+        let io = io.with_stdin_tty(stdin_tty);
+        let argv = std::iter::once("app")
+            .chain(args.iter().copied())
+            .map(std::ffi::OsString::from)
+            .collect();
+        let code =
+            futures_executor::block_on(cli::run_with_io(&registry(), argv, &cli::NoHooks, io));
+        (code, cap.stderr())
+    }
+
+    #[test]
+    fn stdin_hint_once_when_tty() {
+        let (code, err) = run(&["read", "--file", "-"], b"abc", true, true);
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(err, "notice: reading --file from stdin (end with Ctrl-D)\n");
+        let (code, err) = run(&["read", "--body", "@-"], b"{}", true, false);
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(
+            err,
+            "{\"notice\":\"reading --body from stdin (end with Ctrl-D)\"}\n"
+        );
+    }
+
+    #[test]
+    fn no_hint_when_not_tty() {
+        let (code, err) = run(&["read", "--file", "-"], b"abc", false, true);
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(err, "");
+    }
+
+    #[test]
+    fn hint_never_contains_bytes() {
+        let (code, err) = run(&["read", "--file", "-"], b"hunter2-secret", true, true);
+        assert_eq!(code, 0, "{err}");
+        assert!(!err.contains("hunter2"), "{err}");
+    }
+}
+
+#[cfg(feature = "secrets")]
+#[test]
+fn memory_io_has_no_prompter_and_no_tty() {
+    let (io, _cap) = op_registry::cli::Io::memory(b"", true, true);
+    assert!(!io.stdin_tty);
+    assert!(io.prompter.is_none());
+}

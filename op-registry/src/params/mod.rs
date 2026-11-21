@@ -23,6 +23,14 @@ pub struct ParseCx {
     pub(crate) stdin: Option<Box<dyn Read + Send>>,
     /// The first field that read stdin.
     pub(crate) stdin_used_by: Option<String>,
+    /// Whether stdin is a terminal.
+    stdin_tty: bool,
+    /// Where the stdin hint goes.
+    hint: crate::Notices,
+    /// Reads prompted secrets; used by prompted fields.
+    #[cfg(feature = "secrets")]
+    #[allow(dead_code)]
+    prompter: Option<std::sync::Arc<dyn crate::cli::Prompter>>,
 }
 
 impl std::fmt::Debug for ParseCx {
@@ -30,6 +38,7 @@ impl std::fmt::Debug for ParseCx {
         f.debug_struct("ParseCx")
             .field("stdin", &self.stdin.is_some())
             .field("stdin_used_by", &self.stdin_used_by)
+            .field("stdin_tty", &self.stdin_tty)
             .finish()
     }
 }
@@ -40,6 +49,24 @@ impl ParseCx {
         Self {
             stdin: Some(Box::new(reader)),
             ..Self::default()
+        }
+    }
+
+    /// A context for a CLI run: `stdin`, whether it is a terminal, the sink
+    /// of the stdin hint and the prompter.
+    pub(crate) fn for_run(
+        stdin: Option<Box<dyn Read + Send>>,
+        stdin_tty: bool,
+        hint: crate::Notices,
+        #[cfg(feature = "secrets")] prompter: Option<std::sync::Arc<dyn crate::cli::Prompter>>,
+    ) -> Self {
+        Self {
+            stdin,
+            stdin_used_by: None,
+            stdin_tty,
+            hint,
+            #[cfg(feature = "secrets")]
+            prompter,
         }
     }
 
@@ -58,6 +85,10 @@ impl ParseCx {
             }));
         };
         self.stdin_used_by = Some(field.to_owned());
+        if self.stdin_tty {
+            self.hint
+                .notice(format!("reading --{field} from stdin (end with Ctrl-D)"));
+        }
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).map_err(|e| {
             usage(UsageError::InvalidField {

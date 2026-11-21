@@ -13,7 +13,10 @@ pub trait RenderText {
 impl<T: RenderText> RenderText for Vec<T> {
     /// One item per line.
     fn render_text(&self) -> String {
-        self.iter().map(RenderText::render_text).collect::<Vec<_>>().join("\n")
+        self.iter()
+            .map(RenderText::render_text)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -21,7 +24,11 @@ impl<T: RenderText> RenderText for Vec<T> {
 #[doc(hidden)]
 pub fn render_page<T: RenderText>(page: &crate::Page<T>) -> String {
     let mut lines: Vec<String> = page.items.iter().map(RenderText::render_text).collect();
-    lines.extend(page.next_cursor.as_ref().map(|c| format!("next cursor: {c}")));
+    lines.extend(
+        page.next_cursor
+            .as_ref()
+            .map(|c| format!("next cursor: {c}")),
+    );
     lines.join("\n")
 }
 
@@ -127,9 +134,22 @@ impl<T> OutputSchema for T {
 
 /// Writes `bytes` to `path` for key material: a new file at mode 0600 on
 /// unix. An existing file is an `AlreadyExists` error unless `overwrite`, in
-/// which case it is truncated and its mode set to 0600.
+/// which case it is truncated and its mode set to 0600. Missing parent
+/// directories are created (mode 0700 on unix). The file is synced to disk,
+/// and on unix so is its directory, so the write survives a crash.
 pub fn write_private(path: &std::path::Path, bytes: &[u8], overwrite: bool) -> std::io::Result<()> {
     use std::io::Write;
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    if let Some(parent) = parent {
+        let mut dirs = std::fs::DirBuilder::new();
+        dirs.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            dirs.mode(0o700);
+        }
+        dirs.create(parent)?;
+    }
     let mut options = std::fs::OpenOptions::new();
     options.write(true);
     if overwrite {
@@ -148,5 +168,9 @@ pub fn write_private(path: &std::path::Path, bytes: &[u8], overwrite: bool) -> s
         use std::os::unix::fs::PermissionsExt;
         file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
-    file.write_all(bytes)
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    #[cfg(unix)]
+    std::fs::File::open(parent.unwrap_or(std::path::Path::new(".")))?.sync_all()?;
+    Ok(())
 }

@@ -676,13 +676,10 @@ fn each_stderr_and_stdout_line_is_one_write() {
         (&["feed", "broken"][..], false, false),
     ] {
         let (stdout, stderr) = (Writes::default(), Writes::default());
-        let io = Io {
-            stdout: Box::new(stdout.clone()),
-            stderr: cli::SharedWriter::new(Box::new(stderr.clone())),
-            stdin: None,
-            stdout_tty: out_tty,
-            stderr_tty: err_tty,
-        };
+        let (mut io, _) = Io::memory(b"", out_tty, err_tty);
+        io.stdout = Box::new(stdout.clone());
+        io.stderr = cli::SharedWriter::new(Box::new(stderr.clone()));
+        io.stdin = None;
         futures_executor::block_on(cli::run_with_io(
             &notice_registry(),
             argv(args),
