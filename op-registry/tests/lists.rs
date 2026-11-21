@@ -434,7 +434,10 @@ async fn call_typed_returns_vec() {
         .call_typed::<ListAll>(&c, ListConcepts { tag: None }, CallOptions::default())
         .await
         .unwrap();
-    assert_eq!(out, vec![Concept { id: "a".into() }, Concept { id: "b".into() }]);
+    assert_eq!(
+        out,
+        vec![Concept { id: "a".into() }, Concept { id: "b".into() }]
+    );
 }
 
 #[tokio::test]
@@ -442,7 +445,10 @@ async fn value_output_array_is_wrapped() {
     let mut r: Registry<Ctx> = Registry::new();
     r.push_op(
         OpSpec::<ListConcepts, serde_json::Value>::new("dump", "Dump."),
-        |_c: &Ctx, _p: ListConcepts, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<serde_json::Value>> {
+        |_c: &Ctx,
+         _p: ListConcepts,
+         _o: CallOptions|
+         -> BoxFuture<'_, anyhow::Result<serde_json::Value>> {
             Box::pin(async { Ok(json!([1, 2])) })
         },
     );
@@ -470,7 +476,11 @@ fn text_registry() -> Registry<Ctx> {
 
 /// Runs the CLI over the fixed pages `[a, b]` and `[c]` (see `from_globals`).
 fn text_of(registry: &Registry<Ctx>, args: &[&str]) -> String {
-    let argv = ["app"].into_iter().chain(args.iter().copied()).map(std::ffi::OsString::from).collect();
+    let argv = ["app"]
+        .into_iter()
+        .chain(args.iter().copied())
+        .map(std::ffi::OsString::from)
+        .collect();
     let (io, cap) = op_registry::cli::Io::memory(b"", false, false);
     let code = futures_executor::block_on(op_registry::cli::run_with_io(
         registry,
@@ -490,12 +500,20 @@ fn list_text_follow_all_one_row_per_line() {
 
 #[test]
 fn list_text_page_ends_with_next_cursor() {
-    let out = text_of(&text_registry(), &["concept", "list", "--limit", "2", "--text"]);
+    let out = text_of(
+        &text_registry(),
+        &["concept", "list", "--limit", "2", "--text"],
+    );
     assert_eq!(out, "concept a\nconcept b\nnext cursor: c1\n");
 }
 
 #[test]
 fn list_text_page_without_cursor_has_no_cursor_line() {
-    let out = text_of(&text_registry(), &["concept", "list", "--limit", "2", "--cursor", "c1", "--text"]);
+    let out = text_of(
+        &text_registry(),
+        &[
+            "concept", "list", "--limit", "2", "--cursor", "c1", "--text",
+        ],
+    );
     assert_eq!(out, "concept c\n");
 }

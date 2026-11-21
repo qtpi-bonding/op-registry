@@ -32,8 +32,8 @@ pub use list::{ListError, ListItem, Page, PageParams, PageRequest, TooMany};
 pub use notices::{Notice, NoticeSink, Notices};
 pub use op_registry_derive::{ops, OpGlobals, OpParams};
 pub use output::{
-    error_value, notice_line, print_json, render, render_page, write_error, write_private, OkExit, OutputSchema,
-    RenderText, Style,
+    error_value, notice_line, print_json, render, render_page, write_error, write_private, OkExit,
+    OutputSchema, RenderText, Style,
 };
 pub use params::*;
 pub use refs::{Ref, RefSlot, Resolve, Resolved, Scope};

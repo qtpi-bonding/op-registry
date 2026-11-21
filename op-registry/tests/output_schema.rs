@@ -86,7 +86,12 @@ fn all_refs_resolve(schema: &Value) -> bool {
                 i += 1;
             }
         }
-        Some(String::from_utf8(bytes).ok()?.replace("~1", "/").replace("~0", "~"))
+        Some(
+            String::from_utf8(bytes)
+                .ok()?
+                .replace("~1", "/")
+                .replace("~0", "~"),
+        )
     }
     fn resolves(root: &Value, reference: &str) -> bool {
         let Some(pointer) = reference.strip_prefix('#') else {
@@ -147,19 +152,44 @@ fn refs_in(schema: &Value) -> usize {
 
 #[test]
 fn all_refs_resolve_rejects_dangling_and_handles_escapes() {
-    assert!(!all_refs_resolve(&json!({"a": {"$ref": "#/$defs/Missing"}})));
-    assert!(all_refs_resolve(&json!({"$defs": {"T": {}}, "a": {"$ref": "#/$defs/T"}})));
-    assert!(all_refs_resolve(&json!({"$defs": {"a/b": {}}, "a": {"$ref": "#/$defs/a~1b"}})));
-    assert!(all_refs_resolve(&json!({"$defs": {"a~b": {}}, "a": {"$ref": "#/$defs/a~0b"}})));
-    assert!(all_refs_resolve(&json!({"$defs": {"a b": {}}, "a": {"$ref": "#/$defs/a%20b"}})));
-    assert!(!all_refs_resolve(&json!({"a": {"$ref": "#/$defs/a~1b"}, "$defs": {"a~1b": {}}})));
+    assert!(!all_refs_resolve(
+        &json!({"a": {"$ref": "#/$defs/Missing"}})
+    ));
+    assert!(all_refs_resolve(
+        &json!({"$defs": {"T": {}}, "a": {"$ref": "#/$defs/T"}})
+    ));
+    assert!(all_refs_resolve(
+        &json!({"$defs": {"a/b": {}}, "a": {"$ref": "#/$defs/a~1b"}})
+    ));
+    assert!(all_refs_resolve(
+        &json!({"$defs": {"a~b": {}}, "a": {"$ref": "#/$defs/a~0b"}})
+    ));
+    assert!(all_refs_resolve(
+        &json!({"$defs": {"a b": {}}, "a": {"$ref": "#/$defs/a%20b"}})
+    ));
+    assert!(!all_refs_resolve(
+        &json!({"a": {"$ref": "#/$defs/a~1b"}, "$defs": {"a~1b": {}}})
+    ));
     assert!(!all_refs_resolve(&json!({"a": {"$ref": "other.json"}})));
 }
 
 /// The wrapped schema's keys, in the order `wrap_array_schema` writes them.
 fn assert_wrapped_key_order(schema: &Value, defs_key: &str) {
-    let keys: Vec<&str> = schema.as_object().unwrap().keys().map(String::as_str).collect();
-    let want = ["$schema", "title", "type", "properties", "required", "additionalProperties", defs_key];
+    let keys: Vec<&str> = schema
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let want = [
+        "$schema",
+        "title",
+        "type",
+        "properties",
+        "required",
+        "additionalProperties",
+        defs_key,
+    ];
     assert_eq!(keys, want, "{schema}");
 }
 
@@ -180,7 +210,12 @@ fn vec_output_schema_wrapped_with_root_defs() {
 
 #[test]
 fn recursive_item_refs_resolve() {
-    let schema = schema_of(|| vec![Node { label: "x".into(), children: vec![] }]);
+    let schema = schema_of(|| {
+        vec![Node {
+            label: "x".into(),
+            children: vec![],
+        }]
+    });
     assert_eq!(schema["type"], "object");
     assert!(refs_in(&schema) >= 2, "{schema}");
     assert!(all_refs_resolve(&schema), "{schema}");
@@ -201,7 +236,10 @@ fn definitions_keyed_schema_hoisted() {
     assert_eq!(schema["required"], json!(["items"]));
     assert!(schema["definitions"]["Row"].is_object(), "{schema}");
     assert!(schema["properties"]["items"].get("definitions").is_none());
-    assert_eq!(schema["properties"]["items"]["items"]["$ref"], "#/definitions/Row");
+    assert_eq!(
+        schema["properties"]["items"]["items"]["$ref"],
+        "#/definitions/Row"
+    );
     assert!(all_refs_resolve(&schema), "{schema}");
     assert_wrapped_key_order(&schema, "definitions");
 }
@@ -216,7 +254,11 @@ fn root_self_ref_rewritten() {
         .pointer("/properties/items/items/$ref")
         .and_then(Value::as_str)
         .expect("a self reference");
-    assert_eq!(schema.pointer(&target[1..]).unwrap()["type"], "array", "{schema}");
+    assert_eq!(
+        schema.pointer(&target[1..]).unwrap()["type"],
+        "array",
+        "{schema}"
+    );
 }
 
 #[test]
@@ -234,7 +276,8 @@ fn stream_of_vec_items_not_wrapped() {
         OpSpec::<Args, Vec<Named>>::new("flow", "Flow."),
         |_c: &Ctx, _p: Args, _cur, _o: CallOptions| {
             Box::pin(async {
-                Ok(Box::pin(futures_util::stream::empty()) as BoxStream<'_, anyhow::Result<Vec<Named>>>)
+                Ok(Box::pin(futures_util::stream::empty())
+                    as BoxStream<'_, anyhow::Result<Vec<Named>>>)
             })
         },
     );
