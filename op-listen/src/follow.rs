@@ -167,6 +167,17 @@ impl<C> FollowOptions<C> {
         let redactor = redactor.clone();
         self.with_redact_fn(move |text| redactor.redact(text))
     }
+
+    /// Applies `redactor` to retry messages first, then any redactor already set
+    /// (the app's `redact` function is kept and runs after it).
+    #[cfg(feature = "registry")]
+    pub(crate) fn also_redact_with(mut self, redactor: &op_registry::Redactor) -> Self {
+        let redactor = redactor.clone();
+        match self.redact.take() {
+            Some(previous) => self.with_redact_fn(move |text| (previous.0)(&redactor.redact(text))),
+            None => self.with_redact_fn(move |text| redactor.redact(text)),
+        }
+    }
 }
 
 impl Default for FollowOptions<ListenCursor> {

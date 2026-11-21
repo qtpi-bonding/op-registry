@@ -34,7 +34,12 @@ Added:
   goes through the redactor set by `FollowOptions::with_redactor(&Redactor)`
   (feature `registry`) or `with_redact_fn(f)` before `f` sees it, so a plain
   `eprintln` in the hook cannot print a secret. Without a redactor the
-  message is raw. `RedactFn` is the wrapper type.
+  message is raw. `RedactFn` is the wrapper type. When the follower runs as a
+  call (`listen_entry_following`), the library applies that call's own
+  redactor first, whatever the listener's `follow_options` set, and an
+  app-set redactor then applies on top; apps need no wiring.
+- `CallOptions::redactor()`: the call's redactor handle (a clone of the
+  options shares it).
 
 Changed:
 

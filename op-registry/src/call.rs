@@ -86,6 +86,11 @@ impl CallOptions {
         self
     }
 
+    /// The call's redactor handle; a clone of the options shares it.
+    pub fn redactor(&self) -> &Redactor {
+        &self.redactor
+    }
+
     /// Registers a secret the op learned while running (a key file it read):
     /// the value, its trimmed form and each trimmed line are replaced by
     /// `<secret>` in every error line, notice, hook and outcome of the call,

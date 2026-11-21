@@ -71,6 +71,9 @@ pub fn listen_entry<C, L>(
 /// `max_retries` is the call's [`CallOptions::max_retries`] when set, else
 /// that of [`Listener::follow_options`]. The same leak as in [`listen_entry`]
 /// applies: register each listener once.
+///
+/// The retry hook message is redacted with the call's redactor, then with any
+/// redactor the listener's `follow_options` set.
 #[allow(clippy::type_complexity)]
 pub fn listen_entry_following<C, L>(
     registry: &mut Registry<C>,
@@ -103,6 +106,7 @@ pub fn listen_entry_following<C, L>(
                     None => None,
                 };
                 let mut follow_opts = listener.follow_options();
+                follow_opts = follow_opts.also_redact_with(opts.redactor());
                 if opts.max_retries.is_some() {
                     follow_opts.max_retries = opts.max_retries;
                 }

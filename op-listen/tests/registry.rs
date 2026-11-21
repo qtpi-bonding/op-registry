@@ -536,3 +536,47 @@ async fn following_entry_uses_listener_follow_options_unless_the_call_sets_them(
     let end = follow_end_code(listener.clone(), CallOptions::default()).await;
     assert_eq!(end, "test.app.denied");
 }
+
+#[derive(Debug, thiserror::Error, coded_error::CodedError)]
+#[coded(namespace = "test.leak")]
+enum Leak {
+    #[error("backend said hunter2")]
+    #[coded(code = "leak", class = Transient)]
+    Leak,
+}
+
+fn leaky() -> anyhow::Error {
+    coded_error::into_anyhow(Leak::Leak)
+}
+
+/// Follows a listener whose open always fails with `leaky`, with the call's
+/// own redactor holding `hunter2`, and returns the retry messages the hook saw.
+async fn retry_messages(options: op_listen::FollowOptions) -> Vec<String> {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = Arc::clone(&seen);
+    let mut options =
+        options.with_on_retry(move |_code, message| sink.lock().unwrap().push(message.to_owned()));
+    options.backoff = fast_backoff();
+    options.max_retries = Some(1);
+    let listener = FailingOpen::new(leaky, options);
+    let call = CallOptions::default();
+    call.redact(b"hunter2");
+    follow_end_code(listener, call).await;
+    let seen = seen.lock().unwrap().clone();
+    seen
+}
+
+#[tokio::test(start_paused = true)]
+async fn following_entry_redacts_retry_message_with_the_calls_redactor() {
+    // No redactor on the FollowOptions: the call's redactor still applies.
+    let seen = retry_messages(op_listen::FollowOptions::default()).await;
+    assert_eq!(seen, vec!["backend said <secret>".to_owned()]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_app_redactor_applies_on_top_of_the_calls_redactor() {
+    let options = op_listen::FollowOptions::default()
+        .with_redact_fn(|text| text.replace("backend", "BACKEND"));
+    let seen = retry_messages(options).await;
+    assert_eq!(seen, vec!["BACKEND said <secret>".to_owned()]);
+}
