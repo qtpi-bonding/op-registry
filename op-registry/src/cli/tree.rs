@@ -334,8 +334,12 @@ fn decorate<C: CliContext>(registry: &Registry<C>, index: usize, cmd: Command) -
                 .entry(page)
                 .expect("a list pair names its paged half");
             (page_entry.augment)(cmd).mut_arg("limit", |arg| {
-                arg.default_value(entry.page_size.to_string())
-                    .hide_default_value(true)
+                let arg = arg.default_value(entry.page_size.to_string());
+                if entry.limit_help.is_empty() {
+                    arg
+                } else {
+                    arg.help(entry.limit_help)
+                }
             })
         }
         _ => (entry.augment)(cmd),

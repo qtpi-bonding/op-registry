@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.4.1
+
+Follow-up to 0.4.0 from the consumers' pilot ports. All four crates move to
+0.4.1.
+
+Breaking signatures (a compile fix at the call site):
+
+- `cli::select` returns `Result<(Selected, Option<C::Globals>), UsageFailure>`.
+  The globals come from the same parse; they are `None` for help and version
+  and for flags-only and before-runtime fallbacks. Old callers add `.0` or
+  destructure the pair.
+- `HelpRules` has a new field `homonyms` and derives `Default`; build it with
+  `..HelpRules::default()`.
+- `FollowOptions` has a new field `on_retry` (the struct is `#[non_exhaustive]`,
+  so only code that builds it with a literal inside op-listen is affected).
+- `OpSpec` has a new field `limit_help`, defaulting to empty (`OpSpec::new`
+  sets it); code that builds `OpSpec` with a literal must add it.
+
+Added:
+
+- `cli::run_code(registry, argv, hooks) -> u8`: `cli::run` returning the plain
+  code, so an app can wrap it in its own signal helper that returns
+  `Result<u8>`. A library `until_signal` was not added: it would pull a signal
+  runtime into op-registry, which stays runtime-agnostic.
+- `HelpRules::homonyms`: flag names that may have different wordings on
+  different ops (`--name`, `--locale`); each still needs non-empty help.
+- `OpSpec::limit_help`: the wording of a paged list's `--limit` help (set it
+  directly; the `ops!` macro has no key for it yet).
+- `FollowOptions::with_on_retry(f)` and `RetryHook`: `f(code)` runs each time
+  the follower is about to retry, in every follower function including
+  `follow_stream`, so an app can print a retry notice.
+
+Changed:
+
+- A list command's `--limit` help now shows `[default: N]` (the spec's
+  `page_size`); it was hidden before.
+
 ## 0.4.0
 
 Breaking. All four crates move to 0.4.0. There is no backward compatibility:

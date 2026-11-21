@@ -19,6 +19,18 @@ use std::sync::{Arc, Mutex};
 use std::task::Poll;
 use tokio::time::Instant;
 
+/// A callback for surfacing notices when a follower is about to retry.
+///
+/// The callback receives the coded error that caused the retry.
+#[derive(Clone)]
+pub struct RetryHook(Arc<dyn Fn(&str) + Send + Sync>);
+
+impl std::fmt::Debug for RetryHook {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RetryHook")
+    }
+}
+
 /// Supplies the resume and lifecycle information needed by a follower.
 pub trait Resumable {
     /// The position a follow resumes from.
@@ -88,6 +100,9 @@ pub struct FollowOptions<C = ListenCursor> {
     /// failed open or a mid-stream error, before the Logical check. A stop that
     /// arrives as a frame is decided by [`Resumable::stop_code`], not by this list.
     pub stop_codes: Vec<String>,
+    /// Callback for surfacing a "retrying" notice, called with the error code
+    /// immediately before the retry event is emitted.
+    pub on_retry: Option<RetryHook>,
 }
 
 impl<C> FollowOptions<C> {
@@ -98,7 +113,14 @@ impl<C> FollowOptions<C> {
             backoff: Backoff::follower(),
             max_retries: None,
             stop_codes: Vec::new(),
+            on_retry: None,
         }
+    }
+
+    /// Sets a callback for surfacing "retrying" notices.
+    pub fn with_on_retry(mut self, f: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        self.on_retry = Some(RetryHook(Arc::new(f)));
+        self
     }
 }
 
@@ -625,6 +647,9 @@ where
                     }
                 }
                 let code = coded_error::facts_anyhow(&error).code.to_owned();
+                if let Some(on_retry) = &opts.on_retry {
+                    on_retry.0(&code);
+                }
                 match emit(&mut handle, Event::Retrying { code }) {
                     Ok(()) => {}
                     Err(Handled::SinkClosed) => return Ok(FollowEnd::SinkClosed),

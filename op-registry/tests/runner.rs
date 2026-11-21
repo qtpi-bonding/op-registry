@@ -1129,3 +1129,12 @@ fn usage_code_with_error_exit_still_fires_usage_hook() {
     assert_eq!(*rec.exits.lock().unwrap(), vec![6]);
     assert_eq!(rec.log(), ["pre_parse", "on_usage_error", "post_run_err"]);
 }
+
+#[test]
+fn run_code_returns_the_exit_code_as_u8() {
+    let code: u8 =
+        futures_executor::block_on(cli::run_code(&reg(), argv(&["--version"]), &NoHooks));
+    assert_eq!(code, 0);
+    let code: u8 = futures_executor::block_on(cli::run_code(&reg(), argv(&["nope"]), &NoHooks));
+    assert_eq!(code, 2);
+}

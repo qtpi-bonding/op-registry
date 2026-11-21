@@ -662,7 +662,7 @@ fn argv(args: &[&str]) -> Vec<OsString> {
 fn select_empty_argv_is_fallback() {
     let mut r = base();
     before_runtime(&mut r);
-    let selected = cli::select(&r, &argv(&[])).unwrap();
+    let selected = cli::select(&r, &argv(&[])).unwrap().0;
     assert_eq!(
         selected,
         cli::Selected::Fallback {
@@ -676,7 +676,9 @@ fn select_empty_argv_is_fallback() {
 fn select_flag_led_argv_is_fallback() {
     let mut r = base();
     flags_only(&mut r);
-    let selected = cli::select(&r, &argv(&["--agent-dir", "/x", "-v"])).unwrap();
+    let selected = cli::select(&r, &argv(&["--agent-dir", "/x", "-v"]))
+        .unwrap()
+        .0;
     assert_eq!(
         selected,
         cli::Selected::Fallback {
@@ -691,13 +693,13 @@ fn select_command_is_op() {
     let mut r = base();
     before_runtime(&mut r);
     assert_eq!(
-        cli::select(&r, &argv(&["build", "run"])).unwrap(),
+        cli::select(&r, &argv(&["build", "run"])).unwrap().0,
         cli::Selected::Op {
             name: "build_run".into()
         }
     );
     assert_eq!(
-        cli::select(&r, &argv(&["--help"])).unwrap(),
+        cli::select(&r, &argv(&["--help"])).unwrap().0,
         cli::Selected::Help
     );
 }
@@ -745,4 +747,19 @@ fn before_runtime_fallback_in_help_and_manual() {
     let manual = op_registry::manual::render(&r, &op_registry::manual::Manual::default()).unwrap();
     assert!(manual.contains("daemon"), "{manual}");
     assert!(manual.contains("Run the daemon.\nMore text."), "{manual}");
+}
+
+#[test]
+fn select_returns_the_parsed_globals() {
+    let r = base();
+    let (selected, globals) = cli::select(&r, &argv(&["--endpoint", "http://x", "ping"])).unwrap();
+    assert_eq!(
+        selected,
+        cli::Selected::Op {
+            name: "ping".into()
+        }
+    );
+    assert_eq!(globals.unwrap().endpoint.as_deref(), Some("http://x"));
+    let (_, globals) = cli::select(&r, &argv(&["--help"])).unwrap();
+    assert!(globals.is_none());
 }

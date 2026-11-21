@@ -128,6 +128,8 @@ Options:
 
       --limit <limit>
           The most items to return.
+          
+          [default: 100]
 
       --pretty
           Indent the JSON output.

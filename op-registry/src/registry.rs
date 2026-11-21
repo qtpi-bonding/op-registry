@@ -50,6 +50,9 @@ pub struct OpSpec<P, O> {
     pub cap: usize,
     /// The default page size of a paged list.
     pub page_size: u32,
+    /// The wording of the `--limit` help of a list op; empty means
+    /// "The most items to return.".
+    pub limit_help: &'static str,
     /// The page size the follow-all half asks for; `None` is `page_size`.
     pub follow_page: Option<u32>,
     /// Whether the op declares an unpaged form.
@@ -84,6 +87,7 @@ impl<P, O> OpSpec<P, O> {
             cursor: false,
             cap: 10_000,
             page_size: 100,
+            limit_help: "",
             follow_page: None,
             unpaged: false,
             needs_globals: Vec::new(),
@@ -117,6 +121,7 @@ impl<P, O> OpSpec<P, O> {
             cursor: self.cursor,
             cap: self.cap,
             page_size: self.page_size,
+            limit_help: self.limit_help,
             follow_page: self.follow_page,
             unpaged: self.unpaged,
             needs_globals: self.needs_globals.clone(),
@@ -212,6 +217,8 @@ pub(crate) struct Entry<C> {
     pub resolve_refs: ResolveRefs<C>,
     /// The default page size of a list op (the spec's `page_size`).
     pub page_size: u32,
+    /// The help text for a list op's `--limit` argument.
+    pub limit_help: &'static str,
     /// The long flags of `#[op(secret)]` fields, for secret-safe CLI errors.
     pub secret_flags: Vec<String>,
     /// The clap argument ids of those fields, to read their raw values.
@@ -672,6 +679,7 @@ impl<C: Resolve + 'static> Registry<C> {
             augment: P::add_args,
             decode_matches: |matches, cx| Ok(Box::new(P::from_matches(matches, cx)?)),
             page_size: spec.page_size,
+            limit_help: spec.limit_help,
             secret_flags: secret_flags::<P>(),
             secret_ids: secret_ids::<P>(),
             #[cfg(feature = "testing")]
@@ -768,6 +776,7 @@ impl<C: Resolve + 'static> Registry<C> {
             augment: P::add_args,
             decode_matches: |matches, cx| Ok(Box::new(P::from_matches(matches, cx)?)),
             page_size: spec.page_size,
+            limit_help: spec.limit_help,
             secret_flags: secret_flags::<P>(),
             secret_ids: secret_ids::<P>(),
             #[cfg(feature = "testing")]

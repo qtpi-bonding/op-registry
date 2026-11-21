@@ -384,6 +384,23 @@ mod stream_follow {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn on_retry_hook_sees_each_retry_code() {
+        let (connect, _) = scripted(vec![
+            Step::ConnectErr(transient()),
+            Step::ConnectErr(transient()),
+            frames(vec![stop("op_listen.revoked")]),
+        ]);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let sink = std::sync::Arc::clone(&seen);
+        let o = opts().with_on_retry(move |code| sink.lock().unwrap().push(code.to_owned()));
+        let _ = run(follow_stream(connect, o, default_marker)).await;
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["test.app.transient", "test.app.transient"]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn marker_before_first_frame_of_reconnection() {
         let (connect, connects) = scripted(vec![
             Step::ConnectErr(transient()),

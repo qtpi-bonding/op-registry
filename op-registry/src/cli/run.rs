@@ -165,6 +165,17 @@ impl CodedError for UsageCoded {
     }
 }
 
+/// Runs the command line on the process streams and returns the plain exit
+/// code, so an app can wrap it (for example, in a signal helper returning
+/// `Result<u8>`).
+pub async fn run_code<C: CliContext + Resolve>(
+    registry: &Registry<C>,
+    argv: Vec<OsString>,
+    hooks: &dyn RunHooks,
+) -> u8 {
+    run_with_io(registry, argv, hooks, Io::std()).await
+}
+
 /// Runs the command line on the process streams and returns the exit code.
 /// It never calls `process::exit`.
 pub async fn run<C: CliContext + Resolve>(
@@ -172,7 +183,7 @@ pub async fn run<C: CliContext + Resolve>(
     argv: Vec<OsString>,
     hooks: &dyn RunHooks,
 ) -> ExitCode {
-    ExitCode::from(run_with_io(registry, argv, hooks, Io::std()).await)
+    ExitCode::from(run_code(registry, argv, hooks).await)
 }
 
 /// Runs the command line on `io` and returns the exit code.
@@ -227,14 +238,16 @@ pub async fn run_with_io<C: CliContext + Resolve>(
 }
 
 /// Chooses what the command line selects, without a runtime: the same routing
-/// and parse as [`parse`]. A host that must act before any runtime (a daemon
-/// that forks, then builds its own) calls this first and dispatches a
-/// [`Selected::Fallback`] itself.
+/// and parse as [`parse`], returning the parsed globals from that same parse.
+/// Globals are `None` for help and version, and for flags-only or
+/// before-runtime fallback selections. A host that must act before any
+/// runtime (a daemon that forks, then builds its own) calls this first and
+/// dispatches a [`Selected::Fallback`] itself.
 pub fn select<C: CliContext>(
     registry: &Registry<C>,
     argv: &[OsString],
-) -> Result<Selected, UsageFailure> {
-    parse(registry, argv).map(|(parsed, _)| selected(registry, &parsed))
+) -> Result<(Selected, Option<C::Globals>), UsageFailure> {
+    parse(registry, argv).map(|(parsed, globals)| (selected(registry, &parsed), globals))
 }
 
 /// What `parsed` selected, for the `on_selected` hook.

@@ -8,15 +8,20 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// What help text must not contain.
+#[derive(Default)]
 pub struct HelpRules<'a> {
     /// Words that must not appear, matched case-insensitively.
     pub banned_words: &'a [&'a str],
+    /// Flag names, without dashes, that may have different wordings on
+    /// different ops; each still needs non-empty help.
+    pub homonyms: &'a [&'a str],
 }
 
 /// Checks the help of every visible op, group and flag: it is not empty, one
 /// flag name has one wording across all ops (`--id` one wording per subject
-/// kind), and no text holds the home
-/// directory, `/Users/`, `/home/` or a banned word.
+/// kind, except names listed in `HelpRules::homonyms`), and no text holds the
+/// home directory, `/Users/`, `/home/` or a banned word. Homonym flags still
+/// need non-empty help.
 ///
 /// Returns the warnings: a verb `list` on an op that is not a list op and not
 /// `unpaged`, and a list pair whose item schema differs from a sibling
@@ -44,7 +49,7 @@ pub fn assert_help_complete<C: CliContext>(
     );
 
     for ((flag, kind), by_wording) in &wordings {
-        if by_wording.len() > 1 {
+        if by_wording.len() > 1 && !rules.homonyms.contains(&flag.as_str()) {
             let of_kind = kind
                 .as_ref()
                 .map(|k| format!(" for subject kind {k}"))

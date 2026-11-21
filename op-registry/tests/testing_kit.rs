@@ -199,6 +199,7 @@ fn panic_text(f: impl FnOnce()) -> String {
 fn rules() -> HelpRules<'static> {
     HelpRules {
         banned_words: &["daemon"],
+        ..HelpRules::default()
     }
 }
 
@@ -2395,4 +2396,20 @@ mod help_kinds {
         push::<PolicyVersionDocumented>(&mut r, "policy sign");
         assert_help_complete(&r, &rules());
     }
+}
+
+#[test]
+fn help_allows_homonym_flags_named_in_the_rules() {
+    let mut r = fixture();
+    r.push_op(
+        OpSpec::<GetOther, Item>::new("concept other", "Another get."),
+        |_c: &Ctx, _p: GetOther, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Item>> {
+            Box::pin(async { Ok(item()) })
+        },
+    );
+    let rules = HelpRules {
+        homonyms: &["id"],
+        ..rules()
+    };
+    assert_help_complete(&r, &rules);
 }

@@ -588,3 +588,49 @@ fn help_holds_needs_env_and_prompt_lines() {
         "{text}"
     );
 }
+
+fn list_help(configure: impl Fn(&mut OpSpec<Filter, Item>)) -> String {
+    let mut r = Registry::new();
+    r.set_pillar("fix");
+    r.set_bin("app", "1.2.3", "A test app.");
+    r.group("concept", "Concepts.");
+    let mut spec = OpSpec::<Filter, Item>::new("concept list", "List concepts.");
+    configure(&mut spec);
+    r.push_list(
+        spec,
+        |_c: &Ctx, _p: Filter, _r: PageRequest| -> BoxFuture<'_, anyhow::Result<Page<Item>>> {
+            Box::pin(async {
+                Ok(Page {
+                    items: vec![],
+                    next_cursor: None,
+                })
+            })
+        },
+    );
+    let root = cli::command(&r);
+    let mut list = root
+        .find_subcommand("concept")
+        .unwrap()
+        .find_subcommand("list")
+        .unwrap()
+        .clone();
+    list.render_long_help().to_string()
+}
+
+#[test]
+fn paged_limit_help_shows_the_default() {
+    let help = list_help(|s| s.page_size = 25);
+    assert!(help.contains("The most items to return."), "{help}");
+    assert!(help.contains("[default: 25]"), "{help}");
+}
+
+#[test]
+fn paged_limit_help_wording_can_be_overridden() {
+    let help = list_help(|s| {
+        s.page_size = 25;
+        s.limit_help = "Rows per page.";
+    });
+    assert!(help.contains("Rows per page."), "{help}");
+    assert!(!help.contains("The most items to return."), "{help}");
+    assert!(help.contains("[default: 25]"), "{help}");
+}
