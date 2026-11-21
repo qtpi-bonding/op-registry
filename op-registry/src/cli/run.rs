@@ -210,6 +210,17 @@ pub async fn run_with_io<C: CliContext + Resolve>(
         .exit_code()
 }
 
+/// Chooses what the command line selects, without a runtime: the same routing
+/// and parse as [`parse`]. A host that must act before any runtime (a daemon
+/// that forks, then builds its own) calls this first and dispatches a
+/// [`Selected::Fallback`] itself.
+pub fn select<C: CliContext>(
+    registry: &Registry<C>,
+    argv: &[OsString],
+) -> Result<Selected, UsageFailure> {
+    parse(registry, argv).map(|(parsed, _)| selected(registry, &parsed))
+}
+
 /// What `parsed` selected, for the `on_selected` hook.
 fn selected<C>(registry: &Registry<C>, parsed: &Parsed) -> Selected {
     match parsed {
@@ -370,6 +381,12 @@ async fn run_unrouted<C>(
         }
         Parsed::Fallback { args, matches } => match registry.fallback.as_ref() {
             Some(Fallback::FlagsOnly { name, run, .. }) => (name.to_string(), run(args).await),
+            Some(Fallback::BeforeRuntime { name, .. }) => (
+                name.to_string(),
+                Err(anyhow::anyhow!(
+                    "fallback `{name}` runs before the runtime; dispatch it after cli::select"
+                )),
+            ),
             Some(Fallback::FreeText { name, run, .. }) => {
                 (name.to_string(), run(&matches, args).await)
             }

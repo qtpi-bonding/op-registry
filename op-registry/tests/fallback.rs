@@ -646,3 +646,103 @@ fn extra_err_redacts_secret_globals() {
         .unwrap()
         .contains("<secret>"));
 }
+
+fn before_runtime(r: &mut Registry<Ctx>) {
+    r.fallback_flags_only_before_runtime("daemon", "Run the daemon.\nMore text.");
+}
+
+fn argv(args: &[&str]) -> Vec<OsString> {
+    std::iter::once("app")
+        .chain(args.iter().copied())
+        .map(OsString::from)
+        .collect()
+}
+
+#[test]
+fn select_empty_argv_is_fallback() {
+    let mut r = base();
+    before_runtime(&mut r);
+    let selected = cli::select(&r, &argv(&[])).unwrap();
+    assert_eq!(
+        selected,
+        cli::Selected::Fallback {
+            name: "daemon",
+            args: vec![]
+        }
+    );
+}
+
+#[test]
+fn select_flag_led_argv_is_fallback() {
+    let mut r = base();
+    flags_only(&mut r);
+    let selected = cli::select(&r, &argv(&["--agent-dir", "/x", "-v"])).unwrap();
+    assert_eq!(
+        selected,
+        cli::Selected::Fallback {
+            name: "fix",
+            args: vec!["--agent-dir".into(), "/x".into(), "-v".into()]
+        }
+    );
+}
+
+#[test]
+fn select_command_is_op() {
+    let mut r = base();
+    before_runtime(&mut r);
+    assert_eq!(
+        cli::select(&r, &argv(&["build", "run"])).unwrap(),
+        cli::Selected::Op {
+            name: "build_run".into()
+        }
+    );
+    assert_eq!(
+        cli::select(&r, &argv(&["--help"])).unwrap(),
+        cli::Selected::Help
+    );
+}
+
+#[test]
+fn select_bare_unknown_word_is_usage_failure() {
+    let mut r = base();
+    before_runtime(&mut r);
+    let failure = cli::select(&r, &argv(&["bogus"])).unwrap_err();
+    assert_eq!(failure.code, "op_registry.cli.unknown_command");
+}
+
+#[test]
+fn run_reaching_before_runtime_fallback_exits_70() {
+    let mut r = base();
+    before_runtime(&mut r);
+    let ran = run(&r, &["--endpoint", "x"]);
+    assert_eq!(ran.code, 70, "{}", ran.err);
+    let error = last_err(&ran);
+    assert_eq!(
+        error["message"],
+        "fallback `daemon` runs before the runtime; dispatch it after cli::select"
+    );
+    assert_eq!(error["code"], "unknown");
+}
+
+#[test]
+fn before_runtime_fallback_in_help_and_manual() {
+    let mut r = base();
+    before_runtime(&mut r);
+    let ran = run(&r, &["--help"]);
+    assert!(
+        ran.out
+            .contains("daemon: Run the daemon. (more: app help daemon)"),
+        "{}",
+        ran.out
+    );
+    let ran = run(&r, &["help", "daemon"]);
+    assert_eq!(ran.code, 0);
+    assert!(
+        ran.out.contains("Run the daemon.\nMore text."),
+        "{}",
+        ran.out
+    );
+    let manual = op_registry::manual::render(&r, &op_registry::manual::Manual::default()).unwrap();
+    assert!(manual.contains("daemon"), "{manual}");
+    assert!(manual.contains("Run the daemon.\nMore text."), "{manual}");
+}

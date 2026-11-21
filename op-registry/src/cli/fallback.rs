@@ -36,6 +36,12 @@ pub(crate) enum Fallback {
         help: &'static str,
         run: fn(Vec<OsString>) -> BoxFuture<'static, anyhow::Result<u8>>,
     },
+    /// Routes like `FlagsOnly` but has no runner: the host dispatches it after
+    /// `cli::select`, before any runtime.
+    BeforeRuntime {
+        name: &'static str,
+        help: &'static str,
+    },
     /// Gets everything that is not a command, after the registry's globals.
     FreeText {
         name: &'static str,
@@ -49,16 +55,18 @@ pub(crate) enum Fallback {
 impl Fallback {
     pub(crate) fn name(&self) -> &'static str {
         match self {
-            Fallback::FlagsOnly { name, .. } | Fallback::FreeText { name, .. } => name,
+            Fallback::FlagsOnly { name, .. }
+            | Fallback::BeforeRuntime { name, .. }
+            | Fallback::FreeText { name, .. } => name,
         }
     }
 
     /// The help text, with `{bin}` replaced by the binary's name.
     pub(crate) fn help(&self, bin: &str) -> String {
         match self {
-            Fallback::FlagsOnly { help, .. } | Fallback::FreeText { help, .. } => {
-                help.replace("{bin}", bin)
-            }
+            Fallback::FlagsOnly { help, .. }
+            | Fallback::BeforeRuntime { help, .. }
+            | Fallback::FreeText { help, .. } => help.replace("{bin}", bin),
         }
     }
 
@@ -91,6 +99,19 @@ impl<C: CliContext + Sync> Registry<C> {
         run: fn(Vec<OsString>) -> BoxFuture<'static, anyhow::Result<u8>>,
     ) {
         self.set_fallback(Fallback::FlagsOnly { name, help, run });
+    }
+
+    /// Sets a root fallback like [`Registry::fallback_flags_only`] that has no
+    /// runner: it routes, shows in help and in the manual, and `help <name>`
+    /// works, but the host dispatches it itself after [`crate::cli::select`],
+    /// on the main thread before any runtime. If [`crate::cli::run`] reaches
+    /// it, the run fails with an uncoded error naming `cli::select` (exit 70).
+    ///
+    /// # Panics
+    ///
+    /// Panics when the registry already has a fallback.
+    pub fn fallback_flags_only_before_runtime(&mut self, name: &'static str, help: &'static str) {
+        self.set_fallback(Fallback::BeforeRuntime { name, help });
     }
 
     /// Sets the root fallback that gets every argument that is not a command:
@@ -268,7 +289,7 @@ pub(super) fn route<C: CliContext>(
         return Ok(None);
     }
     let skipped = match fallback {
-        Fallback::FlagsOnly { .. } => 0,
+        Fallback::FlagsOnly { .. } | Fallback::BeforeRuntime { .. } => 0,
         Fallback::FreeText { .. } => skip_globals(cmd, tokens),
     };
     let rest = &tokens[skipped..];
@@ -279,7 +300,7 @@ pub(super) fn route<C: CliContext>(
     }
     let mut taken: Vec<OsString> = Vec::new();
     let args = match fallback {
-        Fallback::FlagsOnly { .. } => {
+        Fallback::FlagsOnly { .. } | Fallback::BeforeRuntime { .. } => {
             let flag_led = text(0).is_none_or(|t| t.starts_with('-'));
             if !flag_led {
                 return Ok(None);

@@ -199,6 +199,14 @@ pub fn render<C: CliContext>(registry: &Registry<C>, manual: &Manual) -> Result<
         }
     }
 
+    if let Some(fallback) = &registry.fallback {
+        blocks.push(format!("## Fallback: {}", fallback.name()));
+        blocks.push(format!(
+            "```text\n{}\n```",
+            fallback.help(registry.bin()).trim_end()
+        ));
+    }
+
     blocks.push("## Commands".to_owned());
     let mut root = cli::command(registry);
     root.build();
