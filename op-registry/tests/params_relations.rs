@@ -1264,3 +1264,39 @@ fn validate_runs_before_refs_resolve() {
     assert!(ok.is_ok());
     assert_eq!(ctx.0.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+#[test]
+fn relations_lines_for_each_kind() {
+    assert_eq!(Target::relations(), ["give exactly one of --id, --name"]);
+    assert_eq!(Maybe::relations(), ["give at most one of --id, --name"]);
+    assert_eq!(
+        Lookup::relations(),
+        ["--collection is required when --uri is given"]
+    );
+    assert_eq!(
+        MessageSubmit::relations(),
+        [
+            "--to is required unless --signed-file is given",
+            "--signed-file conflicts with --to"
+        ]
+    );
+    assert_eq!(
+        GraphSearch::relations(),
+        ["give at least one of --name, --file, --node-kind"]
+    );
+    // A list of targets; a tri-state and a Patch leaf name their own flag.
+    assert_eq!(
+        Forced::relations(),
+        ["--force conflicts with --flag, --note"]
+    );
+    // A flattened group's lines come with it, and a dotted target names the leaf's flag.
+    assert_eq!(
+        AddDevice::relations(),
+        [
+            "--confirm-fingerprint is required unless --dry-run is given",
+            "--owner-key-file is required unless --dry-run is given"
+        ]
+    );
+    // Nothing to say: empty.
+    assert!(Update::relations().is_empty());
+}

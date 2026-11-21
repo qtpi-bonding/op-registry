@@ -239,17 +239,23 @@ pub fn render<C: CliContext>(registry: &Registry<C>, manual: &Manual) -> Result<
         }
     }
 
-    if let Some(fallback) = &registry.fallback {
-        blocks.push(format!("## Fallback: {}", fallback.name()));
-        blocks.push(format!(
-            "```text\n{}\n```",
-            fallback.help(registry.bin()).trim_end()
-        ));
+    let mut root = cli::command(registry);
+    root.build();
+    let others = other_commands(registry, &root);
+    if !others.is_empty() {
+        blocks.push("## Other commands".to_owned());
+        blocks.push(
+            "These run from the command line only. They are not ops: no JSON, MCP or typed call reaches them."
+                .to_owned(),
+        );
+        for other in &others {
+            blocks.push(format!("### {}", other.heading));
+            blocks.push("CLI only, not an op.".to_owned());
+            blocks.push(format!("```text\n{}\n```", other.help.trim_end()));
+        }
     }
 
     blocks.push("## Commands".to_owned());
-    let mut root = cli::command(registry);
-    root.build();
     for index in 0..registry.entries.len() {
         let d = &registry.entries[index].descriptor;
         if !cli::on_cli(registry, index) || d.hidden {
@@ -286,6 +292,10 @@ pub fn render<C: CliContext>(registry: &Registry<C>, manual: &Manual) -> Result<
                 blocks.push(d.long_help.clone());
             }
             blocks.push(paths_line(d.paths));
+            if !d.relations.is_empty() {
+                let lines: Vec<String> = d.relations.iter().map(|r| format!("- {r}")).collect();
+                blocks.push(format!("Rules:\n{}", lines.join("\n")));
+            }
             blocks.push(format!("Access: {}", access_words(&d.access)));
             push_exits_and_codes(&mut blocks, registry, d);
         }
@@ -294,6 +304,56 @@ pub fn render<C: CliContext>(registry: &Registry<C>, manual: &Manual) -> Result<
     blocks.push("## Library codes".to_owned());
     blocks.push(code_table(&library_codes()));
     Ok(blocks.join("\n\n") + "\n")
+}
+
+/// A command that is not an op: an extra or the root fallback.
+struct OtherCommand {
+    heading: String,
+    name: String,
+    /// `extra` or `fallback`.
+    kind: &'static str,
+    about: String,
+    long_about: String,
+    help: String,
+}
+
+/// The extras in declaration order, then the fallback. `root` is the built
+/// command tree, which holds every extra.
+fn other_commands<C: CliContext>(
+    registry: &Registry<C>,
+    root: &clap::Command,
+) -> Vec<OtherCommand> {
+    let mut others: Vec<OtherCommand> = registry
+        .extras
+        .iter()
+        .map(|extra| &extra.command)
+        .filter(|c| !c.is_hide_set())
+        .map(|c| {
+            let name = c.get_name().to_owned();
+            let built = root.find_subcommand(&name).unwrap_or(c);
+            let text = |s: Option<&clap::builder::StyledStr>| s.map(|s| s.to_string());
+            OtherCommand {
+                heading: format!("{} {name}", registry.bin()),
+                about: text(c.get_about()).unwrap_or_default(),
+                long_about: text(c.get_long_about()).unwrap_or_default(),
+                help: built.clone().render_long_help().to_string(),
+                kind: "extra",
+                name,
+            }
+        })
+        .collect();
+    if let Some(fallback) = &registry.fallback {
+        let help = fallback.help(registry.bin());
+        others.push(OtherCommand {
+            heading: fallback.name().to_owned(),
+            name: fallback.name().to_owned(),
+            kind: "fallback",
+            about: help.lines().next().unwrap_or_default().to_owned(),
+            long_about: help.clone(),
+            help,
+        });
+    }
+    others
 }
 
 fn paths_line(paths: Paths) -> String {
@@ -348,11 +408,27 @@ pub fn render_json<C: CliContext>(registry: &Registry<C>) -> Value {
         .iter()
         .map(|(code, meaning)| json!({"code": code, "meaning": meaning}))
         .collect();
+    let mut root = cli::command(registry);
+    root.build();
+    let other_commands: Vec<Value> = other_commands(registry, &root)
+        .iter()
+        .map(|o| {
+            json!({
+                "name": o.name,
+                "kind": o.kind,
+                "about": o.about,
+                "longAbout": o.long_about,
+                "help": o.help.trim_end(),
+                "cliOnly": true,
+            })
+        })
+        .collect();
     json!({
         "bin": registry.bin(),
         "version": registry.version(),
         "exits": exits,
         "commonCodes": common_codes(registry).iter().map(CodeRow::json).collect::<Vec<_>>(),
+        "otherCommands": other_commands,
         "ops": ops,
     })
 }

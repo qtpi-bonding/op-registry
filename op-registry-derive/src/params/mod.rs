@@ -53,6 +53,7 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let validate = schema::validate_fn(&fields, struct_attrs.validator.as_ref());
     let ref_slots = ref_gen::ref_slots_fn(&fields);
     let secrets = schema::secrets_fn(&fields);
+    let relations_fn = relations::relations_fn(&fields);
     let needs_secrets = fields.iter().any(|f| {
         matches!(
             f.shape,
@@ -79,6 +80,7 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             #validate
             #ref_slots
             #secrets
+            #relations_fn
         }
     })
 }

@@ -705,3 +705,156 @@ fn sample_manual_empty() -> Manual {
         sections: vec![],
     }
 }
+
+/// An op with a relation of every kind, for the "Rules:" lines.
+#[derive(Clone, OpParams)]
+struct Submit {
+    /// The recipients.
+    #[op(required_unless = "signed_file")]
+    to: Vec<String>,
+    /// A signed message file.
+    #[op(conflicts_with = "to")]
+    signed_file: Option<String>,
+}
+
+fn submit_registry(paths: Paths) -> Registry<Ctx> {
+    let mut r = Registry::<Ctx>::new();
+    r.set_pillar("fix");
+    r.set_bin("concordd", "1.2.3", "A concordance tool.");
+    let mut spec = OpSpec::<Submit, Item>::new("submit", "Submit a message.");
+    spec.paths = paths;
+    r.push_op(spec, nothing::<Submit>);
+    r
+}
+
+#[test]
+fn manual_prints_rules() {
+    // A command: the rules end its help block, under "Rules:".
+    let text = render(&submit_registry(Paths::ALL), &sample_manual_empty()).unwrap();
+    assert!(
+        text.contains(
+            "Rules:\n  --to is required unless --signed-file is given\n  --signed-file conflicts with --to\n```"
+        ),
+        "{text}"
+    );
+    assert_eq!(text.matches("--to is required unless").count(), 1, "{text}");
+    // An op off the command line has no help block: the manual prints them.
+    let text = render(
+        &submit_registry(Paths::of(&[Surface::Mcp])),
+        &sample_manual_empty(),
+    )
+    .unwrap();
+    assert!(
+        text.contains(
+            "Rules:\n- --to is required unless --signed-file is given\n- --signed-file conflicts with --to"
+        ),
+        "{text}"
+    );
+    // The JSON form carries them too.
+    let json = render_json(&submit_registry(Paths::ALL));
+    assert_eq!(
+        json["ops"][0]["relations"],
+        json!([
+            "--to is required unless --signed-file is given",
+            "--signed-file conflicts with --to"
+        ])
+    );
+}
+
+fn serve(_g: &G, _m: &clap::ArgMatches) -> BoxFuture<'static, anyhow::Result<u8>> {
+    Box::pin(async { Ok(0) })
+}
+
+fn with_extra(r: &mut Registry<Ctx>) {
+    r.push_extra(
+        clap::Command::new("serve")
+            .about("Run the server.")
+            .long_about("Run the server.\n\nIt listens until stopped.")
+            .arg(clap::Arg::new("port").long("port").help("The port.")),
+        serve,
+    );
+}
+
+fn run_fallback(_args: Vec<OsString>) -> BoxFuture<'static, anyhow::Result<u8>> {
+    Box::pin(async { Ok(0) })
+}
+
+fn free_text(_g: &G, _args: Vec<OsString>) -> BoxFuture<'_, anyhow::Result<u8>> {
+    Box::pin(async { Ok(0) })
+}
+
+/// A registry with one extra and a fallback of each kind the code has.
+fn fallbacks() -> Vec<(&'static str, Registry<Ctx>)> {
+    let mut flags_only = fixture();
+    flags_only.fallback_flags_only("fix", "Fix things.\nMore fix text.", run_fallback);
+    let mut before = fixture();
+    before.fallback_flags_only_before_runtime("daemon", "Run the daemon.\nMore daemon text.");
+    let mut text = fixture();
+    text.fallback_free_text(
+        "ask",
+        "Ask the agent.\nMore ask text.",
+        &[],
+        false,
+        free_text,
+    );
+    vec![("fix", flags_only), ("daemon", before), ("ask", text)]
+}
+
+#[test]
+fn manual_lists_extra_and_free_text_fallback() {
+    for (name, mut r) in fallbacks() {
+        with_extra(&mut r);
+        let text = render(&r, &sample_manual()).unwrap();
+        assert_eq!(text.matches("## Other commands").count(), 1, "{text}");
+        assert!(!text.contains("## Fallback"), "{text}");
+        let section = text
+            .split("## Other commands")
+            .nth(1)
+            .unwrap()
+            .split("\n## ")
+            .next()
+            .unwrap();
+        // The extra: name, about, long about and its own flag.
+        assert!(section.contains("concordd serve"), "{section}");
+        assert!(section.contains("It listens until stopped."), "{section}");
+        assert!(section.contains("--port"), "{section}");
+        // The fallback: name and full help, once.
+        assert!(section.contains(&format!("### {name}")), "{section}");
+        assert!(section.contains("More "), "{section}");
+        assert_eq!(text.matches("More ").count(), 1, "{text}");
+        // Each is marked.
+        assert_eq!(
+            section.matches("CLI only, not an op.").count(),
+            2,
+            "{section}"
+        );
+    }
+    // Nothing to list: no section.
+    let text = render(&fixture(), &sample_manual()).unwrap();
+    assert!(!text.contains("## Other commands"), "{text}");
+}
+
+#[test]
+fn manual_json_other_commands() {
+    let (_, mut r) = fallbacks().remove(2);
+    with_extra(&mut r);
+    let json = render_json(&r);
+    let other = json["otherCommands"].as_array().unwrap();
+    assert_eq!(other.len(), 2, "{json}");
+    assert_eq!(other[0]["name"], "serve");
+    assert_eq!(other[0]["kind"], "extra");
+    assert_eq!(other[0]["about"], "Run the server.");
+    assert!(other[0]["longAbout"]
+        .as_str()
+        .unwrap()
+        .contains("It listens until stopped."));
+    assert_eq!(other[0]["cliOnly"], true);
+    assert_eq!(other[1]["name"], "ask");
+    assert_eq!(other[1]["kind"], "fallback");
+    assert!(other[1]["help"]
+        .as_str()
+        .unwrap()
+        .contains("More ask text."));
+    // No other commands: an empty list, not a missing key.
+    assert_eq!(render_json(&fixture())["otherCommands"], json!([]));
+}

@@ -115,6 +115,18 @@ impl Target<'_> {
         }
     }
 
+    /// The target's flag with its dashes, as a `String` expression.
+    pub fn flag(&self) -> TokenStream {
+        let rt = quote!(::op_registry::__private::rt);
+        match self {
+            Target::Local(f) => {
+                let flag = format!("--{}", f.flag);
+                quote!(#flag.to_owned())
+            }
+            Target::Dotted { group, leaf, .. } => quote!(#rt::leaf_flag::<#group>(#leaf)),
+        }
+    }
+
     /// The clap arg ids of the target, as a `Vec<String>` expression.
     pub fn arg_ids(&self) -> TokenStream {
         let rt = quote!(::op_registry::__private::rt);
@@ -126,6 +138,64 @@ impl Target<'_> {
             Target::Dotted { group, leaf, .. } => {
                 quote!(#rt::arg_ids(#leaf, #rt::leaf_of::<#group>(#leaf).1))
             }
+        }
+    }
+}
+
+/// `relations()`: one plain line per relation, then each flattened group's.
+pub fn relations_fn(fields: &[Field]) -> TokenStream {
+    let mut lines: Vec<TokenStream> = Vec::new();
+    let flags = |members: &[&Field]| {
+        let flags: Vec<String> = members.iter().map(|f| format!("--{}", f.flag)).collect();
+        flags.join(", ")
+    };
+    for (_, optional, members) in one_of_groups(fields) {
+        let flags = flags(&members);
+        lines.push(if optional {
+            quote!(out.push(::std::format!("give at most one of {}", #flags));)
+        } else {
+            quote!(out.push(::std::format!("give exactly one of {}", #flags));)
+        });
+    }
+    for (_, members) in at_least_one_groups(fields) {
+        let flags = flags(&members);
+        lines.push(quote!(out.push(::std::format!("give at least one of {}", #flags));))
+    }
+    for f in fields {
+        let own = format!("--{}", f.flag);
+        let join = |names: &[ScopeName], word: &str| {
+            let flags = names.iter().map(|t| resolve(fields, t).flag());
+            quote!(::std::vec![#(#flags),*].join(#word))
+        };
+        if !f.requires_if.is_empty() {
+            let others = join(&f.requires_if, " or ");
+            lines.push(
+                quote!(out.push(::std::format!("{} is required when {} is given", #own, #others));),
+            );
+        }
+        if !f.conflicts_with.is_empty() {
+            let others = join(&f.conflicts_with, ", ");
+            lines.push(quote!(out.push(::std::format!("{} conflicts with {}", #own, #others));));
+        }
+        if !f.required_unless.is_empty() {
+            let others = join(&f.required_unless, " or ");
+            lines.push(
+                quote!(out.push(::std::format!("{} is required unless {} is given", #own, #others));),
+            );
+        }
+    }
+    let nested = fields.iter().filter_map(|f| match &f.shape {
+        Shape::Flatten(ty) => {
+            Some(quote!(out.extend(<#ty as ::op_registry::OpParams>::relations());))
+        }
+        _ => None,
+    });
+    quote! {
+        fn relations() -> ::std::vec::Vec<::std::string::String> {
+            let mut out = ::std::vec::Vec::new();
+            #(#lines)*
+            #(#nested)*
+            out
         }
     }
 }

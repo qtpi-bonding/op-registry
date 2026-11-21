@@ -282,6 +282,8 @@ pub struct Descriptor {
     pub unpaged: bool,
     /// The long flags (without dashes) of the globals the op needs on the command line.
     pub needs_globals: Vec<String>,
+    /// The op's param relations as plain lines (`OpParams::relations`).
+    pub relations: Vec<String>,
 }
 
 impl Descriptor {

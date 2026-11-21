@@ -348,8 +348,19 @@ fn decorate<C: CliContext>(registry: &Registry<C>, index: usize, cmd: Command) -
                 .help("Resume after this cursor."),
         );
     }
-    if let Some(line) = needs_line::<C>(&d.needs_globals) {
-        cmd = cmd.after_help(line);
+    let needs = needs_line::<C>(&d.needs_globals);
+    if let Some(line) = &needs {
+        cmd = cmd.after_help(line.clone());
+    }
+    // `--help` shows `after_long_help` instead of `after_help`: the needs line
+    // stays, the rules come last.
+    if !d.relations.is_empty() {
+        let rules = format!("Rules:\n  {}", d.relations.join("\n  "));
+        let long = match needs {
+            Some(line) => format!("{line}\n\n{rules}"),
+            None => rules,
+        };
+        cmd = cmd.after_long_help(long);
     }
     if d.text {
         cmd = cmd.arg(

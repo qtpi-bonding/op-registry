@@ -509,3 +509,75 @@ fn missing_required_global_is_usage_missing() {
     let (_, g) = cli::parse(&r, &argv(&["a", "b", "--hub", "h"])).unwrap();
     assert_eq!(g.unwrap().hub, "h");
 }
+
+/// An op with a relation and a needed global, an env param and a prompted secret.
+#[derive(Clone, OpParams)]
+struct Rules {
+    /// The recipients.
+    #[op(required_unless = "signed_file")]
+    to: Vec<String>,
+    /// A signed message file.
+    #[op(conflicts_with = "to")]
+    signed_file: Option<String>,
+    /// The region.
+    #[op(env = "OPREG_CLI_TREE_REGION_UNIQUE")]
+    region: Option<String>,
+    /// The API key.
+    #[cfg(feature = "secrets")]
+    #[op(prompt = "API key")]
+    api_key: op_registry::SecretFile,
+}
+
+fn rules_reg() -> Registry<Ctx> {
+    let mut r = Registry::new();
+    r.set_pillar("fix");
+    r.set_bin("app", "1.2.3", "A test app.");
+    let mut spec = OpSpec::<Rules, Out>::new("send", "Send it.");
+    spec.needs_globals = vec!["hub"];
+    unary(&mut r, spec);
+    r
+}
+
+fn rules_help() -> String {
+    match cli::parse(&rules_reg(), &argv(&["send", "--help"])) {
+        Ok((Parsed::Help(text), _)) => text,
+        Ok(_) => panic!("not help"),
+        Err(e) => panic!("{} {}", e.code, e.message),
+    }
+}
+
+#[test]
+fn help_ends_with_rules() {
+    let text = rules_help();
+    assert!(
+        text.trim_end().ends_with(
+            "Rules:\n  --to is required unless --signed-file is given\n  --signed-file conflicts with --to"
+        ),
+        "{text}"
+    );
+    // An op without relations has no Rules block.
+    assert!(!help(&["concept", "get", "--help"]).contains("Rules:"));
+}
+
+#[test]
+fn help_holds_needs_env_and_prompt_lines() {
+    let text = rules_help();
+    assert!(
+        text.contains("Needs: --hub (or OPREG_CLI_TREE_HUB_UNIQUE)."),
+        "{text}"
+    );
+    assert!(
+        text.contains("[env: OPREG_CLI_TREE_REGION_UNIQUE]"),
+        "{text}"
+    );
+    #[cfg(feature = "secrets")]
+    assert!(
+        text.contains("Asked for on a terminal when left out."),
+        "{text}"
+    );
+    // The needs line stays above the rules.
+    assert!(
+        text.find("Needs:").unwrap() < text.find("Rules:").unwrap(),
+        "{text}"
+    );
+}

@@ -363,6 +363,12 @@ pub trait OpParams: Sized + Send + 'static {
     fn secrets(&self) -> Vec<Vec<u8>> {
         Vec::new()
     }
+    /// The struct's relations as plain lines, flattened groups' included:
+    /// "--to is required unless --signed-file is given", "give exactly one
+    /// of --id, --action". Help and the manual print them as the op's rules.
+    fn relations() -> Vec<String> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, thiserror::Error, coded_error::CodedError)]

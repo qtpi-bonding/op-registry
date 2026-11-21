@@ -225,6 +225,16 @@ pub fn leaf_of<G: crate::OpParams>(rust_name: &str) -> (String, FieldKind) {
         .unwrap_or_else(|| panic!("op-registry: no field `{rust_name}` in the flattened group"))
 }
 
+/// The long flag, with its dashes, of the leaf `rust_name` of a flattened
+/// group `G`: how a relation line names a dotted target.
+pub fn leaf_flag<G: crate::OpParams>(rust_name: &str) -> String {
+    G::fields()
+        .into_iter()
+        .find(|f| f.rust_name == rust_name)
+        .map(|f| format!("--{}", f.flag))
+        .unwrap_or_else(|| panic!("op-registry: no field `{rust_name}` in the flattened group"))
+}
+
 /// The clap arg ids of a relation target: a tri-state also has `no_x`, a
 /// `Patch` also `clear_x`.
 pub fn arg_ids(rust_name: &str, kind: FieldKind) -> Vec<String> {

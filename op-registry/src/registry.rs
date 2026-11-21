@@ -625,6 +625,7 @@ impl<C: Resolve + 'static> Registry<C> {
                 .iter()
                 .map(|name| name.replace('_', "-"))
                 .collect(),
+            relations: P::relations(),
         }
     }
 
