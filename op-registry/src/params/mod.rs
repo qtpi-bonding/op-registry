@@ -414,3 +414,24 @@ impl coded_error::CodeCatalog for MissingUnless {
 pub fn usage(error: UsageError) -> anyhow::Error {
     coded_error::into_anyhow(error)
 }
+
+#[cfg(test)]
+mod redactor_tests {
+    use super::Redactor;
+
+    #[test]
+    fn poisoned_lock_still_redacts() {
+        let r = Redactor::new();
+        r.add(b"poison-secret");
+        let held = r.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = held.0.write().unwrap();
+            panic!("poison the lock");
+        })
+        .join();
+        assert!(r.0.is_poisoned());
+        assert_eq!(r.redact("x poison-secret"), "x <secret>");
+        r.add(b"after-poison");
+        assert_eq!(r.redact("after-poison"), "<secret>");
+    }
+}

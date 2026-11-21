@@ -607,8 +607,6 @@ async fn options_cloned_before_registration_share_it() {
     let base = CallOptions::default();
     let copy = base.clone();
     base.redact(S.as_bytes());
-    let (opts, sink) = with_sink();
-    drop(opts);
     let sink2 = Arc::new(Sink::default());
     let copy = copy.with_notices(Notices::new(sink2.clone()));
     let failure = r
@@ -616,7 +614,6 @@ async fn options_cloned_before_registration_share_it() {
         .await
         .unwrap_err();
     assert_eq!(failure.to_string(), "failed <secret>");
-    assert!(sink.0.lock().unwrap().is_empty());
     assert_eq!(sink2.0.lock().unwrap().as_slice(), ["noticed <secret>"]);
 }
 
@@ -699,4 +696,26 @@ fn secret_with_blank_lines_redacted() {
     assert_eq!(ran.code, 70, "{}", ran.err);
     assert_hidden(&ran, &seen, "sk-abc123");
     assert!(ran.err.contains("<secret>"), "{}", ran.err);
+}
+
+#[tokio::test]
+async fn call_tool_pre_call_failure_uses_options_handle() {
+    let r = leak_registry();
+    let opts = CallOptions::default();
+    opts.redact(b"no_such_op_s3cr3t");
+    let failure = op_registry::mcp::call_tool(
+        &r,
+        &ctx(),
+        Audience::Agent,
+        "no_such_op_s3cr3t",
+        json!({}),
+        opts,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        !failure.to_string().contains("no_such_op_s3cr3t"),
+        "{failure}"
+    );
+    assert!(!failure.redacted_message().contains("no_such_op_s3cr3t"));
 }

@@ -156,11 +156,6 @@ impl CallFailure {
         Self { error, redactor }
     }
 
-    /// A failure before any parameters exist: nothing to redact.
-    pub(crate) fn plain(error: anyhow::Error) -> Self {
-        Self::new(error, Redactor::default())
-    }
-
     /// The raw error. It may carry secret values: never print it.
     pub fn error(&self) -> &anyhow::Error {
         &self.error

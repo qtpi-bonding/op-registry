@@ -74,7 +74,8 @@ pub async fn call_tool<C: Resolve>(
     args: Value,
     mut opts: CallOptions,
 ) -> Result<Value, CallFailure> {
-    let plain = |error: CallError| CallFailure::plain(coded_error::into_anyhow(error));
+    let plain =
+        |error: CallError| CallFailure::new(coded_error::into_anyhow(error), opts.redactor.clone());
     let descriptor = registry.get(name).ok_or_else(|| {
         plain(CallError::UnknownOperation {
             name: name.to_owned(),
