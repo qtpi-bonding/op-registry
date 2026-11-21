@@ -24,16 +24,16 @@ pub struct CallOptions {
     /// clone of its options to a nested call shares one handle with it.
     pub(crate) redactor: Redactor,
     /// The terminal prompter of a CLI run; no other surface sets it.
-    #[cfg(feature = "secrets")]
+    #[cfg(feature = "prompt")]
     pub(crate) prompter: Option<PromptHandle>,
 }
 
 /// The run's prompter, for `CallOptions::prompt_secret`.
-#[cfg(feature = "secrets")]
+#[cfg(feature = "prompt")]
 #[derive(Clone)]
 pub(crate) struct PromptHandle(pub(crate) std::sync::Arc<dyn crate::cli::Prompter>);
 
-#[cfg(feature = "secrets")]
+#[cfg(feature = "prompt")]
 impl std::fmt::Debug for PromptHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Prompter")
@@ -110,6 +110,18 @@ impl CallOptions {
     /// [`redact`]: CallOptions::redact
     #[cfg(feature = "secrets")]
     pub fn prompt_secret(&self, label: &str) -> Option<crate::Secret<zeroize::Zeroizing<String>>> {
+        #[cfg(not(feature = "prompt"))]
+        {
+            // Without the `prompt` feature nothing asks, whatever the host installed.
+            let _ = label;
+            None
+        }
+        #[cfg(feature = "prompt")]
+        self.ask(label)
+    }
+
+    #[cfg(feature = "prompt")]
+    fn ask(&self, label: &str) -> Option<crate::Secret<zeroize::Zeroizing<String>>> {
         let prompter = self.prompter.as_ref()?;
         match prompter.0.read_secret(label) {
             Ok(line) if line.is_empty() => None,

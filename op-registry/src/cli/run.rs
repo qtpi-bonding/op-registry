@@ -498,7 +498,7 @@ async fn execute<C: CliContext + Resolve>(
     }
     // The secret globals go into the call's one redactor handle.
     opts.redactor.extend(&secrets);
-    #[cfg(feature = "secrets")]
+    #[cfg(feature = "prompt")]
     {
         opts.prompter = io.prompter.clone().map(crate::call::PromptHandle);
     }
