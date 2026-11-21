@@ -46,3 +46,7 @@ required-features = ["testing"]
 [[test]]
 name = "paths"
 required-features = ["testing"]
+
+[[test]]
+name = "runner"
+required-features = ["secrets"]
