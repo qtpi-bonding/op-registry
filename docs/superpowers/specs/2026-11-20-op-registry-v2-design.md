@@ -124,7 +124,8 @@ path (section 4.4).
 - Build-time checks panic naming both ops: duplicate names, a word that is
   both an op and a group (unless it is the group's default), a missing group
   summary, two defaults in one group, a flattened flag name clashing (3.6), an
-  extra command clashing with an op word (2.4).
+  extra command clashing with an op word (2.4). A second stdin reader is not a
+  build error (see 3.5): it fails at run time.
 
 ### 2.3 Root fallback
 
@@ -145,8 +146,14 @@ matches. It is not an op: no MCP tool, no typed path. Its shape is declared:
     `-s X`, `--inference ls`) are never read as verbs.
   - A command or group word: runs the command.
   - A single token with no whitespace, within edit distance 2 of a command or
-    group: a usage error naming the command. A sentence never matches.
+    group: a usage error naming the command, only when the registry asks for
+    near-miss checks (`near_miss`). A sentence never matches.
   - Anything else: the fallback, with the globals already parsed.
+  - An empty rest (nothing but globals) goes to the fallback with no arguments.
+  - Once the fallback runs, registry globals are also taken from the rest of
+    the arguments, up to `--`, so `gait "task" --gait-dir d` works (globals after
+    the verb hold for FreeText as for every command). A declared fallback value
+    flag keeps its next token as its value, unscanned.
   The fallback's own flags must not reuse a registry global's name; the build
   checks the names the app declares for it. gait's hidden `__brain`,
   `__run-tool` and `__role` entries are dispatched in `main.rs` before the
@@ -157,7 +164,9 @@ matches. It is not an op: no MCP tool, no typed path. Its shape is declared:
 Some binaries keep a subcommand that is not an op, such as multimatrix
 `serve`. The registry takes `extra(command: clap::Command, run: fn)` entries.
 They share the registry's globals (with env fallback), get the parsed globals
-and their own matches, and return an `ExitCode`. They are not ops, so they
+and their own matches, and return `anyhow::Result<u8>`: `Ok(n)` exits `n`, and
+an `Err` is reported like an op's error (the error line, then the exit by class).
+Fallbacks return the same type. They are not ops, so they
 have no MCP tool and no typed path; parity lists them as CLI-only with the
 reason "not an op". Taken from: multimatrix (`serve` with `--nats-url`).
 
@@ -183,8 +192,10 @@ is a flag named by its kind (`--collection`, `--blueprint`, `--build`,
 
 - A field of type `Ref` with `#[op(subject = "build")]` is `--id` (key `id`).
   One subject per op. `#[op(subject = "agent", id_only)]` takes ids only and
-  skips name resolution (grorg `agent key list` and `key ensure` probe ids
-  that are not registered yet).
+  skips name resolution. `#[op(subject = "agent", absent_ok)]` is for ops
+  that accept an id that may not exist (creates, ensures and idempotent probes):
+  the subject is never resolved, the op gets the raw id, and the kit's not_found
+  test skips it. The two may be combined.
 - `#[op(scope = ["blueprint"])]` on the subject names sibling params the
   resolver needs: a concept URI is unique only within a collection, a build
   only within a blueprint.
@@ -207,8 +218,8 @@ is a flag named by its kind (`--collection`, `--blueprint`, `--build`,
 
   `Scope` holds the named field values, typed as strings, by camelCase key. The op
   receives `Resolved`, never the raw text.
-- **Pass-through.** A kind may be declared `resolve: server`. The library then
-  skips `Resolve` for it and hands the raw ref to the op as
+- **Pass-through.** A kind may be declared server-resolved. The library then
+  skips `Resolve` for it (header key `resolve_server = ["kind", ..]`) and hands the raw ref to the op as
   `Resolved::Raw(ref)`; the server resolves id-or-name and returns
   `.not_found` or `.ambiguous` itself. This saves a round trip per op (grorg
   resolves server-side since 7ce4d36). The not_found test (section 9) still
@@ -251,7 +262,17 @@ Taken from: the merged convention; gp's A; catuskoti and archegraph reviews.
   a `oneOf`. This replaces grorg's after-the-fact `ArgGroup` patch.
 - `#[op(requires_if = "uri")]` stays: the field is required when the named
   field is present (catuskoti: a URI lookup needs `--collection`). The schema
-  gets `dependentRequired`. Every path checks it before the op runs.
+  gets an `if`/`then` fragment (0.4.0 no longer emits `dependentRequired`).
+  Every path checks it before the op runs.
+- `conflicts_with` and `required_unless` are back (v1 had them; the first v2
+  draft dropped them): `#[op(conflicts_with = "x")]` and
+  `#[op(required_unless = "x")]`, each taking a name or a list, with targets
+  that are fields or dotted flatten paths. `at_least_one` joins the `one_of`
+  family. Relation members may be `Option`, `Vec`, map, switch, tri-state or
+  `Patch`; presence is what the CLI sees (an `{"all": false}` switch is absent).
+- A param `env` is allowed in 0.4.0 (`#[op(env = "X")]`, plain or optional
+  scalars and switches); it is read on the CLI only, and typed, JSON and MCP
+  callers pass the value. It is not on the list of removed items.
 
 ### 3.5 Input types
 
@@ -265,7 +286,8 @@ Taken from: the merged convention; gp's A; catuskoti and archegraph reviews.
 
 `Input` serves multimatrix `submit-message --signed-file` (a SignedMessage
 protobuf). `Json` serves structmux `owner call --method m --body ...`. Only one
-param per op may read stdin; a second is a build-time error. Anything else is
+param per op may read stdin; a second read fails at run time with
+`op_registry.usage.stdin_twice`. Anything else is
 a compile error, as in v1.
 
 ### 3.6 Shared param groups
@@ -296,12 +318,17 @@ multimatrix (`--nats-url` on every command, `serve` included).
 - **`SecretFile`.** A path or `-`. The library reads it at parse time into
   `Secret<Zeroizing<Vec<u8>>>`: zeroized on drop, printing `<secret>`. The path
   stays printable unless the field is also `#[op(secret)]`. On JSON paths it is
-  a path string; `#[op(secret_inline)]` lets an in-process or MCP caller pass
-  base64 bytes instead.
+  a path string; an op reachable on `mcp` needs `#[op(secret_inline)]` (an
+  in-process or MCP caller passes base64 bytes instead) or leaves `mcp` out of
+  its paths. `assert_parity` enforces this.
 - **`#[op(secret)]`** on any field: no default or env value in help, the
   manual or the schema; schema `writeOnly`; clap errors naming the flag are
   re-rendered without the value; the value is redacted from the call's error
   line and notices.
+- **Redaction holds on every surface.** A call's redactor is one shared handle:
+  a secret registered mid-call (`CallOptions::redact`) is removed from the CLI
+  error line, `CallFailure` (`call`, `call_tool`, `call_typed` and the stream
+  calls), `tool_error`, notices and hooks' messages.
 - **Contents are redacted too.** Each `SecretFile` read in a call has its
   contents (and each of their lines) redacted from errors and notices. Text an
   app transforms first (archegraph: agent output cut to 200 chars) is not
@@ -399,21 +426,24 @@ ErrorSink plumbing.
 ### 4.4 The typed path
 
 `Registry::call_typed::<ops::ConceptGet>(&ctx, params, opts) ->
-Result<Concept, anyhow::Error>` runs the op in-process with typed params and a
+Result<Concept, CallFailure>` runs the op in-process with typed params and a
 typed output. It resolves refs, checks oneOf and requires_if, and runs the
 CallHook like every other path. Errors keep their concrete coded type, so a
-caller can downcast them. episutra's bridge uses it in place of calling
+caller can downcast them with `failure.error()`; the failure's message is
+redacted, and `.map_err(CallFailure::into_coded)?` keeps the code in an
+`anyhow::Error`. episutra's bridge uses it in place of calling
 `Operation::run`. JSON paths (`call`, `call_tool`, a REST mount) go through
 the same entry after decoding. Taken from: catuskoti review; gp's parity rule.
 
-An op may be `paths: [typed]` (in-process only). An op may also be
-`paths: [cli]` with a required `reason: "..."`: it is on the CLI and the typed
-path and never on MCP, `call`, `call_tool` or any JSON or REST mount, and
-those paths return the same coded `wrong_path` error. It is for ops that act
-with an owner key or sign (gp 2026-11-20); nothing else. op-registry has no
-auth concept: the marker is generic and the policy is this paragraph. Every
-other op is reachable on every path (archegraph `mutation run` stays on MCP);
-parity checks it (section 9).
+(PATH-1) An op declares any subset of the surfaces `cli`, `typed`, `mcp` and
+`json`, with no reason: `paths: [cli]` is the command line only,
+`paths: [cli, typed]` the command line and in-process, `paths: [mcp, json]`
+the two JSON paths. The default is every surface. A call on a surface the op
+does not declare returns the coded `op_registry.call.wrong_path`, on
+`call_typed` and `call_stream_typed` too. op-registry has no auth concept: the
+subset is generic, and what an op may do on a surface is the app's policy.
+Parity checks the declaration exactly (section 9). In 0.3.x `paths: [cli]` meant
+the CLI plus typed; write `[cli, typed]` for that.
 
 ### 4.5 Notices and progress
 
@@ -427,7 +457,8 @@ them to a sink the caller supplies, or drops them. Taken from: catuskoti
 
 The library installs no signal handler. Ctrl-C reaches the process as usual;
 an op that needs cleanup (archegraph `build`) handles it itself. The runner
-still returns an `ExitCode` when the op returns.
+still returns an `ExitCode` when the op returns. Signal exits (130, 143) belong
+to the binary, not to the runner.
 
 ## 5. Output
 
@@ -458,8 +489,9 @@ Taken from: gp D; catuskoti and archegraph reviews.
 
 ### 5.3 Lists and paging
 
-gp: with no paging flags, a list follows all pages and prints a bare array;
-with `--limit` or `--cursor` it prints `{"items": [...], "nextCursor": "..."}`.
+gp: with no paging flags, a list follows all pages and prints `{"items": [...]}`
+(every array output is wrapped, OUT-1; `call`, `call_tool` and the manual show
+the same object); with `--limit` or `--cursor` it prints `{"items": [...], "nextCursor": "..."}`.
 One op cannot have two output schemas chosen by a flag (archegraph review).
 
 Resolution: a `list:` entry is written once, as one page function:
@@ -470,7 +502,7 @@ async fn concept_page(ctx: &Context, p: ListConcepts, page: PageRequest)
 ```
 
 The registry generates two ops from it, each with one schema:
-- `concept_list`: params without paging, output `ConceptSummary[]`. It calls
+- `concept_list`: params without paging, output `{"items": ConceptSummary[]}`. It calls
   the page function until `nextCursor` is empty and returns all items. It
   stops at a safety cap (default 10,000 items, set per op with `cap:`) and
   fails with `<pillar>.<object>.too_many` (Logical), telling the caller to page
@@ -483,7 +515,8 @@ The registry generates two ops from it, each with one schema:
 
 On the CLI they share one command, `concept list`. With no `--limit` and no
 `--cursor` it runs `concept_list`; with either it runs `concept_list_page`
-(a missing `--limit` takes the op's declared default page size). MCP, REST and
+(a missing `--limit` takes the op's declared default page size, and only
+with `--cursor`; with neither flag the command follows all pages). MCP, REST and
 the typed path see two ops with honest schemas. Parity knows the pair. Items
 should be the type `get` returns; `assert_help_complete` warns when a sibling
 `get` returns a different type.
@@ -504,7 +537,9 @@ changes; it does not fail the build.
 ### 5.4 Text where an op opts in
 
 An op with `text: true` gets `--text`, which prints `RenderText::render_text`
-instead of JSON. JSON stays the default and MCP always returns JSON. archegraph
+instead of JSON. A `list:` entry may say `text: true` too (OUT-3): `RenderText`
+is implemented for `Vec<T>`, one item per line, and the page half adds
+`next cursor: <c>` (this reverses ruling R12, which rejected text on lists). JSON stays the default and MCP always returns JSON. archegraph
 note: this is not a rename of `Display`. Seven ops print hand-built camelCase
 JSON today (and MCP serializes the struct, a second shape); `review` and
 `structure` print only textproto or text. Each needs a typed, serde-camelCase
@@ -554,7 +589,9 @@ carries the state as a field. Taken from: archegraph review (3), drift (4).
   that wraps others forwards their codes with `#[coded(transparent, catalog)]`.
   A `class` of `None` (the class is decided at run time) prints as "varies"
   in the manual. op-registry pins coded-error at 0.3.0 or later.
-- In tests, the runner fails when an op returns a code not in its list.
+- In tests, `strict_codes` (opt-in; the kit's `assert_error_codes` uses the same
+  check) fails when an op returns a code not in its own, common or cap codes;
+  `op_registry.*` codes are always allowed.
   Renaming a code is a breaking change and shows in the manual snapshot.
 
 ### 6.4 Missing objects
@@ -623,15 +660,15 @@ ship. The resolver makes this hold for every op with a subject.
 
 | Test | Checks | Taken from |
 |---|---|---|
-| `assert_parity` | every op is on every path unless `paths: [typed]` or `paths: [cli]` (a CLI-only op must be on the CLI and in no tool list or mount; the report names it CLI-only with its reason); MCP, CLI, typed and declared mounts agree; extras and streams have reasons; list pairs match | v1, archegraph, gp's parity rule |
+| `assert_parity` | every op is on exactly the surfaces its `paths` declares (reachable when declared, absent otherwise; a stream is absent from `mcp` and mounts, the page half of a list from the CLI); an output root that is not an object, and an MCP-reachable plain `SecretFile`, are problems; MCP, CLI, typed and declared mounts agree; extras and streams have reasons; list pairs match | v1, archegraph, gp's parity rule |
 | `assert_help_complete` | every op, group and flag has help; one wording per flag; no banned paths or words | grorg, archegraph, gait |
 | `assert_manual_snapshot` | the checked-in manual equals a fresh render | archegraph |
 | `assert_exit_table` | the table, declared exits and codes are in the manual; exits in 3..=63 | archegraph |
 | `assert_error_codes(&ctx)` | in the app's fixture runs, every returned code is in the op's list | structmux |
 | `assert_secrets_not_echoed` | a sentinel secret value, and a sentinel key file's contents, never show in help, the manual, the schema, a clap error, an error line, a notice, or stdout | structmux, gait |
 | `assert_canonical(&registry, CANONICAL)` | op names equal a checked-in list | catuskoti |
-| `assert_unknown_ref_not_found(&ctx)` | each op with a subject, given a random ref, fails Logical `*.not_found` | gait bug, gp |
-| `assert_local_ops_offline(&ctx)` | local ops never touch a connection | multimatrix |
+| `assert_unknown_ref_not_found(&ctx)` | each op with a subject except an `absent_ok` one (typed-only ops are skipped), given a random ref, fails Logical `*.not_found` | gait bug, gp |
+| `assert_local_ops_offline(&ctx)` | local ops never touch a connection (typed-only ops are skipped and named) | multimatrix |
 | `assert_casing(Camel)` | input and output schema keys are camelCase (map keys excepted) | gp B, input-key decision |
 
 ## 10. Out of scope

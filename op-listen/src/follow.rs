@@ -184,8 +184,13 @@ fn cursor_of(frame: &Value) -> Option<ListenCursor> {
     frame.get("cursor")?.as_str()?.parse().ok()
 }
 
-/// Raw JSON listen frames: the cursor is the frame's `cursor`, a stop is a
-/// `stop` frame and a resync is a `snapshot` frame with `resync: true`.
+/// Raw JSON listen frames, decided by shape alone. The cursor is the frame's
+/// `cursor` string when it parses as a [`ListenCursor`], else `None`. A frame
+/// whose `frame` is `"stop"` is a stop, and its `code` (empty when missing) is
+/// the stop code, so every stop frame ends a follow. A resync is a `frame` of
+/// `"snapshot"` with `resync: true`. Any other value is an item that is neither
+/// a stop nor a resync. A consumer frame type with per-topic stops implements
+/// [`Resumable`] itself.
 impl Resumable for Value {
     type Cursor = ListenCursor;
 
@@ -412,7 +417,17 @@ pub enum Followed<F> {
 /// last cursor (or the initial one), reconnects with the backoff, and ends
 /// with the last error after `max_retries` consecutive failures. A failed open
 /// is a failure like a connection that ends, so it is retried while the error
-/// is not Logical; a connection that ends without an item counts as one too.
+/// is not Logical; a connection that ends without an item counts as one too,
+/// except that an empty connection which lasted at least
+/// `backoff.healthy_after` first resets the failure count (it is the one
+/// failure counted afterwards), so such connections never add up toward
+/// `max_retries`. The marker is yielded before the first item that follows a
+/// failed first open or any earlier connection.
+///
+/// The source must yield. The follower is polled as one future whose items go
+/// into an unbounded queue, so a source that is always ready (a stream that
+/// never returns `Pending`) is drained into that queue in a single poll and
+/// never lets the consumer see an item.
 ///
 /// Every item is yielded as [`Followed::Frame`]. Before the first item of a
 /// reconnection it yields `Followed::Marker(marker(cursor, resync))`; a

@@ -104,7 +104,8 @@ impl CallOptions {
     ///
     /// Only a CLI run with a terminal can ask; typed, JSON and MCP calls and
     /// a CLI run with no terminal return `None`, so the op falls back to its
-    /// non-interactive form. An empty answer returns `None`; a read error
+    /// non-interactive form. Without the `prompt` feature it always returns
+    /// `None`, even when the host installed a prompter. An empty answer returns `None`; a read error
     /// returns `None` and sends one notice, "cannot read from the terminal".
     ///
     /// [`redact`]: CallOptions::redact

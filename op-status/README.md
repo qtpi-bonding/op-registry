@@ -100,6 +100,10 @@ Implement `StatusSource`:
   yourself, and return **at most `max + 1`** components so the caller can
   detect truncation.
 - `allowed_attr_keys()`: the static allow-list of attribute keys.
+- `remote_snapshot(filter, max)`: optional; defaults to `None`. A source that
+  proxies another process (the owner CLI asking the daemon) returns
+  `Some(future)` with the remote's `StatusSnapshot`, and `status get` and
+  `take_snapshot` return it unchanged instead of calling `snapshot`.
 - `watch(from_seq)`: optional; returns the changes with seq above `from_seq`
   (`None` = live changes only), replaying the retained backlog first. Defaults
   to `None`. A source that implements it also overrides `provides_watch()` to
@@ -122,6 +126,11 @@ app.merge(status_registry::<MyService>(
 `status_registry` registers the group `status` and `status get` (reads access,
 unary). `StatusOptions` defaults to `Audience::Agent` and
 `max_components` 1000.
+
+The group's summary is the exported constant `op_status::GROUP_SUMMARY`
+(`"Component status."`). An app that declares its own `status` group, for
+example in its `ops!` header, uses that constant as the summary so that
+`Registry::merge` does not panic on two different summaries.
 
 ## `status get`
 

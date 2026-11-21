@@ -1541,7 +1541,7 @@ unknown word is a usage failure; `cli::run` reaching a before-runtime fallback e
 |---|---|
 | `auth add` asks for the key on a terminal, no echo (gait) | SEC-4 `#[op(prompt)]` on `key_file` |
 | `auth login` openai-signin paste step after the URL (gait) | SEC-5 `prompt_secret`; off a terminal the two-step form |
-| `--key-file -` / piped secrets for scripts (gait, structmux) | unchanged, plus the SEC-6 hint |
+| `--key-file -` / piped secrets for scripts (gait) | unchanged, plus the SEC-6 hint |
 | `--owner-principal` from `GRORG_OWNER_PRINCIPAL` (grorg) | PAR-10 |
 | reconnect marker `{"marker":"reconnected","afterSeq":N}` (grorg) | STR-4 `Listener::reconnect_marker` override |
 | `status watch` over gRPC with resnapshot (grorg) | STR-4 (Resnapshot inside `listen_stream`), STR-6 |
@@ -1553,17 +1553,8 @@ unknown word is a usage failure; `cli::run` reaching a before-runtime fallback e
 | `--newest` in a group with `--after/--before` (multimatrix) | REL-1 |
 | `status get` key order (multimatrix) | OUT-6 |
 | owner CLI proxies the daemon's status (multimatrix) | STR-6 `remote_snapshot` |
-| daemon run forks before any runtime (structmux) | FB-5 |
-| daemon flags discoverable from help (structmux) | MAN-3 pointer, fallback `help` text, MAN-2 |
-| `--confirm-fingerprint` required unless `--dry-run` across the shared group (structmux) | REL-3 + REL-5 |
-| at least one `--grant` / `--entry` (structmux) | REL-2 |
-| `SocketAddr`, `PrincipalId`, `Grant` values (structmux) | PAR-6 |
-| malformed principal id is exit 2 (structmux) | PAR-5 |
-| `[default: 0]` meaning "the daemon's own" (structmux) | PAR-9 `hide_default` |
-| owner key file read with the app's checks, redacted (structmux, multimatrix) | SEC-2 |
-| `setup --owner-key-out` survives a crash before the claim (structmux) | SEC-9 |
-| no telemetry before the fork (structmux) | FB-4 `on_selected` |
-| per-op `--addr`/`--dir`/`--gait-dir` needed (structmux, gait, multimatrix) | DEC-4 |
+| owner key file read with the app's checks, redacted (multimatrix) | SEC-2 |
+| per-op `--addr`/`--dir`/`--gait-dir` needed (gait, multimatrix) | DEC-4 |
 | `local` ops behind `--features local` (gait) | DEC-3 |
 | `config set --value -1`, `--args -y pkg` (gait) | PAR-7 |
 | turn with globals after the task, empty argv (gait) | FB-2 |
@@ -1576,7 +1567,7 @@ unknown word is a usage failure; `cli::run` reaching a before-runtime fallback e
 | optional build subject, "newest"/"the paused one" (archegraph) | PAR-1 |
 | `--id` without `--blueprint` (archegraph) | already works; PAR-2 test and README |
 | one-word list paths `graph-search` (archegraph) | DEC-5 |
-| list text output (archegraph, structmux) | OUT-3 |
+| list text output (archegraph) | OUT-3 |
 | one graph load per follow (archegraph) | OUT-4 |
 | `--name/--file/--kind` at least one (archegraph) | REL-4 |
 | `--show` excludes `--code-root`/`--lang` (archegraph) | REL-3 + REL-1 |
@@ -1647,17 +1638,6 @@ Each item belongs to the named consumer. Callers outside the pillars are in the 
 - `GAIT_AGENT_DIR` to `GAIT_IDENTITY_DIR`, `daemons` to `processes` (addendum A1-A4), deployed with structmux and
   concordium.
 - Optional: implement `Resolve` for `session` so lookups go through the resolver.
-
-### structmux
-- `structmuxd` main pre-dispatches the daemon path with `cli::select` (FB-5); drop "fallback runs the old code" from
-  Task 6.
-- `add-device` without `--confirm-fingerprint` is exit 2 (not a preview); new code
-  `structmux.owner.fingerprint_mismatch`.
-- `--code-file` holds the bare code (delete the `setup code:` prefix parse); callers write `jq -r .setupCode`.
-- Port `structmux-daemon/tests/owner_tool.rs` and the trace/sentinel tests; client printed commands
-  (`join_device.rs:154,716`, `fleet_state.rs:2946`, `approval_tests.rs:677`).
-- `catalog_cli.rs` compares parsed `items`; `export-settings` keeps its own 0644 write.
-- `jq` preflight in native place installs (concordium side, in the integration list).
 
 ### archegraph
 - Hook payloads stay snake_case (gp decision 14).
@@ -1842,7 +1822,6 @@ Suggested steps:
 | grorg review 1, 5, 6, 7, 8, 11, 14 | PAR-4/KIT-3, PAR-10, STR-4, MAN-1, DEC-1 (additive), DEC-5 (accepted), PAR-8 |
 | multimatrix review 2, 6, 9, 13, 17 | STR-1/STR-2, DEC-4, FB-3, STR-4, OUT-6/STR-6 |
 | multimatrix check: relations param-to-param; `Option<Input>`; listen_entry groups; PathBuf samples | REL intro, REL-1, PAR-1, KIT-4 |
-| structmux check Q1-Q4; review 1 | REL-5, SEC-2, MAN-3, OUT-1; FB-5 |
 | archegraph check/review: optional scope, oneOf root, plain `limit`, N3, N4, N5, findings 7, 8 | PAR-2, OUT-2, section 5, PAR-9, PAR-9, DOC-3, SEC-7 (`Io::memory` unchanged), DEC-1 |
 
 ## Orchestrator rulings on the design's open items (2026-11-20)
@@ -1853,6 +1832,7 @@ Suggested steps:
 - (e) `room messages --all` is a stream (NDJSON, one message per line), like other follow outputs. It does not break the one-JSON-value rule for unary ops.
 - (f) grorg `grorg.fleet.*` place codes become `grorg.place.*`, following gp's `<pillar>.<object>.<what>` rule.
 - (g) The grorg hub DB SQL stays pending gp's fresh OK once desktop-grorg-place-step-history lands.
+- structmux removed from the 0.4.0 migration (gp 2026-11-20).
 
 ## Lead corrections (final check, 2026-11-20). These override the text above.
 ### multimatrix

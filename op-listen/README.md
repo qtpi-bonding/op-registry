@@ -10,8 +10,9 @@ streaming form that clients can resume from a cursor. The crate provides:
 - a per-app gate that authorizes a caller, applies a not-before floor, and
   rechecks access while a stream is open;
 - a reconnecting follower that retries after transient failures and either
-  prints frames as JSON lines (`follow`) or hands decoded frames to a callback
-  (`follow_typed`).
+  prints frames as JSON lines (`follow`), hands decoded frames to a callback
+  (`follow_typed`), or is itself a stream (`follow_stream`), so a following
+  command can be a stream op (`listen_entry_following`).
 
 Licensed under MIT OR Apache-2.0.
 
@@ -199,6 +200,48 @@ it as an item variant whose `stop_code()` is `None` and the follow continues. A
 frame whose `cursor()` is `Some` and `stop_code()` is `None` (a position frame)
 is delivered and advances the resume cursor.
 
+### A follower as a stream
+
+`follow_stream(connect, options, marker)` is the same reconnect loop as a
+`Stream` of `Followed<T>` values (`Frame(item)` or `Marker(map)`), so it can be
+the body of a stream op. It shares the rules above, plus:
+
+- A failed open is a failure like a connection that ends: it is retried while
+  its error is not Logical, up to `max_retries` (behaviour change from the
+  0.3 followers that never retried an open).
+- The marker is yielded before the first item that follows a failed first open
+  or any earlier connection. A connection that yields nothing gets no marker.
+  An empty connection that lived for `backoff.healthy_after` resets the failure
+  count, so such connections never add up toward `max_retries`.
+- A stop item is yielded once, then the stream ends with `op_listen.stopped`
+  (Logical, exit 65 on the CLI). An error whose code is in `stop_codes`, mid-stream
+  or on open, ends it the same way with no frame, and `Stopped { code }` names it.
+- The source must yield. The loop runs as one future that fills an unbounded
+  queue, so an always-ready source is drained in one poll.
+
+`listen_entry_following(registry, listener, spec)` registers a listener as a
+reconnecting stream op, over `OpSpec<Params, Followed<ListenFrame<S, I>>>`. It
+passes params and `--cursor` through, honours `OverflowPolicy::Resnapshot`, takes
+`max_retries` from `CallOptions::max_retries` when set (else from
+`Listener::follow_options()`), and ends with `op_listen.stopped` after a stop.
+Two defaulted `Listener` methods shape it:
+
+- `reconnect_marker(cursor, resync)` builds the marker line. The default is
+  `{"marker":"reconnected","cursor":<c or null>,"resync":<b>}`. Override it to
+  keep a consumer's own shape. grorg's `events watch` keeps
+  `{"marker":"reconnected","afterSeq":N}`:
+
+  ```rust,ignore
+  fn reconnect_marker(&self, cursor: Option<&ListenCursor>, _resync: bool)
+      -> serde_json::Map<String, serde_json::Value> {
+      let mut m = serde_json::Map::new();
+      m.insert("marker".into(), "reconnected".into());
+      m.insert("afterSeq".into(), cursor.map(|c| c.seq).into());
+      m
+  }
+  ```
+- `follow_options()` gives the backoff, initial cursor and `stop_codes`.
+
 ### Printing to stdout
 
 `stdout_sink()` returns a sink that writes each line to stdout and flushes it.
@@ -224,6 +267,15 @@ An app that serves its listeners in process does its gating in `authorize` and
   takes the follow options to use, and dropping aborts the task) and
   `short_follow_options()`. Meant as a dev-dependency feature.
 
+- `registry` (default, implied by `detach`): the op-registry and schemars
+  dependencies and everything built on them: `listen_entry`,
+  `listen_entry_following`, `Listener`, `listen_stream`, `detach`, the `Caller`
+  re-export, and the `JsonSchema` and `op_registry::Cursor` conversions of the
+  cursor and frame types. Without it the crate keeps the core: `follow`,
+  `follow_typed`, `follow_items`, `supervise`, `supervise_stream`, `follow_stream`,
+  `Backoff`, the cursor, frame and error types and `stdout_sink`. A follower-only
+  client builds with `default-features = false`.
+
 Without default features the crate has no `detach` and no tokio `rt`.
 
 ## Notes
@@ -238,6 +290,11 @@ Without default features the crate has no `detach` and no tokio `rt`.
   `Arc` reference per registered listener, so register each listener once.
 - A listen entry is a streaming op and takes `--cursor`. Streams are not in the
   MCP tool list.
+- On the CLI a listen op needs a caller: `CliContext::caller()` must return
+  `Some` (it returns `None` by default). Without one the op fails with
+  `op_listen.no_caller`. The testing kit passes its own caller.
+- `op_status::status_registry` needs a `StatusSource` for the context type; see
+  the op-status README.
 
 ## Example
 

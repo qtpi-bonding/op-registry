@@ -10,7 +10,7 @@ else
   cargo_cmd=(cargo)
 fi
 
-pin='rev = "ffeaf3949230a8883b56c75e7031346a4f28ed4d"'
+pin='rev = "de21d22e31baff78eae7d4ca817b87430bff1f81"'
 n=$(grep -c "$pin" Cargo.toml || true)
 if [ "$n" != "1" ]; then
   echo "guard failed: expected exactly 1 coded-error pin in Cargo.toml, found $n" >&2

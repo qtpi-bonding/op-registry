@@ -155,7 +155,9 @@ impl Io {
         self
     }
 
-    /// Sets the prompter secrets are read with.
+    /// Sets the prompter secrets are read with. Without the `prompt` feature
+    /// only prompted fields use it; `CallOptions::prompt_secret` returns
+    /// `None` regardless.
     #[cfg(feature = "secrets")]
     pub fn with_prompter(mut self, prompter: Arc<dyn Prompter>) -> Io {
         self.prompter = Some(prompter);
