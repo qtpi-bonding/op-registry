@@ -434,6 +434,19 @@ impl<C: Resolve + 'static> Registry<C> {
     pub async fn call_stream_typed<'a, O: Op<Ctx = C>>(
         &'a self,
         ctx: &'a C,
+        params: O::Params,
+        opts: CallOptions,
+        cursor: Option<Cursor>,
+    ) -> std::result::Result<BoxStream<'a, std::result::Result<O::Output, CallFailure>>, CallFailure>
+    {
+        self.open_typed_stream::<O>(ctx, params, opts, cursor).await
+    }
+
+    /// The one pipeline of the typed stream calls: path check, validate, the
+    /// hook around the open, the error mapper and the failure wrapping.
+    async fn open_typed_stream<'a, O: Op<Ctx = C>>(
+        &'a self,
+        ctx: &'a C,
         mut params: O::Params,
         mut opts: CallOptions,
         cursor: Option<Cursor>,
@@ -467,6 +480,60 @@ impl<C: Resolve + 'static> Registry<C> {
             Ok(stream) => Ok(failures(map_items(self.error_mapper, stream), redactor)),
             Err(error) => Err(CallFailure::new(error, redactor)),
         }
+    }
+}
+
+impl<C: Resolve + Send + Sync + 'static> Registry<C> {
+    /// Like [`call_stream_typed`](Self::call_stream_typed), but the stream
+    /// holds the registry and the context itself, so it can be moved into a
+    /// spawned task after the caller drops its handles.
+    pub async fn call_stream_typed_owned<O: Op<Ctx = C>>(
+        self: Arc<Self>,
+        ctx: Arc<C>,
+        params: O::Params,
+        opts: CallOptions,
+        cursor: Option<Cursor>,
+    ) -> std::result::Result<
+        BoxStream<'static, std::result::Result<O::Output, CallFailure>>,
+        CallFailure,
+    >
+    where
+        O::Output: 'static,
+        O::Params: 'static,
+    {
+        // SAFETY: the references are extended to `'static` only to open the
+        // stream; the stream is stored in `Owned` before the `Arc`s it
+        // borrows from, so it is dropped first, and an `Arc` never moves its
+        // pointee. Nothing else can reach the extended references.
+        let (registry_ref, ctx_ref): (&'static Self, &'static C) =
+            unsafe { (&*Arc::as_ptr(&self), &*Arc::as_ptr(&ctx)) };
+        let stream = registry_ref
+            .open_typed_stream::<O>(ctx_ref, params, opts, cursor)
+            .await?;
+        Ok(Box::pin(Owned {
+            stream,
+            _ctx: ctx,
+            _registry: self,
+        }))
+    }
+}
+
+/// A stream together with the owners of what it borrows. The stream field is
+/// declared first so it is dropped before them.
+struct Owned<T, C, R> {
+    stream: BoxStream<'static, T>,
+    _ctx: Arc<C>,
+    _registry: Arc<R>,
+}
+
+impl<T, C, R> futures_util::Stream for Owned<T, C, R> {
+    type Item = T;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<T>> {
+        self.stream.poll_next_unpin(cx)
     }
 }
 

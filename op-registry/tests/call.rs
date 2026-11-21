@@ -106,6 +106,21 @@ impl Op for ItemFail {
     const NAME: &'static str = "item_fail";
 }
 
+struct CliFlow;
+impl Op for CliFlow {
+    type Ctx = Ctx;
+    type Params = Pick;
+    type Output = Out;
+    const NAME: &'static str = "cli_flow";
+}
+struct MidSecret;
+impl Op for MidSecret {
+    type Ctx = Ctx;
+    type Params = Pick;
+    type Output = Out;
+    const NAME: &'static str = "mid_secret";
+}
+
 struct Probe;
 impl Op for Probe {
     type Ctx = Ctx;
@@ -202,6 +217,28 @@ fn registry() -> Registry<Ctx> {
                     Err(anyhow::Error::from(std::io::Error::other(format!(
                         "dropped {token}"
                     )))),
+                ])) as BoxStream<'_, anyhow::Result<Out>>)
+            })
+        },
+    );
+    let mut cli_flow = OpSpec::<Pick, Out>::new("cli_flow", "Streams on the command line only.");
+    cli_flow.paths = Paths::of(&[Surface::Cli]);
+    r.push_stream(cli_flow, |_c: &Ctx, _p: Pick, _cur, _o: CallOptions| {
+        Box::pin(async {
+            Ok(
+                Box::pin(futures_util::stream::iter(vec![Ok(Out { ok: true })]))
+                    as BoxStream<'_, anyhow::Result<Out>>,
+            )
+        })
+    });
+    r.push_stream(
+        OpSpec::<Pick, Out>::new("mid_secret", "Registers a secret mid-call."),
+        |_c: &Ctx, _p: Pick, _cur, o: CallOptions| {
+            Box::pin(async move {
+                o.redact(b"mid-call-secret");
+                Ok(Box::pin(futures_util::stream::iter(vec![
+                    Ok(Out { ok: true }),
+                    Err(anyhow::anyhow!("leaked mid-call-secret")),
                 ])) as BoxStream<'_, anyhow::Result<Out>>)
             })
         },
@@ -831,4 +868,50 @@ async fn check_id_usage_error_in_resolution_is_not_mapped() {
         .await
         .unwrap_err();
     assert_eq!(code_of(&err), "op_registry.usage.invalid");
+}
+
+#[tokio::test]
+async fn owned_stream_survives_dropped_handles() {
+    let r = Arc::new(registry());
+    let ctx = Arc::new(Ctx);
+    let stream = r
+        .clone()
+        .call_stream_typed_owned::<Flow>(ctx.clone(), pick(), CallOptions::default(), None)
+        .await
+        .unwrap();
+    drop(r);
+    drop(ctx);
+    let items: Vec<_> = tokio::spawn(async move { stream.collect::<Vec<_>>().await })
+        .await
+        .unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].as_ref().unwrap(), &Out { ok: true });
+}
+
+#[tokio::test]
+async fn owned_stream_checks_path() {
+    let r = Arc::new(registry());
+    let err = r
+        .call_stream_typed_owned::<CliFlow>(Arc::new(Ctx), pick(), CallOptions::default(), None)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+        coded_error::facts_anyhow(err.error()).code,
+        "op_registry.call.wrong_path"
+    );
+}
+
+#[tokio::test]
+async fn owned_stream_item_error_redacted() {
+    let r = Arc::new(registry());
+    let items: Vec<_> = r
+        .call_stream_typed_owned::<MidSecret>(Arc::new(Ctx), pick(), CallOptions::default(), None)
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    let err = items[1].as_ref().unwrap_err();
+    assert!(err.to_string().contains("leaked <secret>"), "{err}");
+    assert!(!err.redacted_message().contains("mid-call-secret"));
 }
