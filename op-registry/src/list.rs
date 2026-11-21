@@ -271,7 +271,7 @@ impl<C: Resolve + 'static> Registry<C> {
         self.push_list_with(
             spec,
             f,
-            Some(|all| RenderText::render_text(all)),
+            Some(RenderText::render_text),
             Some(|page| render_page(page)),
         );
     }

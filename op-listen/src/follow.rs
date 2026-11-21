@@ -586,7 +586,7 @@ where
             }
             Err(error) => {
                 let code = coded_error::facts_anyhow(&error).code.to_owned();
-                if opts.stop_codes.iter().any(|stop| *stop == code) {
+                if opts.stop_codes.contains(&code) {
                     match emit(&mut handle, Event::Stopped { code: code.clone() }) {
                         Ok(()) => {}
                         Err(Handled::SinkClosed) => return Ok(FollowEnd::SinkClosed),

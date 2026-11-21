@@ -290,7 +290,7 @@ fn needs_line<C: CliContext>(needs: &[String]) -> Option<String> {
         .map(|flag| {
             match fields
                 .iter()
-                .find_map(|f| (f.flag == *flag).then(|| f.env.as_deref()))
+                .find_map(|f| (f.flag == *flag).then_some(f.env.as_deref()))
             {
                 Some(Some(var)) => format!("--{flag} (or {var})"),
                 _ => format!("--{flag}"),

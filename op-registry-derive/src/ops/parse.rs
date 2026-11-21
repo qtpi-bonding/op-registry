@@ -427,7 +427,7 @@ impl Parse for Entry {
                                 "`paths` takes cli, typed, mcp and json",
                             ));
                         }
-                        if words.iter().any(|w| *w == word) {
+                        if words.contains(&word) {
                             return Err(syn::Error::new(
                                 word.span(),
                                 format!("`paths` lists `{word}` twice"),

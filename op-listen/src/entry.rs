@@ -57,6 +57,7 @@ pub fn listen_entry<C, L>(
 /// `max_retries` is the call's [`CallOptions::max_retries`] when set, else
 /// that of [`Listener::follow_options`]. The same leak as in [`listen_entry`]
 /// applies: register each listener once.
+#[allow(clippy::type_complexity)]
 pub fn listen_entry_following<C, L>(
     registry: &mut Registry<C>,
     listener: Arc<L>,

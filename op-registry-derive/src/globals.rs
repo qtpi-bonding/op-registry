@@ -23,7 +23,7 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let fields = named
         .named
         .iter()
-        .map(|f| Field::parse(f))
+        .map(Field::parse)
         .collect::<syn::Result<Vec<_>>>()?;
     for (f, raw) in fields.iter().zip(&named.named) {
         check(f, raw)?;
