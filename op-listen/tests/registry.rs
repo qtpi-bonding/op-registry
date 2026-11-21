@@ -393,3 +393,20 @@ async fn following_entry_passes_params_and_cursor() {
         [(Some(op_listen::ListenCursor::new(0, 2)), None)]
     );
 }
+
+#[test]
+fn following_entry_lists_stopped_in_descriptor_and_manual() {
+    let registry = following_registry(Arc::new(CliLog(LogListener::new(vec![]))));
+    let d = registry.get("log_follow").expect("registered");
+    let stopped = d
+        .errors
+        .iter()
+        .find(|e| e.code == "op_listen.stopped")
+        .expect("descriptor lists op_listen.stopped");
+    assert_eq!(stopped.class, Some(coded_error::ErrorClass::Logical));
+    let manual = op_registry::manual::render(&registry, &Default::default()).unwrap();
+    assert!(
+        manual.contains("| op_listen.stopped | logical | 65 |"),
+        "{manual}"
+    );
+}

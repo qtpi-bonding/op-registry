@@ -61,6 +61,29 @@ impl coded_error::CodedError for ListenError {
     }
 }
 
+impl coded_error::CodeCatalog for ListenError {
+    fn codes() -> Vec<coded_error::CodeEntry> {
+        use coded_error::ErrorClass::{Infrastructure, Logical, Transient};
+        let entry = |code, class| coded_error::CodeEntry {
+            code,
+            class: Some(class),
+        };
+        vec![
+            entry("op_listen.bad_cursor", Logical),
+            entry("op_listen.revoked", Logical),
+            entry("op_listen.lagged", Transient),
+            entry("op_listen.out_of_order", Infrastructure),
+            entry("op_listen.resnapshot_failed", Infrastructure),
+            entry("op_listen.ended", Transient),
+            entry("op_listen.session_expired", Transient),
+            entry("op_listen.no_caller", Logical),
+            entry("op_listen.task_panicked", Infrastructure),
+            entry("op_listen.bad_frame", Logical),
+            entry("op_listen.stopped", Logical),
+        ]
+    }
+}
+
 pub fn lagged(skipped: u64) -> anyhow::Error {
     coded_error::into_anyhow(ListenError::Lagged { skipped })
 }

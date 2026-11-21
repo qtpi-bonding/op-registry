@@ -5,6 +5,16 @@ use futures_util::{FutureExt, StreamExt};
 use op_registry::{CallOptions, Cursor, OpSpec, Registry};
 use std::sync::Arc;
 
+/// Adds the catalog entries named by `codes` to `errors`, skipping any the
+/// spec already lists.
+fn declare(errors: &mut Vec<coded_error::CodeEntry>, codes: &[&str]) {
+    for entry in <crate::ListenError as coded_error::CodeCatalog>::codes() {
+        if codes.contains(&entry.code) && !errors.iter().any(|e| e.code == entry.code) {
+            errors.push(entry);
+        }
+    }
+}
+
 /// Registers `listener` in `registry` as a streaming operation.
 ///
 /// The output type is [`ListenFrame`] for this listener, so the descriptor's
@@ -26,6 +36,10 @@ pub fn listen_entry<C, L>(
 {
     // The entry resumes from a cursor, so the leaf takes `--cursor`.
     spec.cursor = true;
+    declare(
+        &mut spec.errors,
+        &["op_listen.no_caller", "op_listen.bad_cursor"],
+    );
     let leaked: &'static Arc<L> = Box::leak(Box::new(listener));
     let listener: &'static L = leaked.as_ref();
     registry.push_stream::<L::Params, ListenFrame<L::Snapshot, L::Item>, _>(
@@ -67,6 +81,14 @@ pub fn listen_entry_following<C, L>(
     L: Listener<C>,
 {
     spec.cursor = true;
+    declare(
+        &mut spec.errors,
+        &[
+            "op_listen.no_caller",
+            "op_listen.bad_cursor",
+            "op_listen.stopped",
+        ],
+    );
     let leaked: &'static Arc<L> = Box::leak(Box::new(listener));
     let listener: &'static L = leaked.as_ref();
     registry.push_stream::<L::Params, Followed<ListenFrame<L::Snapshot, L::Item>>, _>(
