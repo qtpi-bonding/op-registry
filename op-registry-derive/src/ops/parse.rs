@@ -14,6 +14,8 @@ pub struct Ops {
     pub bin: Option<Bin>,
     pub resolve_server: Vec<LitStr>,
     pub groups: Vec<(LitStr, LitStr)>,
+    /// `errors = [..]`: error catalogs every op may return.
+    pub common_errors: Vec<Type>,
     pub entries: Vec<Entry>,
 }
 
@@ -45,7 +47,8 @@ pub struct Entry {
     pub audience: Vec<Ident>,
     pub errors: Vec<Type>,
     pub fields: Option<Path>,
-    pub exits: Vec<(LitInt, LitStr)>,
+    /// `N => "meaning"` is an ok exit; `N => "meaning" on "code"` an error exit.
+    pub exits: Vec<Exit>,
     pub text: Option<LitBool>,
     pub hidden: Option<LitBool>,
     pub default: Option<LitBool>,
@@ -62,6 +65,12 @@ pub struct Entry {
     pub cfgs: Vec<Attribute>,
 }
 
+pub struct Exit {
+    pub code: LitInt,
+    pub meaning: LitStr,
+    pub on: Option<LitStr>,
+}
+
 const ACCESS_WORDS: [&str; 5] = ["reads", "writes", "network", "spawns", "destructive"];
 const AUDIENCES: [&str; 3] = ["agent", "owner", "dev"];
 
@@ -73,6 +82,7 @@ impl Parse for Ops {
         let (mut bin, mut version, mut about) = (None, None, None);
         let mut resolve_server = Vec::new();
         let mut groups = Vec::new();
+        let mut common_errors: Option<Vec<Type>> = None;
         let header_span = input.span();
 
         while !input.is_empty() && !input.peek(LitStr) && !input.peek(Token![#]) {
@@ -93,6 +103,15 @@ impl Parse for Ops {
                         .into_iter()
                         .collect();
                 }
+                "errors" => {
+                    let inner;
+                    bracketed!(inner in input);
+                    let types = inner
+                        .parse_terminated(Type::parse, Token![,])?
+                        .into_iter()
+                        .collect();
+                    once(&mut common_errors, &key, types)?;
+                }
                 "groups" => {
                     let inner;
                     braced!(inner in input);
@@ -112,7 +131,7 @@ impl Parse for Ops {
                         key.span(),
                         format!(
                             "unknown header key `{other}`: expected Ctx, globals, pillar, bin, \
-                             version, about, resolve_server or groups"
+                             version, about, resolve_server, errors or groups"
                         ),
                     ))
                 }
@@ -152,6 +171,7 @@ impl Parse for Ops {
             bin,
             resolve_server,
             groups,
+            common_errors: common_errors.unwrap_or_default(),
             entries,
         })
     }
@@ -355,8 +375,33 @@ impl Parse for Entry {
                                 "an exit code must be in 3..=63 (0, 1 and 2 are reserved; 64 and up are the framework's)",
                             ));
                         }
+                        if exits.iter().any(|e: &Exit| e.code.base10_parse::<u8>().is_ok_and(|m| m == n)) {
+                            return Err(syn::Error::new(
+                                code.span(),
+                                format!("exit {n} is given twice"),
+                            ));
+                        }
                         inner.parse::<Token![=>]>()?;
-                        exits.push((code, inner.parse::<LitStr>()?));
+                        let meaning = inner.parse::<LitStr>()?;
+                        let on = if inner.peek(Ident) {
+                            let word: Ident = inner.parse()?;
+                            if word != "on" {
+                                return Err(syn::Error::new(
+                                    word.span(),
+                                    "after the meaning, `on \"<code>\"` is the only thing an exit takes",
+                                ));
+                            }
+                            if !inner.peek(LitStr) {
+                                return Err(syn::Error::new(
+                                    inner.span(),
+                                    "`on` takes an error code string",
+                                ));
+                            }
+                            Some(inner.parse::<LitStr>()?)
+                        } else {
+                            None
+                        };
+                        exits.push(Exit { code, meaning, on });
                         if inner.is_empty() {
                             break;
                         }
@@ -518,10 +563,10 @@ impl Parse for Entry {
         };
 
         if kind == Kind::List {
-            if let Some(key) = &exits_key {
+            if let (Some(key), true) = (&exits_key, exits.iter().any(|e| e.on.is_none())) {
                 return Err(syn::Error::new(
                     key.span(),
-                    format!("`{key}:` is not allowed on a `list:` entry: a list pair has no extra exits"),
+                    format!("`{key}:` on a `list:` entry takes error exits only (`N => \"..\" on \"code\"`): a list pair has no ok exits"),
                 ));
             }
         } else if let Some((key, _)) = &follow_page {

@@ -1,0 +1,5 @@
+error: exit 3 is given twice
+  --> tests/ops_ui/ops_exit_number_twice_is_a_compile_error.rs:23:96
+   |
+23 |     "a b" => { params: P, output: O, access: reads, audience: agent, op: f, exits: { 3 => "x", 3 => "y" } },
+   |                                                                                                ^

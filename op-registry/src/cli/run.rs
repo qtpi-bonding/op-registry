@@ -96,6 +96,9 @@ pub enum Outcome {
         /// The error's whole context chain with the run's secrets redacted:
         /// the message of the error line.
         message: String,
+        /// The process exit code: the one declared `on` the error's code, else
+        /// the error's class.
+        exit: u8,
     },
 }
 
@@ -107,11 +110,17 @@ impl std::fmt::Debug for Outcome {
                 .field("op", op)
                 .field("exit", exit)
                 .finish(),
-            Outcome::Err { op, error, message } => f
+            Outcome::Err {
+                op,
+                error,
+                message,
+                exit,
+            } => f
                 .debug_struct("Err")
                 .field("op", op)
                 .field("code", &coded_error::facts_anyhow(error).code)
                 .field("message", message)
+                .field("exit", exit)
                 .finish(),
         }
     }
@@ -129,8 +138,7 @@ impl Outcome {
     /// The process exit code of this outcome.
     pub fn exit_code(&self) -> u8 {
         match self {
-            Outcome::Ok { exit, .. } => *exit,
-            Outcome::Err { error, .. } => exit::exit_code(error),
+            Outcome::Ok { exit, .. } | Outcome::Err { exit, .. } => *exit,
         }
     }
 }
@@ -181,7 +189,15 @@ pub async fn run_with_io<C: CliContext + Resolve>(
         Err(mut failure) => {
             failure.message = scrub().redact(&failure.message);
             let error = coded_error::into_anyhow(UsageCoded(failure));
-            return finish_err(&mut io, Some(hooks), None, error, &Redactor::default()).exit_code();
+            return finish_err(
+                registry,
+                &mut io,
+                Some(hooks),
+                None,
+                error,
+                &Redactor::default(),
+            )
+            .exit_code();
         }
     };
     hooks.on_selected(&selected(registry, &parsed));
@@ -202,7 +218,7 @@ pub async fn run_with_io<C: CliContext + Resolve>(
         Err(error) => {
             let mut redactor = parsed_secrets::<C>(&parsed);
             redactor.extend(&scrub());
-            return finish_err(&mut io, Some(hooks), None, error, &redactor).exit_code();
+            return finish_err(registry, &mut io, Some(hooks), None, error, &redactor).exit_code();
         }
     };
     execute(registry, &ctx, parsed, &mut io, Some(hooks))
@@ -297,7 +313,8 @@ fn write_line(io: &mut Io, line: &str) -> std::io::Result<()> {
 
 /// Ends a failed run: `post_run` (when there are hooks), then the error line
 /// as the last write to stderr.
-fn finish_err(
+fn finish_err<C>(
+    registry: &Registry<C>,
     io: &mut Io,
     hooks: Option<&dyn RunHooks>,
     op: Option<String>,
@@ -305,10 +322,22 @@ fn finish_err(
     redactor: &Redactor,
 ) -> Outcome {
     let message = redactor.redact(&format!("{error:#}"));
-    let outcome = Outcome::Err { op, error, message };
+    // The error is already mapped (ERR-2), so the declared exits match the
+    // code every surface shows.
+    let declared = op
+        .as_deref()
+        .and_then(|name| registry.entries.iter().find(|e| e.descriptor.name == name))
+        .map_or(&[][..], |e| &e.descriptor.exits[..]);
+    let exit = exit::error_exit(declared, &error);
+    let outcome = Outcome::Err {
+        op,
+        error,
+        message,
+        exit,
+    };
     if let Some(hooks) = hooks {
         if let Outcome::Err { error, message, .. } = &outcome {
-            if exit::exit_code(error) == exit::USAGE {
+            if exit == exit::USAGE {
                 hooks.on_usage_error(&UsageFailure {
                     code: coded_error::facts_anyhow(error).code,
                     message: message.clone(),
@@ -402,7 +431,7 @@ async fn run_unrouted<C>(
             }
             outcome
         }
-        Err(error) => finish_err(io, hooks, Some(op), error, secrets),
+        Err(error) => finish_err(registry, io, hooks, Some(op), error, secrets),
     }
 }
 
@@ -436,7 +465,7 @@ async fn execute<C: CliContext + Resolve>(
 
     let entry = match registry.entry(&name) {
         Ok(entry) => entry,
-        Err(error) => return finish_err(io, hooks, Some(name), error, &secrets),
+        Err(error) => return finish_err(registry, io, hooks, Some(name), error, &secrets),
     };
     let mut cx = match io.stdin.take() {
         Some(stdin) => ParseCx::with_stdin(stdin),
@@ -448,7 +477,7 @@ async fn execute<C: CliContext + Resolve>(
             // Nothing is built yet, so the redactor comes from the raw values.
             let mut redactor = matches_redactor(&entry.secret_ids, &matches);
             redactor.extend(&secrets);
-            return finish_err(io, hooks, Some(name), error, &redactor);
+            return finish_err(registry, io, hooks, Some(name), error, &redactor);
         }
     };
     drop(cx);
@@ -470,18 +499,18 @@ async fn execute<C: CliContext + Resolve>(
         let redactor = invocation.redactor;
         let mut stream = match invocation.result {
             Ok(stream) => stream,
-            Err(error) => return finish_err(io, hooks, Some(name), error, &redactor),
+            Err(error) => return finish_err(registry, io, hooks, Some(name), error, &redactor),
         };
         while let Some(item) = stream.next().await {
             let line = match item {
                 Ok(value) => render(&value, Style::Compact),
-                Err(error) => return finish_err(io, hooks, Some(name), error, &redactor),
+                Err(error) => return finish_err(registry, io, hooks, Some(name), error, &redactor),
             };
             match wrote(write_line(io, &line)) {
                 Wrote::Done => {}
                 Wrote::Closed => break,
                 Wrote::Failed(e) => {
-                    return finish_err(io, hooks, Some(name), e.into(), &redactor);
+                    return finish_err(registry, io, hooks, Some(name), e.into(), &redactor);
                 }
             }
         }
@@ -501,7 +530,7 @@ async fn execute<C: CliContext + Resolve>(
     let redactor = invocation.redactor;
     let value = match invocation.result {
         Ok(value) => value,
-        Err(error) => return finish_err(io, hooks, Some(name), error, &redactor),
+        Err(error) => return finish_err(registry, io, hooks, Some(name), error, &redactor),
     };
     let outcome = Outcome::Ok {
         op: name.clone(),
@@ -521,6 +550,6 @@ async fn execute<C: CliContext + Resolve>(
             exit: exit::OK,
         },
         // post_run has run already: only the error line remains.
-        Wrote::Failed(e) => finish_err(io, None, Some(name), e.into(), &redactor),
+        Wrote::Failed(e) => finish_err(registry, io, None, Some(name), e.into(), &redactor),
     }
 }

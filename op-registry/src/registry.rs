@@ -36,8 +36,10 @@ pub struct OpSpec<P, O> {
     pub hidden: bool,
     /// Whether the command runs when its group is named without a verb.
     pub group_default: bool,
-    /// Documented exit codes.
+    /// Documented exit codes of a successful output.
     pub exits: Vec<(u8, &'static str)>,
+    /// Exits taken by an error code on the command line: `(exit, meaning, code)`.
+    pub error_exits: Vec<(u8, &'static str, &'static str)>,
     /// Error codes the operation may return.
     pub errors: Vec<coded_error::CodeEntry>,
     /// Which call paths reach the operation.
@@ -76,6 +78,7 @@ impl<P, O> OpSpec<P, O> {
             hidden: false,
             group_default: false,
             exits: Vec::new(),
+            error_exits: Vec::new(),
             errors: Vec::new(),
             paths: Paths::ALL,
             cursor: false,
@@ -95,8 +98,8 @@ impl<P, O> OpSpec<P, O> {
     /// The same metadata over other parameter and output types: what a list
     /// pair's two ops share. The output hooks (`ok_exit`, `render_text`) are
     /// typed by `O` and do not carry over (a list pair sets `render_text` on
-    /// each half itself), and a list pair has no extra exits, so `exits` is
-    /// cleared.
+    /// each half itself), and a list pair has no ok exits, so `exits` is
+    /// cleared; `error_exits` are copied to both halves.
     pub(crate) fn respec<P2, O2>(&self, fields: Option<FieldsFn<P2>>) -> OpSpec<P2, O2> {
         OpSpec {
             path: self.path,
@@ -108,6 +111,7 @@ impl<P, O> OpSpec<P, O> {
             hidden: self.hidden,
             group_default: self.group_default,
             exits: Vec::new(),
+            error_exits: self.error_exits.clone(),
             errors: self.errors.clone(),
             paths: self.paths,
             cursor: self.cursor,
@@ -242,6 +246,8 @@ pub struct Registry<C> {
     /// Kinds the server resolves: the library passes their refs through raw.
     pub(crate) server_kinds: HashSet<&'static str>,
     pub(crate) hook: Arc<dyn CallHook>,
+    /// Error codes every op may return (the `errors = [..]` header key).
+    pub(crate) common_errors: Vec<ErrorCodeEntry>,
     /// Rewrites the error of resolution or an op, once, in the pipeline.
     pub(crate) error_mapper: Option<ErrorMapper>,
     /// Extra (non-op) commands, in declaration order.
@@ -281,6 +287,7 @@ impl<C: Sync> Registry<C> {
             about: "",
             server_kinds: HashSet::new(),
             hook: Arc::new(NoHook),
+            common_errors: Vec::new(),
             error_mapper: None,
             extras: Vec::new(),
             fallback: None,
@@ -293,6 +300,35 @@ impl<C: Sync> Registry<C> {
     /// `merge` keeps the receiver's hook.
     pub fn set_call_hook(&mut self, hook: Arc<dyn CallHook>) {
         self.hook = hook;
+    }
+
+    /// Declares error codes every op of the registry may return: strict codes
+    /// and the testing kit accept them on any op, and the manual prints them
+    /// once. A code given twice is kept once.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a code is already declared with another class.
+    pub fn add_common_errors(&mut self, codes: Vec<coded_error::CodeEntry>) {
+        for entry in &codes {
+            self.add_common(ErrorCodeEntry::from(entry));
+        }
+    }
+
+    /// The common error codes, in declaration order.
+    pub fn common_errors(&self) -> &[ErrorCodeEntry] {
+        &self.common_errors
+    }
+
+    fn add_common(&mut self, entry: ErrorCodeEntry) {
+        match self.common_errors.iter().find(|e| e.code == entry.code) {
+            Some(have) if have.class == entry.class => {}
+            Some(have) => panic!(
+                "common error code {:?} has class {:?} in one registry and {:?} in the other",
+                entry.code, have.class, entry.class
+            ),
+            None => self.common_errors.push(entry),
+        }
     }
 
     /// Sets the error mapper. It runs once per error of resolution or of an
@@ -410,6 +446,9 @@ impl<C: Sync> Registry<C> {
             self.group(&group.path.join(" "), &group.summary);
         }
         self.server_kinds.extend(other.server_kinds);
+        for entry in other.common_errors {
+            self.add_common(entry);
+        }
         for entry in other.entries {
             self.insert_entry(entry);
         }
@@ -558,7 +597,13 @@ impl<C: Resolve + 'static> Registry<C> {
                 .map(|(code, meaning)| Exit {
                     code: *code,
                     meaning: (*meaning).to_owned(),
+                    on: None,
                 })
+                .chain(spec.error_exits.iter().map(|(code, meaning, on)| Exit {
+                    code: *code,
+                    meaning: (*meaning).to_owned(),
+                    on: Some((*on).to_owned()),
+                }))
                 .collect(),
             errors: spec.errors.iter().map(ErrorCodeEntry::from).collect(),
             paths: spec.paths,

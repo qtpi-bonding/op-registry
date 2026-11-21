@@ -767,6 +767,47 @@ fn exit_table_flags_declared_exit_out_of_range() {
 }
 
 #[test]
+fn undeclared_on_code_fails_exit_table() {
+    let mut r = codes_fixture();
+    r.add_common_errors(vec![CodeEntry {
+        code: "fix.common.busy",
+        class: Some(ErrorClass::Transient),
+    }]);
+    // An `on` code that is the op's own, or a common one, passes.
+    let mut own = OpSpec::<Get, Item>::new("concept own", "Own code.");
+    own.errors = get_errors();
+    own.error_exits = vec![(5, "gone", "fix.concept.not_found")];
+    r.push_op(own, get_op);
+    let mut common = OpSpec::<Get, Item>::new("concept common", "Common code.");
+    common.error_exits = vec![(6, "busy", "fix.common.busy")];
+    r.push_op(common, get_op);
+    assert_exit_table(&r, &Manual::default());
+
+    let mut bad = OpSpec::<Get, Item>::new("concept bad", "Undeclared code.");
+    bad.error_exits = vec![(7, "x", "fix.concept.nowhere")];
+    r.push_op(bad, get_op);
+    let text = panic_text(|| assert_exit_table(&r, &Manual::default()));
+    assert!(text.contains("concept_bad"), "{text}");
+    assert!(text.contains("fix.concept.nowhere"), "{text}");
+    assert!(
+        !text.contains("concept_own") && !text.contains("concept_common"),
+        "{text}"
+    );
+}
+
+#[test]
+fn strict_codes_accepts_common_codes() {
+    let mut r = codes_fixture();
+    r.add_common_errors(vec![CodeEntry {
+        code: "fix.concept.rogue",
+        class: Some(ErrorClass::Logical),
+    }]);
+    strict_codes(&mut r);
+    // `rogue` is declared common now, so it passes on an op that lists nothing.
+    assert!(call_json(&r, "concept_rogue").is_err());
+}
+
+#[test]
 fn strict_codes_panics_on_undeclared_code() {
     let mut r = codes_fixture();
     strict_codes(&mut r);

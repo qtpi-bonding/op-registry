@@ -213,6 +213,10 @@ pub struct Exit {
     pub code: u8,
     /// What the code means.
     pub meaning: String,
+    /// The error code that exits with `code`; `None` for an exit of a
+    /// successful output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on: Option<String>,
 }
 
 /// A serialisable copy of [`coded_error::CodeEntry`].

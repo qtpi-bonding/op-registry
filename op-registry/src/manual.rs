@@ -61,10 +61,15 @@ pub(crate) const EXITS: [(u8, &str); 6] = [
 struct CodeRow {
     code: String,
     class: Option<ErrorClass>,
+    /// The exit the op declares `on` this code; it wins over the class.
+    declared_exit: Option<u8>,
 }
 
 impl CodeRow {
     fn exit(&self) -> Option<u8> {
+        if self.declared_exit.is_some() {
+            return self.declared_exit;
+        }
         let class = self.class?;
         if self.code.starts_with("op_registry.usage.") || self.code.starts_with("op_registry.cli.")
         {
@@ -84,24 +89,47 @@ impl CodeRow {
     }
 }
 
-/// Every code an op can return: its declared errors, plus the cap code of a
-/// list op.
+/// The codes an op lists itself: its declared errors that are not common
+/// codes, plus the cap code of a list op. The common codes are printed once.
 fn codes_of<C: Sync>(registry: &Registry<C>, d: &Descriptor) -> Vec<CodeRow> {
+    let declared_exit = |code: &str| {
+        d.exits
+            .iter()
+            .find(|e| e.on.as_deref() == Some(code))
+            .map(|e| e.code)
+    };
     let mut rows: Vec<CodeRow> = d
         .errors
         .iter()
+        .filter(|e| !registry.common_errors.iter().any(|c| c.code == e.code))
         .map(|ErrorCodeEntry { code, class }| CodeRow {
             code: code.clone(),
             class: *class,
+            declared_exit: declared_exit(code),
         })
         .collect();
     if d.kind == OpKind::ListAll {
+        let code = crate::list::too_many_code(registry.pillar(), &d.path);
         rows.push(CodeRow {
-            code: crate::list::too_many_code(registry.pillar(), &d.path),
+            declared_exit: declared_exit(&code),
+            code,
             class: Some(ErrorClass::Logical),
         });
     }
     rows
+}
+
+/// The codes every op of the registry may return.
+fn common_codes<C>(registry: &Registry<C>) -> Vec<CodeRow> {
+    registry
+        .common_errors
+        .iter()
+        .map(|ErrorCodeEntry { code, class }| CodeRow {
+            code: code.clone(),
+            class: *class,
+            declared_exit: None,
+        })
+        .collect()
 }
 
 /// The codes the library itself returns.
@@ -116,6 +144,7 @@ fn library_codes() -> Vec<CodeRow> {
     .map(|e| CodeRow {
         code: e.code.to_owned(),
         class: e.class,
+        declared_exit: None,
     })
     // Two variants may share a code (`MissingField`, `MissingUnless`): list it once.
     .fold(Vec::new(), |mut rows: Vec<CodeRow>, row| {
@@ -186,6 +215,12 @@ pub fn render<C: CliContext>(registry: &Registry<C>, manual: &Manual) -> Result<
         table.push_str(&format!("\n| {code} | {meaning} |"));
     }
     blocks.push(table);
+    let common = common_codes(registry);
+    if !common.is_empty() {
+        blocks.push("## Common codes".to_owned());
+        blocks.push("Every command may return these.".to_owned());
+        blocks.push(code_table(&common));
+    }
     for section in &manual.sections {
         blocks.push(format!("## {}", section.title));
         for guide in &section.guides {
@@ -270,13 +305,19 @@ fn push_exits_and_codes<C: CliContext>(
         let lines: Vec<String> = d
             .exits
             .iter()
-            .map(|e| format!("- {}: {}", e.code, e.meaning))
+            .map(|e| match &e.on {
+                Some(on) => format!("- {}: {} (on {on})", e.code, e.meaning),
+                None => format!("- {}: {}", e.code, e.meaning),
+            })
             .collect();
         blocks.push(format!("Exits:\n{}", lines.join("\n")));
     }
     let codes = codes_of(registry, d);
     if !codes.is_empty() {
         blocks.push(code_table(&codes));
+    }
+    if !registry.common_errors.is_empty() {
+        blocks.push("Also the common codes.".to_owned());
     }
 }
 
@@ -306,6 +347,7 @@ pub fn render_json<C: CliContext>(registry: &Registry<C>) -> Value {
         "bin": registry.bin(),
         "version": registry.version(),
         "exits": exits,
+        "commonCodes": common_codes(registry).iter().map(CodeRow::json).collect::<Vec<_>>(),
         "ops": ops,
     })
 }

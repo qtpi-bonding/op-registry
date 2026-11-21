@@ -13,10 +13,12 @@ pub struct Fixture<'a> {
     pub args: Value,
 }
 
-/// The codes an op may return: its declared errors, and the cap code of a
-/// list op. Every `op_registry.*` code is allowed on top of these.
+/// The codes an op may return: its declared errors, the registry's common
+/// errors and the cap code of a list op. Every `op_registry.*` code is
+/// allowed on top of these.
 fn declared_codes<C: Sync>(registry: &Registry<C>, d: &Descriptor) -> Vec<String> {
     let mut codes: Vec<String> = d.errors.iter().map(|e| e.code.clone()).collect();
+    codes.extend(registry.common_errors().iter().map(|e| e.code.clone()));
     if d.kind == OpKind::ListAll {
         codes.push(crate::list::too_many_code(registry.pillar(), &d.path));
     }
@@ -205,6 +207,17 @@ pub fn check_exit_table<C: CliContext>(registry: &Registry<C>, rendered: &str) -
             ));
         }
     }
+    if !registry.common_errors().is_empty() {
+        let common = section(rendered, "## Common codes").unwrap_or_default();
+        for entry in registry.common_errors() {
+            if !common.contains(&format!("| {} |", entry.code)) {
+                problems.push(format!(
+                    "the common code `{}` is not in the manual's \"Common codes\"",
+                    entry.code
+                ));
+            }
+        }
+    }
     for index in 0..registry.entries.len() {
         let d = &registry.entries[index].descriptor;
         for exit in &d.exits {
@@ -213,6 +226,14 @@ pub fn check_exit_table<C: CliContext>(registry: &Registry<C>, rendered: &str) -
                     "{}: declared exit {} is outside 3..=63",
                     d.name, exit.code
                 ));
+            }
+            if let Some(on) = &exit.on {
+                if !declared_codes(registry, d).contains(on) {
+                    problems.push(format!(
+                        "{}: exit {} is declared on `{on}`, which is not one of the op's codes",
+                        d.name, exit.code
+                    ));
+                }
             }
         }
         if d.hidden || d.kind == crate::OpKind::ListPage {
@@ -230,15 +251,21 @@ pub fn check_exit_table<C: CliContext>(registry: &Registry<C>, rendered: &str) -
             continue;
         };
         for exit in &d.exits {
-            if !text.contains(&format!("- {}: {}", exit.code, exit.meaning)) {
+            let line = match &exit.on {
+                Some(on) => format!("- {}: {} (on {on})", exit.code, exit.meaning),
+                None => format!("- {}: {}", exit.code, exit.meaning),
+            };
+            if !text.contains(&line) {
                 problems.push(format!(
                     "{}: declared exit {} ({}) is not in the manual",
                     d.name, exit.code, exit.meaning
                 ));
             }
         }
+        // Common codes are printed once, in "## Common codes", not per op.
         for code in declared_codes(registry, d) {
-            if !text.contains(&format!("| {code} |")) {
+            let common = registry.common_errors().iter().any(|c| c.code == code);
+            if !common && !text.contains(&format!("| {code} |")) {
                 problems.push(format!("{}: code `{code}` is not in the manual", d.name));
             }
         }

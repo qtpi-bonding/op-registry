@@ -43,6 +43,14 @@ enum Down {
     Backend,
 }
 
+#[derive(Debug, thiserror::Error, coded_error::CodedError)]
+#[coded(namespace = "runner.test")]
+enum Slow {
+    #[error("the wait timed out")]
+    #[coded(code = "wait_timeout", class = Transient)]
+    Timeout,
+}
+
 impl CliContext for Ctx {
     type Globals = G;
     fn from_globals(globals: &G) -> anyhow::Result<Self> {
@@ -304,6 +312,7 @@ fn text_flag_prints_render_text() {
 
 #[derive(Default)]
 struct Rec {
+    exits: Mutex<Vec<u8>>,
     log: Mutex<Vec<&'static str>>,
     stderr: Mutex<Option<op_registry::cli::SharedWriter>>,
 }
@@ -322,6 +331,7 @@ impl RunHooks for Rec {
         self.log.lock().unwrap().push("on_usage_error");
     }
     fn post_run(&self, outcome: &Outcome) {
+        self.exits.lock().unwrap().push(outcome.exit_code());
         let tag = match outcome {
             Outcome::Ok { .. } => "post_run_ok",
             Outcome::Err { .. } => "post_run_err",
@@ -1034,4 +1044,69 @@ fn list_halves_share_needs() {
     for name in ["things", "things_page"] {
         assert_eq!(r.get(name).unwrap().needs_globals, ["gait-dir"], "{name}");
     }
+}
+
+/// A registry whose two ops declare `3 => "timed out" on "runner.test.wait_timeout"`.
+/// `task wait` returns that code; `task other` returns an infrastructure code.
+fn exits_reg() -> Registry<Ctx> {
+    let mut r = Registry::<Ctx>::new();
+    r.set_bin("app", "1.2.3", "A test app.");
+    r.group("task", "Tasks.");
+    for (path, fail) in [("task wait", true), ("task other", false)] {
+        let mut spec = OpSpec::<Nothing, Out>::new(path, "Waits.");
+        spec.errors = <Slow as coded_error::CodeCatalog>::codes();
+        spec.error_exits = vec![(3, "timed out", "runner.test.wait_timeout")];
+        r.push_op(
+            spec,
+            move |_c: &Ctx, _p: Nothing, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Out>> {
+                Box::pin(async move {
+                    Err(if fail {
+                        coded_error::into_anyhow(Slow::Timeout)
+                    } else {
+                        coded_error::into_anyhow(Down::Backend)
+                    })
+                })
+            },
+        );
+    }
+    r
+}
+
+fn run_exits(args: &[&str], hooks: &dyn RunHooks) -> Ran {
+    let (io, cap) = Io::memory(b"", false, false);
+    let code = futures_executor::block_on(cli::run_with_io(&exits_reg(), argv(args), hooks, io));
+    Ran {
+        code,
+        out: cap.stdout(),
+        err: cap.stderr(),
+    }
+}
+
+#[test]
+fn error_exit_code_exits_3_with_error_line() {
+    let r = run_exits(&["task", "wait"], &NoHooks);
+    assert_eq!(r.code, 3);
+    assert_eq!(r.out, "");
+    let e = r.last_err();
+    assert_eq!(e["error"]["code"], "runner.test.wait_timeout");
+    assert_eq!(e["error"]["class"], "transient");
+}
+
+#[test]
+fn post_run_sees_exit_3() {
+    let rec = Rec::default();
+    let r = run_exits(&["task", "wait"], &rec);
+    assert_eq!(r.code, 3);
+    assert_eq!(*rec.exits.lock().unwrap(), vec![3]);
+    // Not a usage failure, so the usage hook stays quiet.
+    assert_eq!(rec.log(), ["pre_parse", "post_run_err"]);
+}
+
+#[test]
+fn other_code_exits_by_class() {
+    let rec = Rec::default();
+    let r = run_exits(&["task", "other"], &rec);
+    assert_eq!(r.code, 69);
+    assert_eq!(*rec.exits.lock().unwrap(), vec![69]);
+    assert_eq!(r.last_err()["error"]["code"], "runner.test.down");
 }

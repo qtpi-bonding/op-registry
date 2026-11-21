@@ -451,3 +451,93 @@ fn entry_globals_become_needs_flags() {
     );
     assert!(r.get("dup").unwrap().needs_globals.is_empty());
 }
+
+#[derive(Debug, thiserror::Error, coded_error::CodedError)]
+#[coded(namespace = "fix.common")]
+pub enum CommonError {
+    #[error("denied")]
+    #[coded(code = "denied", class = Logical)]
+    Denied,
+    #[error("busy")]
+    #[coded(code = "busy", class = Transient)]
+    Busy,
+}
+
+mod common_fixture {
+    use super::*;
+
+    async fn denied(_c: &Ctx, _p: Index, _o: CallOptions) -> anyhow::Result<Plan> {
+        Err(coded_error::into_anyhow(CommonError::Busy))
+    }
+
+    op_registry::ops! {
+        Ctx = Ctx;
+        pillar = "fix";
+        bin = "fixd"; version = "1.0.0"; about = "A fixture.";
+        errors = [CommonError];
+        groups = { "concept" => "Concepts." };
+        /// Fails with a header code the entry does not list.
+        "plan" => { params: Index, output: Plan,
+                    access: reads, audience: agent, op: denied },
+        /// Lists a header code on its own too, and has an error exit.
+        "concept get" => { params: GetConcept, output: Concept,
+                           access: reads, audience: agent, op: concept_get,
+                           errors: [ConceptError, CommonError],
+                           exits: { 3 => "busy" on "fix.common.busy" } },
+        /// A list whose error exit reaches both halves.
+        "concept list" => { params: ListConcepts, item: Concept,
+                            access: reads, audience: agent, list: concept_page,
+                            exits: { 4 => "busy" on "fix.common.busy" } },
+    }
+}
+
+#[test]
+fn header_errors_are_common_not_own() {
+    let r = common_fixture::registry();
+    let common: Vec<&str> = r.common_errors().iter().map(|e| e.code.as_str()).collect();
+    assert_eq!(common, vec!["fix.common.denied", "fix.common.busy"]);
+    assert!(r.get("plan").unwrap().errors.is_empty());
+}
+
+#[cfg(feature = "testing")]
+#[test]
+fn header_code_accepted_by_strict_for_every_op() {
+    let mut r = common_fixture::registry();
+    op_registry::testing::strict_codes(&mut r);
+    // `plan` declares no errors of its own: the header code is accepted.
+    let err = futures_executor::block_on(r.call("plan", json!({}), &Ctx, CallOptions::default()))
+        .unwrap_err();
+    assert_eq!(
+        coded_error::facts_anyhow(err.error()).code,
+        "fix.common.busy"
+    );
+}
+
+#[test]
+fn code_in_header_and_entry_listed_once() {
+    let r = common_fixture::registry();
+    let common = r
+        .common_errors()
+        .iter()
+        .filter(|e| e.code == "fix.common.busy")
+        .count();
+    assert_eq!(common, 1);
+    #[cfg(feature = "manual")]
+    {
+        let text = op_registry::manual::render(&r, &Default::default()).unwrap();
+        assert_eq!(text.matches("| fix.common.busy |").count(), 1, "{text}");
+    }
+}
+
+#[test]
+fn list_error_exit_applies_to_both_halves() {
+    let r = common_fixture::registry();
+    for name in ["concept_list", "concept_list_page"] {
+        let d = r.get(name).unwrap();
+        assert_eq!(d.exits.len(), 1, "{name}");
+        assert_eq!(d.exits[0].code, 4);
+        assert_eq!(d.exits[0].on.as_deref(), Some("fix.common.busy"));
+    }
+    let get = r.get("concept_get").unwrap();
+    assert_eq!(get.exits[0].on.as_deref(), Some("fix.common.busy"));
+}

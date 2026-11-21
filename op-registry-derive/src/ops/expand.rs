@@ -18,6 +18,13 @@ pub fn expand(ops: &Ops) -> TokenStream {
         .iter()
         .map(|k| quote!(__r.resolve_server(#k);));
     let groups = ops.groups.iter().map(|(p, s)| quote!(__r.group(#p, #s);));
+    let common = (!ops.common_errors.is_empty()).then(|| {
+        let errors = ops
+            .common_errors
+            .iter()
+            .map(|t| quote!(<#t as ::op_registry::__private::coded_error::CodeCatalog>::codes()));
+        quote!(__r.add_common_errors([#(#errors),*].concat());)
+    });
     let pushes = ops.entries.iter().map(|e| push(ctx, e));
     let globals = ops.globals.as_ref().map(|g| {
         // Fails to compile unless the context's `CliContext::Globals` is `g`.
@@ -39,6 +46,7 @@ pub fn expand(ops: &Ops) -> TokenStream {
             #bin
             #(#servers)*
             #(#groups)*
+            #common
             #(#pushes)*
             __r
         }
@@ -145,8 +153,20 @@ fn push(ctx: &syn::Type, e: &Entry) -> TokenStream {
     if let Some(fields) = &e.fields {
         sets.push(quote!(__spec.fields = Some(#fields);));
     }
-    if !e.exits.is_empty() {
-        let exits = e.exits.iter().map(|(c, m)| quote!((#c, #m)));
+    let ok_exits: Vec<_> = e.exits.iter().filter(|x| x.on.is_none()).collect();
+    let error_exits: Vec<_> = e.exits.iter().filter(|x| x.on.is_some()).collect();
+    if !error_exits.is_empty() {
+        let exits = error_exits.iter().map(|x| {
+            let (c, m, on) = (&x.code, &x.meaning, &x.on);
+            quote!((#c, #m, #on))
+        });
+        sets.push(quote!(__spec.error_exits = vec![#(#exits),*];));
+    }
+    if !ok_exits.is_empty() {
+        let exits = ok_exits.iter().map(|x| {
+            let (c, m) = (&x.code, &x.meaning);
+            quote!((#c, #m))
+        });
         sets.push(quote!(__spec.exits = vec![#(#exits),*];));
         sets.push(quote! {
             __spec.ok_exit = Some(|o: &#output| <#output as ::op_registry::OkExit>::exit_code(o));

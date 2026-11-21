@@ -25,12 +25,24 @@ pub fn exit_code(err: &anyhow::Error) -> u8 {
     coded_error::cli::ExitTable::SYSEXITS.code_for(facts.class)
 }
 
+/// The exit code of a failure of an op with `declared` exits: the number of an
+/// exit declared `on` the error's code, else [`exit_code`].
+pub fn error_exit(declared: &[Exit], err: &anyhow::Error) -> u8 {
+    let facts = coded_error::facts_anyhow(err);
+    declared
+        .iter()
+        .find(|e| e.on.as_deref() == Some(facts.code))
+        .map_or_else(|| exit_code(err), |e| e.code)
+}
+
 /// The exit code of a successful output: 0 stays 0, a declared code in
-/// 3..=63 is returned as is, and anything else is 70.
+/// 3..=63 is returned as is, and anything else is 70. An error exit is not
+/// an ok exit.
 pub fn ok_exit(declared: &[Exit], code: u8) -> u8 {
     if code == OK {
         OK
-    } else if (3..=63).contains(&code) && declared.iter().any(|e| e.code == code) {
+    } else if (3..=63).contains(&code) && declared.iter().any(|e| e.on.is_none() && e.code == code)
+    {
         code
     } else {
         UNKNOWN

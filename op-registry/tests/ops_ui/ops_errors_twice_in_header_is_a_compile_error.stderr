@@ -1,0 +1,5 @@
+error: `errors` is given twice
+  --> tests/ops_ui/ops_errors_twice_in_header_is_a_compile_error.rs:33:5
+   |
+33 |     errors = [E];
+   |     ^^^^^^

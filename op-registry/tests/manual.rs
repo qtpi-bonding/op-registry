@@ -286,6 +286,100 @@ fn exit_table_checks_off_cli_ops() {
     );
 }
 
+/// One op `concept wait` that declares the error exit
+/// `3 => "timed out" on "fix.concept.timeout"`, and a common code the op also
+/// lists on its own.
+fn exits_fixture() -> Registry<Ctx> {
+    let mut r = Registry::<Ctx>::new();
+    r.set_pillar("fix");
+    r.set_bin("concordd", "1.2.3", "A concordance tool.");
+    r.group("concept", "Concepts in a collection.");
+    r.add_common_errors(vec![
+        CodeEntry {
+            code: "fix.common.denied",
+            class: Some(ErrorClass::Logical),
+        },
+        CodeEntry {
+            code: "fix.common.busy",
+            class: Some(ErrorClass::Transient),
+        },
+    ]);
+    let mut wait = OpSpec::<Filter, Item>::new("concept wait", "Wait for a concept.");
+    wait.errors = vec![
+        CodeEntry {
+            code: "fix.concept.timeout",
+            class: Some(ErrorClass::Transient),
+        },
+        CodeEntry {
+            code: "fix.common.denied",
+            class: Some(ErrorClass::Logical),
+        },
+    ];
+    wait.error_exits = vec![(3, "timed out", "fix.concept.timeout")];
+    r.push_op(wait, nothing::<Filter>);
+    r
+}
+
+#[test]
+fn manual_error_exit_line_and_table() {
+    let text = render(&exits_fixture(), &sample_manual_empty()).unwrap();
+    assert!(
+        text.contains("- 3: timed out (on fix.concept.timeout)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| fix.concept.timeout | transient | 3 |"),
+        "{text}"
+    );
+    let json = render_json(&exits_fixture());
+    let wait = &json["ops"][0];
+    assert_eq!(wait["exits"][0]["on"], "fix.concept.timeout");
+    assert_eq!(
+        wait["codes"][0],
+        json!({"code": "fix.concept.timeout", "class": "transient", "exit": 3})
+    );
+    #[cfg(feature = "testing")]
+    assert!(check_exit_table(&exits_fixture(), &text).is_empty());
+}
+
+#[test]
+fn manual_common_codes_once_and_json_common_codes() {
+    let r = exits_fixture();
+    let text = render(&r, &sample_manual_empty()).unwrap();
+    assert_eq!(text.matches("## Common codes").count(), 1);
+    let exit_table = text.find("## Exit codes").unwrap();
+    let common = text.find("## Common codes").unwrap();
+    assert!(exit_table < common && common < text.find("## Commands").unwrap());
+    // The code the op also lists on its own is printed once, in the common table.
+    assert_eq!(text.matches("| fix.common.denied |").count(), 1, "{text}");
+    assert_eq!(text.matches("| fix.common.busy |").count(), 1, "{text}");
+    assert!(text.contains("| fix.common.busy | transient | 75 |"));
+    let section = text.split("### concordd concept wait").nth(1).unwrap();
+    let section = section.split("\n## ").next().unwrap();
+    assert!(section.contains("| fix.concept.timeout |"), "{section}");
+    assert!(!section.contains("fix.common.denied"), "{section}");
+    assert!(section.contains("Also the common codes."), "{section}");
+
+    let json = render_json(&r);
+    let common: Vec<&str> = json["commonCodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(common, ["fix.common.denied", "fix.common.busy"]);
+    let own: Vec<&str> = json["ops"][0]["codes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(own, ["fix.concept.timeout"]);
+    // No common codes: no section and an empty list.
+    assert!(!render_fixture().contains("## Common codes"));
+    assert_eq!(render_json(&fixture())["commonCodes"], json!([]));
+}
+
 #[test]
 fn hidden_op_not_in_manual() {
     let mut r = fixture();

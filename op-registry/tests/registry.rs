@@ -177,3 +177,45 @@ fn merge_with_equal_group_summary_is_accepted() {
     other.group("concept", "Concepts.");
     registry.merge(other);
 }
+
+fn code(code: &'static str, class: coded_error::ErrorClass) -> coded_error::CodeEntry {
+    coded_error::CodeEntry {
+        code,
+        class: Some(class),
+    }
+}
+
+#[test]
+fn merge_unions_common_errors() {
+    use coded_error::ErrorClass::{Logical, Transient};
+    let mut a = registry_of(&["alpha"]);
+    a.add_common_errors(vec![code("x.denied", Logical), code("x.shared", Logical)]);
+    let mut b = registry_of(&["beta"]);
+    b.group("g", "G.");
+    b.add_common_errors(vec![code("x.shared", Logical), code("x.busy", Transient)]);
+    a.merge(b);
+    let codes: Vec<&str> = a.common_errors().iter().map(|e| e.code.as_str()).collect();
+    assert_eq!(codes, vec!["x.denied", "x.shared", "x.busy"]);
+    // The receiver's hook and the other's groups survive too.
+    assert_eq!(a.names(), vec!["alpha", "beta"]);
+}
+
+#[test]
+fn merge_class_clash_panics() {
+    use coded_error::ErrorClass::{Logical, Transient};
+    let mut a = registry_of(&["alpha"]);
+    a.add_common_errors(vec![code("x.same", Logical)]);
+    let mut b = registry_of(&["beta"]);
+    b.add_common_errors(vec![code("x.same", Transient)]);
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| a.merge(b))).unwrap_err();
+    let text = err
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap();
+    assert!(text.contains("x.same"), "{text}");
+    assert!(
+        text.contains("Logical") && text.contains("Transient"),
+        "{text}"
+    );
+}
