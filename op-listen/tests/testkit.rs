@@ -225,3 +225,93 @@ async fn spawn_uses_the_options_it_is_given() {
     }
     assert_eq!(*seen.lock().unwrap(), vec![Some(ListenCursor::new(3, 7))]);
 }
+
+// ---- the kit and a following op ----
+
+mod kit_following {
+    use futures_util::future::BoxFuture;
+    use futures_util::stream::{self};
+    use op_listen::{listen_entry_following, Grant, ListenCursor, Listener, Opened};
+    use op_registry::{Caller, OpParams, OpSpec, Registry};
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Debug, thiserror::Error, coded_error::CodedError)]
+    #[coded(namespace = "test.app")]
+    enum AppError {
+        #[error("try again")]
+        #[coded(code = "transient", class = Transient)]
+        Transient,
+    }
+
+    struct Ctx;
+    impl op_registry::Resolve for Ctx {}
+
+    #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, OpParams)]
+    struct Topic {
+        topic: String,
+    }
+
+    /// A listener whose connection never opens.
+    struct Failing(AtomicUsize);
+
+    impl Listener<Ctx> for Failing {
+        type Params = Topic;
+        type Snapshot = ();
+        type Item = String;
+
+        fn topic(&self, params: &Topic) -> String {
+            params.topic.clone()
+        }
+        fn epoch(&self) -> u64 {
+            0
+        }
+        fn authorize<'a>(
+            &'a self,
+            _ctx: &'a Ctx,
+            _caller: &'a Caller,
+            _topic: &'a str,
+        ) -> BoxFuture<'a, anyhow::Result<Grant>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(coded_error::into_anyhow(AppError::Transient)) })
+        }
+        fn open<'a>(
+            &'a self,
+            _ctx: &'a Ctx,
+            _params: Topic,
+            _cursor: Option<ListenCursor>,
+            _floor: Option<ListenCursor>,
+        ) -> BoxFuture<'a, anyhow::Result<Opened<'a, (), String>>> {
+            Box::pin(async { Ok(Opened::replay(Box::pin(stream::empty()))) })
+        }
+    }
+
+    #[tokio::test]
+    async fn kit_failing_follower_ends_after_one_attempt() {
+        let listener = Arc::new(Failing(AtomicUsize::new(0)));
+        let mut registry = Registry::<Ctx>::new();
+        registry.set_bin("app", "0.0.0", "toy");
+        registry.group("log", "Log.");
+        let mut spec = OpSpec::new("log follow", "follows the log");
+        spec.errors = vec![coded_error::CodeEntry {
+            code: "test.app.transient",
+            class: Some(coded_error::ErrorClass::Transient),
+        }];
+        listen_entry_following(&mut registry, listener.clone(), spec);
+        // Without the kit's `max_retries = Some(0)` the follower would retry
+        // forever and the kit's 10 s stream timeout would report a problem.
+        let started = std::time::Instant::now();
+        op_registry::testing::assert_error_codes(
+            &registry,
+            &Ctx,
+            &[op_registry::testing::Fixture {
+                op: "log_follow",
+                args: json!({"topic": "t"}),
+            }],
+        )
+        .await;
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert_eq!(listener.0.load(Ordering::SeqCst), 1, "one attempt");
+    }
+}

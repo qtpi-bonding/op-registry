@@ -1,9 +1,10 @@
 //! Traits and types for opening and authorizing listen streams.
 
-use crate::{ListenCursor, ListenError};
+use crate::{FollowOptions, ListenCursor, ListenError};
 use futures_util::{future::BoxFuture, stream::BoxStream};
 use op_registry::Caller;
 use serde::Serialize;
+use serde_json::{json, Map, Value};
 use std::time::Duration;
 
 /// Grants permission to open a listener stream and optionally controls its starting point.
@@ -119,4 +120,25 @@ pub trait Listener<C>: Send + Sync + 'static {
         cursor: Option<ListenCursor>,
         floor: Option<ListenCursor>,
     ) -> BoxFuture<'a, anyhow::Result<Opened<'a, Self::Snapshot, Self::Item>>>;
+
+    /// The marker a following op prints before the first frame of a
+    /// reconnection. The default is
+    /// `{"marker":"reconnected","cursor":<cursor or null>,"resync":<bool>}`;
+    /// override it to keep a consumer's own marker shape.
+    fn reconnect_marker(&self, cursor: Option<&ListenCursor>, resync: bool) -> Map<String, Value> {
+        let Value::Object(map) = json!({
+            "marker": "reconnected",
+            "cursor": cursor.map(ToString::to_string),
+            "resync": resync,
+        }) else {
+            unreachable!("a JSON object literal")
+        };
+        map
+    }
+
+    /// The reconnect options of a following op: backoff, initial cursor and
+    /// stop codes. Its `max_retries` applies unless the call sets its own.
+    fn follow_options(&self) -> FollowOptions {
+        FollowOptions::default()
+    }
 }

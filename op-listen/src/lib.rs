@@ -18,11 +18,11 @@ pub use backoff::Backoff;
 pub use cursor::ListenCursor;
 #[cfg(feature = "detach")]
 pub use detach::detached_connect;
-pub use entry::listen_entry;
+pub use entry::{listen_entry, listen_entry_following};
 pub use error::{lagged, ListenError};
 pub use follow::{
-    follow, follow_items, follow_typed, supervise, supervise_stream, FollowEnd, FollowEvent,
-    FollowItem, FollowOptions, Resumable, StreamStep, Supervised,
+    follow, follow_items, follow_stream, follow_typed, supervise, supervise_stream, FollowEnd,
+    FollowEvent, FollowItem, FollowOptions, Followed, Resumable, StreamStep, Supervised,
 };
 pub use frame::ListenFrame;
 pub use listener::{Grant, Listener, Opened, OverflowPolicy};

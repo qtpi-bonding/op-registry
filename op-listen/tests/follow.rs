@@ -325,3 +325,266 @@ async fn healthy_idle_connection_clears_the_budget_when_first_equals_cap() {
         "test.app.denied"
     );
 }
+
+// ---- follow_stream: a reconnecting follower as a stream ----
+
+mod stream_follow {
+    use super::*;
+    use crate::common::{caller, jsonify, ok, params, source, state, Ctx, StateListener};
+    use futures_util::stream::BoxStream;
+    use futures_util::{FutureExt, StreamExt};
+    use op_listen::{follow_stream, Followed, ListenError, ListenFrame};
+    use serde_json::Map;
+
+    fn default_marker(cursor: Option<&ListenCursor>, resync: bool) -> Map<String, Value> {
+        let Value::Object(map) = json!({
+            "marker": "reconnected",
+            "cursor": cursor.map(|c| c.to_string()),
+            "resync": resync,
+        }) else {
+            unreachable!()
+        };
+        map
+    }
+
+    /// Runs the follower to its end: every yielded value as JSON, then the
+    /// final error (a follower never ends with `Ok`).
+    async fn run(
+        mut s: BoxStream<'_, anyhow::Result<Followed<Value>>>,
+    ) -> (Vec<Value>, anyhow::Error) {
+        let mut out = Vec::new();
+        while let Some(next) = s.next().await {
+            match next {
+                Ok(v) => out.push(serde_json::to_value(v).unwrap()),
+                Err(e) => {
+                    assert!(s.next().await.is_none(), "the stream ends after its error");
+                    return (out, e);
+                }
+            }
+        }
+        panic!("a follower ends with an error, never cleanly: {out:?}");
+    }
+
+    fn stopped_code(err: &anyhow::Error) -> Option<String> {
+        match coded_error::downcast_ref::<ListenError>(err) {
+            Some(ListenError::Stopped { code }) => Some(code.clone()),
+            _ => None,
+        }
+    }
+
+    fn limited(max: Option<u32>) -> FollowOptions {
+        let mut o = FollowOptions::default();
+        o.max_retries = max;
+        o
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn marker_before_first_frame_of_reconnection() {
+        let (connect, connects) = scripted(vec![
+            Step::Frames(vec![Ok(item("a", "0:2")), Err(transient())]),
+            Step::ConnectErr(transient()),
+            Step::ConnectErr(transient()),
+            frames(vec![
+                snap(true, "0:9"),
+                item("b", "0:10"),
+                stop("op_listen.revoked"),
+            ]),
+        ]);
+        let (out, err) = run(follow_stream(connect, opts(), default_marker)).await;
+        assert_eq!(
+            out,
+            vec![
+                item("a", "0:2"),
+                marker(json!("0:2"), true),
+                snap(true, "0:9"),
+                item("b", "0:10"),
+                stop("op_listen.revoked"),
+            ]
+        );
+        assert_eq!(stopped_code(&err).as_deref(), Some("op_listen.revoked"));
+        assert_eq!(
+            cursors(&connects),
+            vec![None, Some(lc(0, 2)), Some(lc(0, 2)), Some(lc(0, 2))]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn max_retries_zero_ends_after_first_failure() {
+        let (connect, connects) = scripted(vec![Step::Frames(vec![
+            Ok(item("a", "0:1")),
+            Err(transient()),
+        ])]);
+        let (out, err) = run(follow_stream(connect, limited(Some(0)), default_marker)).await;
+        assert_eq!(out, vec![item("a", "0:1")]);
+        assert_eq!(code_of(&err), "test.app.transient");
+        assert_eq!(connects.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stop_item_yields_frame_once_then_stopped_error() {
+        let (connect, connects) = scripted(vec![frames(vec![
+            item("a", "0:1"),
+            stop("op_listen.revoked"),
+        ])]);
+        let (out, err) = run(follow_stream(connect, opts(), default_marker)).await;
+        assert_eq!(out, vec![item("a", "0:1"), stop("op_listen.revoked")]);
+        assert_eq!(code_of(&err), "op_listen.stopped");
+        assert_eq!(
+            coded_error::facts_anyhow(&err).class,
+            coded_error::ErrorClass::Logical
+        );
+        assert_eq!(stopped_code(&err).as_deref(), Some("op_listen.revoked"));
+        assert_eq!(
+            connects.lock().unwrap().len(),
+            1,
+            "a stop does not reconnect"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn listed_mid_stream_code_ends_with_stopped() {
+        let (connect, _) = scripted(vec![Step::Frames(vec![
+            Ok(item("a", "0:1")),
+            Err(denied()),
+        ])]);
+        let mut o = opts();
+        o.stop_codes = vec!["test.app.denied".to_owned()];
+        let (out, err) = run(follow_stream(connect, o, default_marker)).await;
+        assert_eq!(out, vec![item("a", "0:1")], "no frame for the error");
+        assert_eq!(code_of(&err), "op_listen.stopped");
+        assert_eq!(stopped_code(&err).as_deref(), Some("test.app.denied"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn other_logical_error_ends_with_that_error() {
+        let (connect, _) = scripted(vec![Step::Frames(vec![Err(denied())])]);
+        let (out, err) = run(follow_stream(connect, opts(), default_marker)).await;
+        assert!(out.is_empty());
+        assert_eq!(code_of(&err), "test.app.denied");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn grorg_marker_override_printed_verbatim() {
+        let (connect, _) = scripted(vec![
+            Step::Frames(vec![Ok(item("a", "0:7")), Err(transient())]),
+            frames(vec![item("b", "0:8"), stop("op_listen.revoked")]),
+        ]);
+        let grorg = |cursor: Option<&ListenCursor>, _resync: bool| {
+            let Value::Object(map) = json!({
+                "marker": "reconnected",
+                "afterSeq": cursor.map(|c| c.seq),
+            }) else {
+                unreachable!()
+            };
+            map
+        };
+        let (out, _) = run(follow_stream(connect, opts(), grorg)).await;
+        assert_eq!(out[1], json!({"marker": "reconnected", "afterSeq": 7}));
+        assert_eq!(out.len(), 4);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn resnapshot_overflow_under_follow_stream() {
+        let l = StateListener::new(1, state(&[("a", "1")]), 2)
+            .with_policy(op_listen::OverflowPolicy::Resnapshot)
+            .with_resync(false);
+        l.queue(
+            state(&[("a", "1")]),
+            2,
+            source(vec![ok(3, "x"), Err(op_listen::lagged(3))]),
+        );
+        l.queue(state(&[("a", "2")]), 10, source(vec![ok(11, "z")]));
+        let connect = |cursor: Option<ListenCursor>| {
+            let l = &l;
+            async move {
+                let s = op_listen::listen_stream(l, &Ctx, params("t"), cursor, caller("a")).await?;
+                Ok::<_, anyhow::Error>(jsonify_frames(s))
+            }
+            .boxed()
+        };
+        let (out, err) = run(follow_stream(connect, limited(Some(0)), default_marker)).await;
+        let kinds: Vec<&str> = out.iter().map(|v| v["frame"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["snapshot", "item", "snapshot", "item"]);
+        assert_eq!(
+            out[2]["resync"], true,
+            "the overflow resnapshot is a resync"
+        );
+        assert_eq!(out[3]["item"], "z");
+        assert_eq!(l.open_calls().len(), 2, "one reopen inside listen_stream");
+        assert_eq!(code_of(&err), "op_listen.ended");
+    }
+
+    fn jsonify_frames<'a>(
+        s: BoxStream<
+            'a,
+            anyhow::Result<ListenFrame<std::collections::BTreeMap<String, String>, String>>,
+        >,
+    ) -> BoxStream<'a, anyhow::Result<Value>> {
+        jsonify(s)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_open_is_retried() {
+        let script = || {
+            vec![
+                Step::ConnectErr(transient()),
+                Step::ConnectErr(transient()),
+                frames(vec![item("a", "0:1"), stop("op_listen.revoked")]),
+            ]
+        };
+        let (connect, connects) = scripted(script());
+        let (out, err) = run(follow_stream(connect, limited(Some(2)), default_marker)).await;
+        assert_eq!(out, vec![item("a", "0:1"), stop("op_listen.revoked")]);
+        assert_eq!(stopped_code(&err).as_deref(), Some("op_listen.revoked"));
+        assert_eq!(connects.lock().unwrap().len(), 3);
+
+        // One retry is not enough for two failed opens.
+        let (connect, connects) = scripted(script());
+        let (out, err) = run(follow_stream(connect, limited(Some(1)), default_marker)).await;
+        assert!(out.is_empty());
+        assert_eq!(code_of(&err), "test.app.transient");
+        assert_eq!(connects.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn empty_connections_print_no_marker() {
+        let (connect, connects) = scripted(vec![
+            Step::Frames(vec![Ok(item("a", "0:1")), Err(transient())]),
+            Step::Frames(vec![]),
+            Step::Frames(vec![]),
+            frames(vec![item("b", "0:2"), stop("op_listen.revoked")]),
+        ]);
+        let (out, _) = run(follow_stream(connect, opts(), default_marker)).await;
+        assert_eq!(
+            out,
+            vec![
+                item("a", "0:1"),
+                marker(json!("0:1"), false),
+                item("b", "0:2"),
+                stop("op_listen.revoked"),
+            ],
+            "exactly one marker, before the first item of the connection that had one"
+        );
+        assert_eq!(connects.lock().unwrap().len(), 4);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn empty_connections_count_toward_max_retries() {
+        let (connect, connects) = scripted(vec![
+            Step::Frames(vec![]),
+            Step::Frames(vec![]),
+            Step::Frames(vec![]),
+        ]);
+        let (out, err) = run(follow_stream(connect, limited(Some(2)), default_marker)).await;
+        assert!(out.is_empty(), "no marker, no frame: {out:?}");
+        assert_eq!(code_of(&err), "op_listen.ended");
+        assert_eq!(connects.lock().unwrap().len(), 3);
+
+        // The kit's `max_retries = Some(0)` ends the follow after one.
+        let (connect, connects) = scripted(vec![Step::Frames(vec![])]);
+        let (out, err) = run(follow_stream(connect, limited(Some(0)), default_marker)).await;
+        assert!(out.is_empty());
+        assert_eq!(code_of(&err), "op_listen.ended");
+        assert_eq!(connects.lock().unwrap().len(), 1);
+    }
+}

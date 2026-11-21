@@ -23,6 +23,8 @@ pub enum ListenError {
     TaskPanicked,
     #[error("invalid listen frame: {reason}")]
     BadFrame { reason: String },
+    #[error("listen follow stopped: {code}")]
+    Stopped { code: String },
 }
 
 impl coded_error::CodedError for ListenError {
@@ -38,6 +40,7 @@ impl coded_error::CodedError for ListenError {
             Self::NoCaller => "op_listen.no_caller",
             Self::TaskPanicked => "op_listen.task_panicked",
             Self::BadFrame { .. } => "op_listen.bad_frame",
+            Self::Stopped { .. } => "op_listen.stopped",
         }
     }
 
@@ -46,7 +49,8 @@ impl coded_error::CodedError for ListenError {
             Self::BadCursor { .. }
             | Self::Revoked { .. }
             | Self::NoCaller
-            | Self::BadFrame { .. } => coded_error::ErrorClass::Logical,
+            | Self::BadFrame { .. }
+            | Self::Stopped { .. } => coded_error::ErrorClass::Logical,
             Self::Lagged { .. } | Self::Ended | Self::SessionExpired => {
                 coded_error::ErrorClass::Transient
             }

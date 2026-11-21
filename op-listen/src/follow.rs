@@ -11,8 +11,13 @@ use crate::ListenError;
 use crate::ListenFrame;
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
-use futures_util::StreamExt;
-use serde_json::{json, Value};
+use futures_util::{FutureExt, StreamExt};
+use schemars::JsonSchema;
+use serde::Serialize;
+use serde_json::{json, Map, Value};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use tokio::time::Instant;
 
 /// Supplies the resume and lifecycle information needed by a follower.
@@ -389,6 +394,97 @@ where
     .await
 }
 
+/// One value of a [`follow_stream`]: a frame of the followed stream, or the
+/// marker that precedes the first frame of a reconnection.
+#[derive(Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum Followed<F> {
+    /// An item of the followed stream.
+    Frame(F),
+    /// The reconnect marker, as shaped by the caller's marker function.
+    Marker(Map<String, Value>),
+}
+
+/// A reconnecting follower as a stream, so it can be the body of a stream op.
+///
+/// It runs the same reconnect loop as [`follow_items`]: it connects with the
+/// last cursor (or the initial one), reconnects with the backoff, and ends
+/// with the last error after `max_retries` consecutive failures. A failed open
+/// is a failure like a connection that ends, so it is retried while the error
+/// is not Logical; a connection that ends without an item counts as one too.
+///
+/// Every item is yielded as [`Followed::Frame`]. Before the first item of a
+/// reconnection it yields `Followed::Marker(marker(cursor, resync))`; a
+/// connection that yields nothing gets no marker. A stop item is yielded once
+/// and then the stream ends with `op_listen.stopped` (Logical). An error whose
+/// code is in `stop_codes` ends it with `op_listen.stopped` naming that code
+/// and no frame. Any other Logical error ends it as itself.
+pub fn follow_stream<'a, T, F>(
+    connect: F,
+    opts: FollowOptions<T::Cursor>,
+    marker: impl Fn(Option<&T::Cursor>, bool) -> Map<String, Value> + Send + 'a,
+) -> BoxStream<'a, anyhow::Result<Followed<T>>>
+where
+    T: Resumable + Send + 'a,
+    F: FnMut(Option<T::Cursor>) -> BoxFuture<'a, anyhow::Result<BoxStream<'a, anyhow::Result<T>>>>
+        + Send
+        + 'a,
+{
+    type Queue<T> = Arc<Mutex<VecDeque<anyhow::Result<Followed<T>>>>>;
+    let queue: Queue<T> = Arc::default();
+    let pushed = Arc::clone(&queue);
+    let handler = move |event: Event<T>| -> Result<(), Handled> {
+        let out = match event {
+            Event::Frame(item) => Followed::Frame(item),
+            Event::Reconnected { cursor, resync } => {
+                Followed::Marker(marker(cursor.as_ref(), resync))
+            }
+            // The end of the stream carries the stop; there is nothing to print.
+            Event::Opened | Event::Retrying { .. } | Event::Stopped { .. } => return Ok(()),
+        };
+        pushed.lock().expect("queue lock").push_back(Ok(out));
+        Ok(())
+    };
+    let mut driving: Option<BoxFuture<'a, anyhow::Result<FollowEnd>>> = Some(
+        drive(
+            connect,
+            handler,
+            opts,
+            DriveConfig {
+                opened: false,
+                stop_as_event_only: false,
+            },
+        )
+        .boxed(),
+    );
+    futures_util::stream::poll_fn(move |cx| loop {
+        if let Some(next) = queue.lock().expect("queue lock").pop_front() {
+            return Poll::Ready(Some(next));
+        }
+        let Some(future) = driving.as_mut() else {
+            return Poll::Ready(None);
+        };
+        match future.as_mut().poll(cx) {
+            // The loop may have queued items before it suspended.
+            Poll::Pending if queue.lock().expect("queue lock").is_empty() => return Poll::Pending,
+            Poll::Pending => {}
+            Poll::Ready(end) => {
+                driving = None;
+                let error = match end {
+                    Ok(FollowEnd::Stopped { code }) => {
+                        coded_error::into_anyhow(ListenError::Stopped { code })
+                    }
+                    // The handler never fails, so the sink cannot close.
+                    Ok(FollowEnd::SinkClosed) => continue,
+                    Err(error) => error,
+                };
+                queue.lock().expect("queue lock").push_back(Err(error));
+            }
+        }
+    })
+    .boxed()
+}
+
 /// Renders one event as a compact JSON line for [`follow`]. Only errors from
 /// the sink call are classified as [`Handled`] sink errors.
 fn render<K>(sink: &mut K, event: Event<Value>) -> Result<(), Handled>
@@ -421,17 +517,15 @@ fn sink_error(error: std::io::Error) -> Handled {
 /// The shared reconnect loop. Calls `handle` for every event; a handler error
 /// is returned immediately, without retry, and a closed sink ends the follow
 /// with [`FollowEnd::SinkClosed`].
-async fn drive<T, F, H>(
+async fn drive<'a, T, F, H>(
     mut connect: F,
     mut handle: H,
     opts: FollowOptions<T::Cursor>,
     config: DriveConfig,
 ) -> anyhow::Result<FollowEnd>
 where
-    T: Resumable + Send + 'static,
-    F: FnMut(
-        Option<T::Cursor>,
-    ) -> BoxFuture<'static, anyhow::Result<BoxStream<'static, anyhow::Result<T>>>>,
+    T: Resumable + Send + 'a,
+    F: FnMut(Option<T::Cursor>) -> BoxFuture<'a, anyhow::Result<BoxStream<'a, anyhow::Result<T>>>>,
     H: FnMut(Event<T>) -> Result<(), Handled>,
 {
     let mut state = State {
@@ -543,8 +637,8 @@ where
 }
 
 /// Drains one connection's stream, passing its events to `handle`.
-async fn run_connection<T, H>(
-    mut stream: BoxStream<'static, anyhow::Result<T>>,
+async fn run_connection<'a, T, H>(
+    mut stream: BoxStream<'a, anyhow::Result<T>>,
     connect_cursor: Option<T::Cursor>,
     reconnected: bool,
     state: &mut State<T::Cursor>,
@@ -553,7 +647,7 @@ async fn run_connection<T, H>(
     stop_as_event_only: bool,
 ) -> Result<Attempt, Handled>
 where
-    T: Resumable + Send + 'static,
+    T: Resumable + Send + 'a,
     H: FnMut(Event<T>) -> Result<(), Handled>,
 {
     let mut delivered = false;

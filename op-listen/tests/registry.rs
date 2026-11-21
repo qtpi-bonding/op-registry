@@ -236,3 +236,160 @@ async fn listen_entry_with_optional_subject_group() {
     assert!(cli::parse(&registry, &argv).ok().is_some());
     cmd.clone().debug_assert();
 }
+
+// ---- listen_entry_following ----
+
+struct CliCtx;
+impl op_registry::Resolve for CliCtx {}
+impl CliContext for CliCtx {
+    type Globals = NoGlobals;
+    fn from_globals(_: &NoGlobals) -> anyhow::Result<Self> {
+        Ok(CliCtx)
+    }
+    fn caller(&self) -> Option<Caller> {
+        Some(Caller("cli".to_owned()))
+    }
+}
+
+/// A listener on `CliCtx` over an in-memory log; with `revoke` the periodic
+/// recheck stops the stream after its replay.
+struct CliLog(LogListener);
+
+impl op_listen::Listener<CliCtx> for CliLog {
+    type Params = TopicParams;
+    type Snapshot = ();
+    type Item = String;
+
+    fn topic(&self, params: &TopicParams) -> String {
+        params.topic.clone()
+    }
+    fn epoch(&self) -> u64 {
+        0
+    }
+    fn authorize<'a>(
+        &'a self,
+        _ctx: &'a CliCtx,
+        caller: &'a Caller,
+        topic: &'a str,
+    ) -> futures_util::future::BoxFuture<'a, anyhow::Result<op_listen::Grant>> {
+        self.0.authorize(&Ctx, caller, topic)
+    }
+    fn still_allowed<'a>(
+        &'a self,
+        _ctx: &'a CliCtx,
+        caller: &'a Caller,
+        topic: &'a str,
+    ) -> futures_util::future::BoxFuture<'a, bool> {
+        self.0.still_allowed(&Ctx, caller, topic)
+    }
+    fn open<'a>(
+        &'a self,
+        _ctx: &'a CliCtx,
+        params: TopicParams,
+        cursor: Option<op_listen::ListenCursor>,
+        floor: Option<op_listen::ListenCursor>,
+    ) -> futures_util::future::BoxFuture<'a, anyhow::Result<op_listen::Opened<'a, (), String>>>
+    {
+        self.0.open(&Ctx, params, cursor, floor)
+    }
+}
+
+fn following_registry(listener: Arc<CliLog>) -> Registry<CliCtx> {
+    let mut registry = Registry::new();
+    registry.set_bin("app", "0.0.0", "toy");
+    registry.group("log", "Log.");
+    op_listen::listen_entry_following(
+        &mut registry,
+        listener,
+        OpSpec::new("log follow", "follows the log"),
+    );
+    registry
+}
+
+#[tokio::test]
+async fn following_entry_prints_ndjson_and_exits_65_after_stop() {
+    let mut inner = LogListener::new(vec![(1, "a"), (2, "b")])
+        .with_grant(grant(None, Some(std::time::Duration::from_millis(5))));
+    inner.tail_pending = true;
+    inner
+        .allowed
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let registry = following_registry(Arc::new(CliLog(inner)));
+    let argv: Vec<std::ffi::OsString> = ["app", "log", "follow", "--topic", "t"]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let (io, cap) = cli::Io::memory(b"", false, false);
+    let code = cli::run_with_io(&registry, argv, &cli::NoHooks, io).await;
+    assert_eq!(code, 65, "stderr: {}", cap.stderr());
+    let lines: Vec<serde_json::Value> = cap
+        .stdout()
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("one JSON value per line"))
+        .collect();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert_eq!(
+        lines[0],
+        json!({"frame": "item", "item": "a", "cursor": "0:1"})
+    );
+    assert_eq!(
+        lines[1],
+        json!({"frame": "item", "item": "b", "cursor": "0:2"})
+    );
+    assert_eq!(lines[2]["frame"], "stop");
+    assert_eq!(lines[2]["code"], "op_listen.revoked");
+    assert!(
+        cap.stderr().contains("op_listen.stopped"),
+        "{}",
+        cap.stderr()
+    );
+}
+
+#[tokio::test]
+async fn following_entry_passes_params_and_cursor() {
+    let mut inner = LogListener::new(vec![(1, "a"), (2, "b"), (3, "c")])
+        .with_grant(grant(None, Some(std::time::Duration::from_millis(5))));
+    inner.tail_pending = true;
+    inner
+        .allowed
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let listener = Arc::new(CliLog(inner));
+    let registry = following_registry(listener.clone());
+    let mut s = registry
+        .call_stream(
+            "log_follow",
+            json!({"topic": "t9"}),
+            &CliCtx,
+            CallOptions::default()
+                .with_caller(Caller("tester".to_owned()))
+                .with_max_retries(0),
+            Some(Cursor::new("0:2")),
+        )
+        .await
+        .unwrap();
+    let mut seen = Vec::new();
+    let mut end = None;
+    while let Some(next) = futures_util::StreamExt::next(&mut s).await {
+        match next {
+            Ok(v) => seen.push(v),
+            Err(e) => end = Some(e),
+        }
+    }
+    assert_eq!(
+        seen[0],
+        json!({"frame": "item", "item": "c", "cursor": "0:3"})
+    );
+    assert_eq!(seen[1]["frame"], "stop");
+    assert_eq!(
+        code_of(end.expect("ends with an error").error()),
+        "op_listen.stopped"
+    );
+    assert_eq!(
+        listener.0.authorize_calls(),
+        [("tester".to_owned(), "t9".to_owned())]
+    );
+    assert_eq!(
+        listener.0.open_calls(),
+        [(Some(op_listen::ListenCursor::new(0, 2)), None)]
+    );
+}
