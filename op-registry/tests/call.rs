@@ -149,6 +149,18 @@ impl Op for Flow {
     type Output = Out;
     const NAME: &'static str = "flow";
 }
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+struct Seq {
+    n: u32,
+}
+struct Counted;
+impl Op for Counted {
+    type Ctx = Ctx;
+    type Params = Pick;
+    type Output = Seq;
+    const NAME: &'static str = "counted";
+}
 struct Mismatch;
 impl Op for Mismatch {
     type Ctx = Ctx;
@@ -240,6 +252,17 @@ fn registry() -> Registry<Ctx> {
                     Ok(Out { ok: true }),
                     Err(anyhow::anyhow!("leaked mid-call-secret")),
                 ])) as BoxStream<'_, anyhow::Result<Out>>)
+            })
+        },
+    );
+    r.push_stream(
+        OpSpec::<Pick, Seq>::new("counted", "Streams six numbered items."),
+        |_c: &Ctx, _p: Pick, _cur, _o: CallOptions| {
+            Box::pin(async {
+                Ok(
+                    Box::pin(futures_util::stream::iter((0..6).map(|n| Ok(Seq { n }))))
+                        as BoxStream<'_, anyhow::Result<Seq>>,
+                )
             })
         },
     );
@@ -914,4 +937,33 @@ async fn owned_stream_item_error_redacted() {
     let err = items[1].as_ref().unwrap_err();
     assert!(err.to_string().contains("leaked <secret>"), "{err}");
     assert!(!err.redacted_message().contains("mid-call-secret"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn owned_stream_slow_consumer_gets_every_item_in_order() {
+    let r = Arc::new(registry());
+    let mut stream = r
+        .clone()
+        .call_stream_typed_owned::<Counted>(Arc::new(Ctx), pick(), CallOptions::default(), None)
+        .await
+        .unwrap();
+    drop(r);
+    let mut seen = Vec::new();
+    while let Some(item) = stream.next().await {
+        seen.push(item.unwrap().n);
+        // The producer is bounded to one buffered item, so it waits for us.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(seen, [0, 1, 2, 3, 4, 5]);
+}
+
+#[tokio::test]
+async fn owned_stream_open_failure_is_err() {
+    let r = Arc::new(registry());
+    let err = r
+        .call_stream_typed_owned::<OpenFail>(Arc::new(Ctx), pick(), CallOptions::default(), None)
+        .await
+        .err()
+        .expect("the open fails");
+    assert!(err.to_string().contains("no socket"), "{err}");
 }
