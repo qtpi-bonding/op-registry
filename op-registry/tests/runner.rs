@@ -1069,6 +1069,19 @@ fn exits_reg() -> Registry<Ctx> {
             },
         );
     }
+    let mut usage = OpSpec::<Nothing, Out>::new("task usage", "Usage error with an exit.");
+    usage.error_exits = vec![(6, "bad usage", "op_registry.usage.invalid")];
+    r.push_op(
+        usage,
+        |_c: &Ctx, _p: Nothing, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Out>> {
+            Box::pin(async {
+                Err(op_registry::usage(op_registry::UsageError::InvalidField {
+                    name: "x".to_owned(),
+                    reason: "the op says so".to_owned(),
+                }))
+            })
+        },
+    );
     r
 }
 
@@ -1109,4 +1122,13 @@ fn other_code_exits_by_class() {
     assert_eq!(r.code, 69);
     assert_eq!(*rec.exits.lock().unwrap(), vec![69]);
     assert_eq!(r.last_err()["error"]["code"], "runner.test.down");
+}
+
+#[test]
+fn usage_code_with_error_exit_still_fires_usage_hook() {
+    let rec = Rec::default();
+    let r = run_exits(&["task", "usage"], &rec);
+    assert_eq!(r.code, 6);
+    assert_eq!(*rec.exits.lock().unwrap(), vec![6]);
+    assert_eq!(rec.log(), ["pre_parse", "on_usage_error", "post_run_err"]);
 }

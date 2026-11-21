@@ -101,7 +101,12 @@ fn codes_of<C: Sync>(registry: &Registry<C>, d: &Descriptor) -> Vec<CodeRow> {
     let mut rows: Vec<CodeRow> = d
         .errors
         .iter()
-        .filter(|e| !registry.common_errors.iter().any(|c| c.code == e.code))
+        // A common code is printed once, unless the op declares an exit on it:
+        // then the op's table shows that exit.
+        .filter(|e| {
+            declared_exit(&e.code).is_some()
+                || !registry.common_errors.iter().any(|c| c.code == e.code)
+        })
         .map(|ErrorCodeEntry { code, class }| CodeRow {
             code: code.clone(),
             class: *class,

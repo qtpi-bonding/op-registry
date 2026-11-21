@@ -522,10 +522,16 @@ fn code_in_header_and_entry_listed_once() {
         .filter(|e| e.code == "fix.common.busy")
         .count();
     assert_eq!(common, 1);
+    // A common code the op also lists (without an exit) is printed once.
     #[cfg(feature = "manual")]
     {
         let text = op_registry::manual::render(&r, &Default::default()).unwrap();
-        assert_eq!(text.matches("| fix.common.busy |").count(), 1, "{text}");
+        assert_eq!(text.matches("| fix.common.denied |").count(), 1, "{text}");
+        // `busy` is in the common table and, with its declared exit, in the op's.
+        assert!(
+            text.contains("| fix.common.busy | transient | 3 |"),
+            "{text}"
+        );
     }
 }
 

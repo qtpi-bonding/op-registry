@@ -187,8 +187,17 @@ fn code(code: &'static str, class: coded_error::ErrorClass) -> coded_error::Code
 
 #[test]
 fn merge_unions_common_errors() {
+    #[derive(Default)]
+    struct Counter(std::sync::atomic::AtomicUsize);
+    impl op_registry::CallHook for Counter {
+        fn on_error(&self, _i: &op_registry::CallInfo, _e: &anyhow::Error) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
     use coded_error::ErrorClass::{Logical, Transient};
     let mut a = registry_of(&["alpha"]);
+    let seen = std::sync::Arc::new(Counter::default());
+    a.set_call_hook(seen.clone());
     a.add_common_errors(vec![code("x.denied", Logical), code("x.shared", Logical)]);
     let mut b = registry_of(&["beta"]);
     b.group("g", "G.");
@@ -198,6 +207,30 @@ fn merge_unions_common_errors() {
     assert_eq!(codes, vec!["x.denied", "x.shared", "x.busy"]);
     // The receiver's hook and the other's groups survive too.
     assert_eq!(a.names(), vec!["alpha", "beta"]);
+    // The other's group came along: an op under it registers.
+    push_ok(&mut a, OpSpec::new("g gamma", "Uses the other's group."));
+    // The receiver's hook sees a failure of a merged-in op.
+    let err = futures_executor::block_on(a.call(
+        "beta",
+        json!({"bogus": 1}),
+        &Ctx,
+        CallOptions::default(),
+    ));
+    assert!(err.is_err());
+    let err = futures_executor::block_on(a.call("alpha", json!({}), &Ctx, CallOptions::default()));
+    assert!(err.is_ok());
+    assert_eq!(seen.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    a.push_op(
+        OpSpec::<Echo, Out>::new("fails", "Fails."),
+        |_c: &Ctx,
+         _p: Echo,
+         _o: CallOptions|
+         -> futures_util::future::BoxFuture<'_, anyhow::Result<Out>> {
+            Box::pin(async { Err(anyhow::anyhow!("no")) })
+        },
+    );
+    let _ = futures_executor::block_on(a.call("fails", json!({}), &Ctx, CallOptions::default()));
+    assert_eq!(seen.0.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[test]

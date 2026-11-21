@@ -324,6 +324,7 @@ fn finish_err<C>(
     let message = redactor.redact(&format!("{error:#}"));
     // The error is already mapped (ERR-2), so the declared exits match the
     // code every surface shows.
+    let usage = exit::exit_code(&error) == exit::USAGE;
     let declared = op
         .as_deref()
         .and_then(|name| registry.entries.iter().find(|e| e.descriptor.name == name))
@@ -337,7 +338,7 @@ fn finish_err<C>(
     };
     if let Some(hooks) = hooks {
         if let Outcome::Err { error, message, .. } = &outcome {
-            if exit == exit::USAGE {
+            if usage {
                 hooks.on_usage_error(&UsageFailure {
                     code: coded_error::facts_anyhow(error).code,
                     message: message.clone(),

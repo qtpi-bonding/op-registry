@@ -89,9 +89,20 @@ fn fixture() -> Registry<Ctx> {
     r.set_pillar("fix");
     r.set_bin("concordd", "1.2.3", "A concordance tool.");
     r.group("concept", "Concepts in a collection.");
+    r.add_common_errors(vec![
+        CodeEntry {
+            code: "fix.common.denied",
+            class: Some(ErrorClass::Logical),
+        },
+        CodeEntry {
+            code: "fix.common.busy",
+            class: Some(ErrorClass::Transient),
+        },
+    ]);
     let mut get = OpSpec::<Get, Item>::new("concept get", "Show one concept.");
     get.access = Access::reads().with_network();
     get.exits = vec![(4, "records drifted")];
+    get.error_exits = vec![(5, "busy", "fix.common.busy")];
     get.errors = vec![
         CodeEntry {
             code: "fix.concept.not_found",
@@ -100,6 +111,10 @@ fn fixture() -> Registry<Ctx> {
         CodeEntry {
             code: "fix.concept.drift",
             class: None,
+        },
+        CodeEntry {
+            code: "fix.common.busy",
+            class: Some(ErrorClass::Transient),
         },
     ];
     r.push_op(get, get_op);
@@ -343,6 +358,33 @@ fn manual_error_exit_line_and_table() {
 }
 
 #[test]
+fn manual_on_code_that_is_common_shows_declared_exit() {
+    let mut r = exits_fixture();
+    let mut spec = OpSpec::<Filter, Item>::new("concept hold", "Hold.");
+    spec.errors = vec![CodeEntry {
+        code: "fix.common.busy",
+        class: Some(ErrorClass::Transient),
+    }];
+    spec.error_exits = vec![(5, "busy", "fix.common.busy")];
+    r.push_op(spec, nothing::<Filter>);
+    let text = render(&r, &sample_manual_empty()).unwrap();
+    let section = text.split("### concordd concept hold").nth(1).unwrap();
+    let section = section.split("\n## ").next().unwrap();
+    assert!(
+        section.contains("- 5: busy (on fix.common.busy)"),
+        "{section}"
+    );
+    assert!(
+        section.contains("| fix.common.busy | transient | 5 |"),
+        "{section}"
+    );
+    // The common table stays class-only.
+    assert!(text.contains("| fix.common.busy | transient | 75 |"));
+    #[cfg(feature = "testing")]
+    assert!(check_exit_table(&r, &text).is_empty());
+}
+
+#[test]
 fn manual_common_codes_once_and_json_common_codes() {
     let r = exits_fixture();
     let text = render(&r, &sample_manual_empty()).unwrap();
@@ -376,8 +418,11 @@ fn manual_common_codes_once_and_json_common_codes() {
         .collect();
     assert_eq!(own, ["fix.concept.timeout"]);
     // No common codes: no section and an empty list.
-    assert!(!render_fixture().contains("## Common codes"));
-    assert_eq!(render_json(&fixture())["commonCodes"], json!([]));
+    let bare = Registry::<Ctx>::new();
+    assert!(!render(&bare, &sample_manual_empty())
+        .unwrap()
+        .contains("## Common codes"));
+    assert_eq!(render_json(&bare)["commonCodes"], json!([]));
 }
 
 #[test]

@@ -13,6 +13,15 @@ A concordance tool.
 | 70 | unknown |
 | 75 | transient |
 
+## Common codes
+
+Every command may return these.
+
+| Code | Class | Exit |
+|---|---|---|
+| fix.common.denied | logical | 65 |
+| fix.common.busy | transient | 75 |
+
 ## Getting started
 
 ### Read a concept
@@ -53,11 +62,15 @@ Access: reads, network
 
 Exits:
 - 4: records drifted
+- 5: busy (on fix.common.busy)
 
 | Code | Class | Exit |
 |---|---|---|
 | fix.concept.not_found | logical | 65 |
 | fix.concept.drift | varies | varies |
+| fix.common.busy | transient | 5 |
+
+Also the common codes.
 
 ### concordd concept list
 
@@ -96,6 +109,8 @@ Access: reads
 | Code | Class | Exit |
 |---|---|---|
 | fix.concept.too_many | logical | 65 |
+
+Also the common codes.
 
 ## Library codes
 
