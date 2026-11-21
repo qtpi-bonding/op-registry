@@ -61,4 +61,6 @@ fn op_params_compile_failures() {
         "tests/params_ui/op_params_hide_default_without_default_is_a_compile_error.rs",
     );
     tests.compile_fail("tests/params_ui/op_params_env_on_vec_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_prompt_on_option_is_a_compile_error.rs");
+    tests.compile_fail("tests/params_ui/op_params_prompt_on_non_secret_file_is_a_compile_error.rs");
 }

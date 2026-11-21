@@ -29,7 +29,6 @@ pub struct ParseCx {
     hint: crate::Notices,
     /// Reads prompted secrets; used by prompted fields.
     #[cfg(feature = "secrets")]
-    #[allow(dead_code)]
     prompter: Option<std::sync::Arc<dyn crate::cli::Prompter>>,
 }
 

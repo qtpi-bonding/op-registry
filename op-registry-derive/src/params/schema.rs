@@ -281,6 +281,7 @@ pub fn fields_fn(fields: &[Field]) -> TokenStream {
             ))
         });
         let env = f.env.as_ref().map(|var| quote!(.with_env(#var)));
+        let prompt = f.prompt.as_ref().map(|label| quote!(.with_prompt(#label)));
         quote! {
             fields.push(
                 ::op_registry::FieldMeta::new(#rust_name, ::op_registry::FieldKind::#kind)
@@ -291,6 +292,7 @@ pub fn fields_fn(fields: &[Field]) -> TokenStream {
                     .secret(#secret)
                     #subject
                     #env
+                    #prompt
             );
         }
     });

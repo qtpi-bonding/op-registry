@@ -23,6 +23,21 @@ pub struct CallOptions {
     /// the call's secrets and never replaces it, so an op that passes a
     /// clone of its options to a nested call shares one handle with it.
     pub(crate) redactor: Redactor,
+    /// The terminal prompter of a CLI run; no other surface sets it.
+    #[cfg(feature = "secrets")]
+    pub(crate) prompter: Option<PromptHandle>,
+}
+
+/// The run's prompter, for `CallOptions::prompt_secret`.
+#[cfg(feature = "secrets")]
+#[derive(Clone)]
+pub(crate) struct PromptHandle(pub(crate) std::sync::Arc<dyn crate::cli::Prompter>);
+
+#[cfg(feature = "secrets")]
+impl std::fmt::Debug for PromptHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Prompter")
+    }
 }
 
 /// Identifies the caller of an operation.
@@ -81,6 +96,33 @@ impl CallOptions {
     /// was already sent is not redacted after the fact.
     pub fn redact(&self, bytes: &[u8]) {
         self.redactor.add(bytes);
+    }
+
+    /// Asks for a secret on the terminal: one line, echo off, without its
+    /// line ending. It is registered for redaction (as by [`redact`]) before
+    /// it is returned.
+    ///
+    /// Only a CLI run with a terminal can ask; typed, JSON and MCP calls and
+    /// a CLI run with no terminal return `None`, so the op falls back to its
+    /// non-interactive form. An empty answer returns `None`; a read error
+    /// returns `None` and sends one notice, "cannot read from the terminal".
+    ///
+    /// [`redact`]: CallOptions::redact
+    #[cfg(feature = "secrets")]
+    pub fn prompt_secret(&self, label: &str) -> Option<crate::Secret<zeroize::Zeroizing<String>>> {
+        let prompter = self.prompter.as_ref()?;
+        match prompter.0.read_secret(label) {
+            Ok(line) if line.is_empty() => None,
+            Ok(line) => {
+                self.redact(line.as_bytes());
+                Some(crate::Secret::new(line))
+            }
+            Err(e) => {
+                self.notices
+                    .notice(format!("cannot read from the terminal: {e}"));
+                None
+            }
+        }
     }
 }
 

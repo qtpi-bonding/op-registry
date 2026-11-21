@@ -34,8 +34,9 @@ fn with_env(f: &Field, arg: TokenStream) -> TokenStream {
 pub(crate) fn args(f: &Field) -> Vec<TokenStream> {
     let clap = clap();
     let (id, flag) = (&f.rust_name, &f.flag);
-    let help = (!f.help.is_empty()).then(|| {
-        let h = &f.help;
+    let flag_help = f.flag_help();
+    let help = (!flag_help.is_empty()).then(|| {
+        let h = &flag_help;
         quote!(.help(#h))
     });
     let valued = |base: &Base, action: Option<TokenStream>, required: bool| {
@@ -75,7 +76,8 @@ pub(crate) fn args(f: &Field) -> Vec<TokenStream> {
                 },
             ]
         }
-        Shape::Plain(b) => vec![valued(b, None, f.required())],
+        // A prompted field is never required by clap: the decode asks.
+        Shape::Plain(b) => vec![valued(b, None, f.required() && f.prompt.is_none())],
         Shape::Optional(b) => vec![valued(b, None, f.explicit_required)],
         Shape::Repeated(b) => vec![valued(b, append, f.explicit_required)],
         Shape::Switch => vec![with_env(
@@ -243,6 +245,16 @@ pub(crate) fn decode(f: &Field) -> TokenStream {
             Some(d) => {
                 let get = get_one(b);
                 quote!(#get.unwrap_or_else(|| #d))
+            }
+            None if f.prompt.is_some() => {
+                let (label, hide) = (f.prompt.as_deref().unwrap_or_default(), f.secret);
+                let get = get_one(b);
+                quote! {
+                    match #get {
+                        ::std::option::Option::Some(v) => v,
+                        ::std::option::Option::None => #rt::prompt_secret_file(_cx, #key, #label, #hide)?,
+                    }
+                }
             }
             None => {
                 let get = get_one(b);

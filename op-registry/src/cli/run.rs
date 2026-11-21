@@ -477,7 +477,7 @@ async fn execute<C: CliContext + Resolve>(
         io.stdin_tty,
         notices.clone(),
         #[cfg(feature = "secrets")]
-        io.prompter.take(),
+        io.prompter.clone(),
     );
     let params = match (entry.decode_matches)(&matches, &mut cx) {
         Ok(params) => params,
@@ -498,6 +498,10 @@ async fn execute<C: CliContext + Resolve>(
     }
     // The secret globals go into the call's one redactor handle.
     opts.redactor.extend(&secrets);
+    #[cfg(feature = "secrets")]
+    {
+        opts.prompter = io.prompter.clone().map(crate::call::PromptHandle);
+    }
 
     if entry.descriptor.kind == OpKind::Stream {
         let invocation = registry

@@ -703,6 +703,29 @@ pub fn secret_file_arg(
     Ok(if hide_path { file.hide_path() } else { file })
 }
 
+/// A prompted `SecretFile` that was left out: asks the context's prompter.
+/// No prompter, or an empty answer, is a missing field; a read error is an
+/// invalid one. The prompted bytes are registered like any `SecretFile`.
+#[cfg(feature = "secrets")]
+pub fn prompt_secret_file(
+    cx: &mut ParseCx,
+    key: &str,
+    label: &str,
+    hide_path: bool,
+) -> Result<crate::SecretFile> {
+    let Some(prompter) = cx.prompter.as_ref() else {
+        return Err(missing(&format!("{key} (no terminal to ask on)")));
+    };
+    let answer = prompter
+        .read_secret(label)
+        .map_err(|e| invalid(key, format!("cannot read from the terminal: {e}")))?;
+    if answer.is_empty() {
+        return Err(missing(&format!("{key} (empty answer)")));
+    }
+    let file = crate::SecretFile::new(None, answer.as_bytes().to_vec());
+    Ok(if hide_path { file.hide_path() } else { file })
+}
+
 /// A `SecretFile` JSON value: a path string, or with `inline` also
 /// `{"inline": "<base64>"}`. Absent and `null` are `None`.
 #[cfg(feature = "secrets")]

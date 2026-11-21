@@ -1,0 +1,5 @@
+error: an optional secret is not prompted; ask with CallOptions::prompt_secret in the op
+ --> tests/params_ui/op_params_prompt_on_option_is_a_compile_error.rs:6:8
+  |
+6 |     x: Option<op_registry::SecretFile>,
+  |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

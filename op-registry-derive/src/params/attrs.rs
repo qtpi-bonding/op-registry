@@ -5,6 +5,8 @@ use syn::{Expr, ExprArray, ExprLit, Ident, Lit};
 
 use super::types::{classify, Base, Shape};
 
+const PROMPT_HELP: &str = "Asked for on a terminal when left out.";
+
 pub struct Field {
     pub ident: Ident,
     pub rust_name: String,
@@ -47,6 +49,8 @@ pub struct Field {
     pub hide_default: bool,
     /// On a flattened group: the scope its subject takes (`scope = [..]`).
     pub group_scope: Vec<ScopeName>,
+    /// `#[op(prompt)]`: the label the CLI asks a missing `SecretFile` with.
+    pub prompt: Option<String>,
 }
 
 /// One `scope = [..]` or relation target entry: a field name or a dotted path
@@ -115,6 +119,8 @@ impl Field {
         let mut env: Option<String> = None;
         let mut allow_hyphen = false;
         let mut hide_default = false;
+        // `Some("")` is a bare `prompt`: the label is the flag name.
+        let mut prompt: Option<String> = None;
         for attr in f.attrs.iter().filter(|a| a.path().is_ident("op")) {
             attr.parse_nested_meta(|m| {
                 let key = m.path.get_ident().map(Ident::to_string).unwrap_or_default();
@@ -126,6 +132,13 @@ impl Field {
                     "ignore_case" => ignore_case = true,
                     "sample" => sample = Some(m.value()?.parse::<syn::LitStr>()?.value()),
                     "secret_inline" => secret_inline = true,
+                    "prompt" => {
+                        prompt = Some(if m.input.peek(syn::Token![=]) {
+                            m.value()?.parse::<syn::LitStr>()?.value()
+                        } else {
+                            String::new()
+                        })
+                    }
                     "clearable" => clearable = true,
                     "flatten" => flatten = true,
                     "id_only" => id_only = true,
@@ -228,7 +241,8 @@ impl Field {
                     || absent_ok
                     || env.is_some()
                     || allow_hyphen
-                    || hide_default,
+                    || hide_default
+                    || prompt.is_some(),
                 scope.unwrap_or_default(),
             );
         }
@@ -321,6 +335,23 @@ impl Field {
                 format!("field `{rust_name}`: secret_inline applies only to a `SecretFile` field"),
             ));
         }
+        if prompt.is_some() {
+            match &shape {
+                Shape::Plain(Base::SecretFile) => {}
+                Shape::Optional(Base::SecretFile) => {
+                    return Err(syn::Error::new_spanned(
+                        &f.ty,
+                        "an optional secret is not prompted; ask with CallOptions::prompt_secret in the op",
+                    ));
+                }
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        &f.ty,
+                        format!("field `{rust_name}`: prompt applies only to a plain SecretFile"),
+                    ));
+                }
+            }
+        }
         if secret && is_enum_shape_any(&shape) {
             return Err(syn::Error::new_spanned(
                 &f.ty,
@@ -406,9 +437,17 @@ impl Field {
             Some(r) if r.subject => ("id".to_owned(), "id".to_owned()),
             _ => (camel(&rust_name), rust_name.replace('_', "-")),
         };
+        let prompt = prompt.map(|label| {
+            if label.is_empty() {
+                flag.clone()
+            } else {
+                label
+            }
+        });
         Ok(Field {
             key,
             flag,
+            prompt,
             help: doc(f),
             ident,
             rust_name,
@@ -476,6 +515,7 @@ impl Field {
             allow_hyphen: false,
             hide_default: false,
             group_scope,
+            prompt: None,
         })
     }
 
@@ -487,6 +527,15 @@ impl Field {
             Shape::Plain(_) | Shape::Flatten(_) => return None,
             _ => quote!(::op_registry::__private::rt::Presence::present(&self.#ident)),
         })
+    }
+
+    /// The help of the CLI flag: the doc, plus a line for a prompted field.
+    pub fn flag_help(&self) -> String {
+        match (&self.prompt, self.help.is_empty()) {
+            (None, _) => self.help.clone(),
+            (Some(_), true) => PROMPT_HELP.to_owned(),
+            (Some(_), false) => format!("{} {PROMPT_HELP}", self.help),
+        }
     }
 
     pub fn required(&self) -> bool {
