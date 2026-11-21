@@ -13,9 +13,10 @@ use crate::{
     Redactor, RefSlot, Registry, Resolve, Resolved, Surface,
 };
 use anyhow::Result;
-use futures_util::future::BoxFuture;
+use futures_channel::{mpsc, oneshot};
+use futures_util::future::{self, BoxFuture, Either};
 use futures_util::stream::BoxStream;
-use futures_util::StreamExt;
+use futures_util::{stream, SinkExt, StreamExt};
 use serde_json::Value;
 use std::any::Any;
 use std::sync::{Arc, Mutex};
@@ -501,39 +502,51 @@ impl<C: Resolve + Send + Sync + 'static> Registry<C> {
         O::Output: 'static,
         O::Params: 'static,
     {
-        // SAFETY: the references are extended to `'static` only to open the
-        // stream; the stream is stored in `Owned` before the `Arc`s it
-        // borrows from, so it is dropped first, and an `Arc` never moves its
-        // pointee. Nothing else can reach the extended references.
-        let (registry_ref, ctx_ref): (&'static Self, &'static C) =
-            unsafe { (&*Arc::as_ptr(&self), &*Arc::as_ptr(&ctx)) };
-        let stream = registry_ref
-            .open_typed_stream::<O>(ctx_ref, params, opts, cursor)
-            .await?;
-        Ok(Box::pin(Owned {
-            stream,
-            _ctx: ctx,
-            _registry: self,
-        }))
-    }
-}
-
-/// A stream together with the owners of what it borrows. The stream field is
-/// declared first so it is dropped before them.
-struct Owned<T, C, R> {
-    stream: BoxStream<'static, T>,
-    _ctx: Arc<C>,
-    _registry: Arc<R>,
-}
-
-impl<T, C, R> futures_util::Stream for Owned<T, C, R> {
-    type Item = T;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<T>> {
-        self.stream.poll_next_unpin(cx)
+        // One producer owns both handles and everything it borrows from, so
+        // no reference outlives its owner. It reports the open through a
+        // oneshot and forwards the items through a bounded channel; the
+        // returned stream drives it while it reads the channel.
+        let (open_tx, open_rx) = oneshot::channel();
+        let (mut item_tx, item_rx) = mpsc::channel(1);
+        let producer = async move {
+            let mut stream = match self
+                .open_typed_stream::<O>(&ctx, params, opts, cursor)
+                .await
+            {
+                Ok(stream) => {
+                    let _ = open_tx.send(Ok(()));
+                    stream
+                }
+                Err(failure) => {
+                    let _ = open_tx.send(Err(failure));
+                    return;
+                }
+            };
+            while let Some(item) = stream.next().await {
+                if item_tx.send(item).await.is_err() {
+                    return;
+                }
+            }
+        };
+        let producer: BoxFuture<'static, ()> = Box::pin(producer);
+        let producer = match future::select(open_rx, producer).await {
+            Either::Left((opened, producer)) => {
+                opened.expect("the producer reports the open before it drops its sender")?;
+                producer
+            }
+            Either::Right(((), open_rx)) => {
+                // The producer finished first: the open failed, or the
+                // stream was empty and already closed.
+                open_rx
+                    .await
+                    .expect("the producer reports the open before it finishes")?;
+                Box::pin(future::ready(()))
+            }
+        };
+        Ok(Box::pin(
+            stream::select(item_rx.map(Some), stream::once(producer).map(|()| None))
+                .filter_map(future::ready),
+        ))
     }
 }
 
