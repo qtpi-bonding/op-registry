@@ -80,6 +80,10 @@ pub struct FollowOptions<C = ListenCursor> {
     pub backoff: Backoff,
     /// Number of consecutive failed attempts before giving up (`None` = forever).
     pub max_retries: Option<u32>,
+    /// Error codes that end the follow as `Stopped { code }` when they arrive as a
+    /// failed open or a mid-stream error, before the Logical check. A stop that
+    /// arrives as a frame is decided by [`Resumable::stop_code`], not by this list.
+    pub stop_codes: Vec<String>,
 }
 
 impl<C> FollowOptions<C> {
@@ -89,6 +93,7 @@ impl<C> FollowOptions<C> {
             initial_cursor: None,
             backoff: Backoff::follower(),
             max_retries: None,
+            stop_codes: Vec::new(),
         }
     }
 }
@@ -140,9 +145,11 @@ enum Event<T: Resumable> {
     },
 }
 
-struct DriveConfig<'a> {
+struct DriveConfig {
+    /// Report `Opened` after each successful connect.
     opened: bool,
-    stop_codes: &'a [&'a str],
+    /// Deliver a stop item only as `Stopped`, never as a `Frame` first.
+    stop_as_event_only: bool,
 }
 
 /// Outcome of one connection attempt's stream, as seen by the follower.
@@ -214,7 +221,7 @@ where
         opts,
         DriveConfig {
             opened: false,
-            stop_codes: &[],
+            stop_as_event_only: false,
         },
     )
     .await
@@ -259,7 +266,7 @@ where
         opts,
         DriveConfig {
             opened: false,
-            stop_codes: &[],
+            stop_as_event_only: false,
         },
     )
     .await
@@ -292,18 +299,18 @@ where
         opts,
         DriveConfig {
             opened: false,
-            stop_codes: &[],
+            stop_as_event_only: true,
         },
     )
     .await
 }
 
 /// Follows explicit stream steps and reports connection lifecycle events.
+/// A stop item is delivered only as `Stopped { code }`.
 pub async fn supervise<T, F, K>(
     mut connect: F,
     opts: FollowOptions<T::Cursor>,
-    stop_codes: &[&str],
-    mut sink: K,
+    sink: K,
 ) -> anyhow::Result<FollowEnd>
 where
     T: Resumable + Send + 'static,
@@ -343,8 +350,26 @@ where
             Ok(stream.filter_map(|item| async move { item }).boxed())
         }) as BoxFuture<'static, anyhow::Result<BoxStream<'static, anyhow::Result<T>>>>
     };
+    supervise_stream(wrapped, opts, sink).await
+}
+
+/// Like [`supervise`], over a plain stream of items. The end of a stream is
+/// `op_listen.ended` (Transient, retried). A stop item is delivered only as
+/// `Stopped { code }`.
+pub async fn supervise_stream<T, F, K>(
+    connect: F,
+    opts: FollowOptions<T::Cursor>,
+    mut sink: K,
+) -> anyhow::Result<FollowEnd>
+where
+    T: Resumable + Send + 'static,
+    F: FnMut(
+        Option<T::Cursor>,
+    ) -> BoxFuture<'static, anyhow::Result<BoxStream<'static, anyhow::Result<T>>>>,
+    K: FnMut(Supervised<T>) -> std::io::Result<()>,
+{
     drive(
-        wrapped,
+        connect,
         |event| {
             let event = match event {
                 Event::Opened => Supervised::Opened,
@@ -358,7 +383,7 @@ where
         opts,
         DriveConfig {
             opened: true,
-            stop_codes,
+            stop_as_event_only: true,
         },
     )
     .await
@@ -400,7 +425,7 @@ async fn drive<T, F, H>(
     mut connect: F,
     mut handle: H,
     opts: FollowOptions<T::Cursor>,
-    config: DriveConfig<'_>,
+    config: DriveConfig,
 ) -> anyhow::Result<FollowEnd>
 where
     T: Resumable + Send + 'static,
@@ -430,8 +455,16 @@ where
                         Err(Handled::Failed(error)) => return Err(error),
                     }
                 }
-                match run_connection(stream, connect_cursor, reconnected, &mut state, &mut handle)
-                    .await
+                match run_connection(
+                    stream,
+                    connect_cursor,
+                    reconnected,
+                    &mut state,
+                    &mut handle,
+                    &opts.stop_codes,
+                    config.stop_as_event_only,
+                )
+                .await
                 {
                     Ok(attempt) => attempt,
                     Err(Handled::SinkClosed) => return Ok(FollowEnd::SinkClosed),
@@ -440,7 +473,7 @@ where
             }
             Err(error) => {
                 let code = coded_error::facts_anyhow(&error).code.to_owned();
-                if config.stop_codes.iter().any(|stop| *stop == code) {
+                if opts.stop_codes.iter().any(|stop| *stop == code) {
                     match emit(&mut handle, Event::Stopped { code: code.clone() }) {
                         Ok(()) => {}
                         Err(Handled::SinkClosed) => return Ok(FollowEnd::SinkClosed),
@@ -516,6 +549,8 @@ async fn run_connection<T, H>(
     reconnected: bool,
     state: &mut State<T::Cursor>,
     handle: &mut H,
+    stop_codes: &[String],
+    stop_as_event_only: bool,
 ) -> Result<Attempt, Handled>
 where
     T: Resumable + Send + 'static,
@@ -526,7 +561,15 @@ where
     while let Some(next) = stream.next().await {
         let item = match next {
             Ok(item) => item,
-            Err(error) => return Ok(Attempt::Failed { error, delivered }),
+            Err(error) => {
+                let code = coded_error::facts_anyhow(&error).code;
+                if stop_codes.iter().any(|stop| stop == code) {
+                    let code = code.to_owned();
+                    emit(handle, Event::Stopped { code: code.clone() })?;
+                    return Ok(Attempt::Stopped { code });
+                }
+                return Ok(Attempt::Failed { error, delivered });
+            }
         };
         let cursor = item.cursor();
         let stop_code = item.stop_code().map(str::to_owned);
@@ -544,7 +587,9 @@ where
         if let Some(cursor) = cursor {
             state.cursor = Some(cursor);
         }
-        emit(handle, Event::Frame(item))?;
+        if stop_code.is_none() || !stop_as_event_only {
+            emit(handle, Event::Frame(item))?;
+        }
         delivered = true;
         if let Some(code) = stop_code {
             emit(handle, Event::Stopped { code: code.clone() })?;

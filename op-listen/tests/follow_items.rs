@@ -9,6 +9,12 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::time::Instant;
 
+fn stopping(codes: &[&str]) -> FollowOptions<String> {
+    let mut opts = FollowOptions::new();
+    opts.stop_codes = codes.iter().map(|c| (*c).to_owned()).collect();
+    opts
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum Tick {
     Msg {
@@ -19,6 +25,14 @@ enum Tick {
     Halt {
         code: String,
     },
+    /// A per-topic stop: data, not terminal.
+    TopicStop {
+        topic: String,
+    },
+    /// A resume point: carries a cursor, never a stop.
+    Position {
+        cursor: String,
+    },
 }
 
 impl Resumable for Tick {
@@ -26,7 +40,8 @@ impl Resumable for Tick {
     fn cursor(&self) -> Option<String> {
         match self {
             Tick::Msg { cursor, .. } => cursor.clone(),
-            Tick::Halt { .. } => None,
+            Tick::Halt { .. } | Tick::TopicStop { .. } => None,
+            Tick::Position { cursor } => Some(cursor.clone()),
         }
     }
     fn stop_code(&self) -> Option<&str> {
@@ -99,6 +114,8 @@ fn log_sink() -> (impl FnMut(FollowItem<Tick>) -> std::io::Result<()>, Log) {
             let line = match event {
                 FollowItem::Item(Tick::Msg { text, .. }) => format!("item:{text}"),
                 FollowItem::Item(Tick::Halt { code }) => format!("item-halt:{code}"),
+                FollowItem::Item(Tick::TopicStop { topic }) => format!("topic-stop:{topic}"),
+                FollowItem::Item(Tick::Position { cursor }) => format!("position:{cursor}"),
                 FollowItem::Reconnected { cursor, resync } => {
                     format!("reconnected:{}:{resync}", cursor.unwrap_or_default())
                 }
@@ -151,7 +168,7 @@ async fn a_clean_end_reconnects_from_the_cursor() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_stop_item_ends_without_reconnecting() {
+async fn stop_item_delivered_once_as_stopped() {
     let (connect, connects) = scripted_items(vec![
         items(vec![msg("a", "c1"), halt("op_listen.revoked")]),
         items(vec![msg("never", "c9")]),
@@ -164,11 +181,7 @@ async fn a_stop_item_ends_without_reconnecting() {
     assert_eq!(connects.lock().unwrap().len(), 1);
     assert_eq!(
         *log.lock().unwrap(),
-        vec![
-            "item:a".to_owned(),
-            "item-halt:op_listen.revoked".to_owned(),
-            "stopped:op_listen.revoked".to_owned(),
-        ]
+        vec!["item:a".to_owned(), "stopped:op_listen.revoked".to_owned(),]
     );
 }
 
@@ -242,8 +255,121 @@ async fn items_reach_the_sink_in_order_with_no_gap_or_duplicate() {
             "reconnected:c2:true".to_owned(),
             "item:c".to_owned(),
             "item:d".to_owned(),
-            "item-halt:done".to_owned(),
             "stopped:done".to_owned(),
         ]
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn listed_mid_stream_code_ends_stopped() {
+    let code = code_of(&denied());
+    let (connect, connects) = scripted_items(vec![
+        Step::Items(vec![Ok(msg("a", "c1")), Err(denied())]),
+        items(vec![msg("never", "c9")]),
+    ]);
+    let (sink, log) = log_sink();
+    let end = follow_items::<Tick, _, _>(connect, sink, stopping(&[code]))
+        .await
+        .expect("a listed code ends with Ok");
+    assert_eq!(
+        end,
+        FollowEnd::Stopped {
+            code: code.to_owned()
+        }
+    );
+    assert_eq!(connects.lock().unwrap().len(), 1);
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec!["item:a".to_owned(), format!("stopped:{code}")]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn unlisted_logical_ends_err() {
+    let (connect, connects) = scripted_items(vec![
+        Step::Items(vec![Ok(msg("a", "c1")), Err(denied())]),
+        items(vec![halt("done")]),
+    ]);
+    let (sink, _log) = log_sink();
+    let err = follow_items::<Tick, _, _>(connect, sink, stopping(&["other.code"]))
+        .await
+        .expect_err("unlisted logical error ends the follow");
+    assert_eq!(code_of(&err), "test.app.denied");
+    assert_eq!(connects.lock().unwrap().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn unlisted_transient_retries() {
+    let (connect, connects) = scripted_items(vec![
+        Step::Items(vec![Ok(msg("a", "c1")), Err(transient())]),
+        items(vec![msg("b", "c2"), halt("done")]),
+    ]);
+    let (sink, log) = log_sink();
+    follow_items::<Tick, _, _>(connect, sink, stopping(&["other.code"]))
+        .await
+        .expect("retries then stops");
+    assert_eq!(cursors(&connects), vec![None, Some("c1".to_owned())]);
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![
+            "item:a".to_owned(),
+            "reconnected:c1:false".to_owned(),
+            "item:b".to_owned(),
+            "stopped:done".to_owned(),
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn per_topic_stop_variant_flows_and_follow_continues() {
+    let (connect, connects) = scripted_items(vec![
+        items(vec![
+            msg("a", "c1"),
+            Tick::TopicStop {
+                topic: "t1".to_owned(),
+            },
+        ]),
+        items(vec![msg("b", "c2"), halt("done")]),
+    ]);
+    let (sink, log) = log_sink();
+    let end = follow_items::<Tick, _, _>(connect, sink, FollowOptions::new())
+        .await
+        .expect("a terminal stop ends it");
+    assert_eq!(
+        end,
+        FollowEnd::Stopped {
+            code: "done".to_owned()
+        }
+    );
+    assert_eq!(connects.lock().unwrap().len(), 2);
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![
+            "item:a".to_owned(),
+            "topic-stop:t1".to_owned(),
+            "reconnected:c1:false".to_owned(),
+            "item:b".to_owned(),
+            "stopped:done".to_owned(),
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn position_like_frame_advances_cursor_and_is_delivered() {
+    let (connect, connects) = scripted_items(vec![
+        items(vec![
+            msg("a", "c1"),
+            Tick::Position {
+                cursor: "c5".to_owned(),
+            },
+        ]),
+        items(vec![halt("done")]),
+    ]);
+    let (sink, log) = log_sink();
+    follow_items::<Tick, _, _>(connect, sink, FollowOptions::new())
+        .await
+        .expect("ends cleanly");
+    assert_eq!(cursors(&connects), vec![None, Some("c5".to_owned())]);
+    let log = log.lock().unwrap();
+    assert_eq!(log[1], "position:c5");
 }

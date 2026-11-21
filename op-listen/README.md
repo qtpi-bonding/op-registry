@@ -175,13 +175,29 @@ returned. A broken pipe raised by the stream itself is an ordinary failure, not
 ### Supervision
 
 `supervise` follows `StreamStep<T>` values and sends structured `Supervised<T>`
-events to its sink. It reports the fieldless `Opened` event as soon as
-`connect` succeeds, before any item, `Retrying { code }` before a retry, and
-`Stopped { code }`
-when a configured stop code is returned while opening. The `stop_codes`
-argument selects which coded connection errors end successfully. `Ended` and
-`SessionExpired` are transient and use `op_listen.ended` and
+events to its sink. `supervise_stream` is the same over a plain stream of items
+(the end of the stream is `op_listen.ended`, retried). Both report the fieldless
+`Opened` event as soon as `connect` succeeds, before any item, `Retrying { code }`
+before a retry, and `Stopped { code }` when the follow ends on a stop. A stop item
+is delivered only as `Stopped`, never as an `Item` first (`follow` and
+`follow_typed` still write the stop frame, then the stopped marker).
+`Ended` and `SessionExpired` are transient and use `op_listen.ended` and
 `op_listen.session_expired`.
+
+`FollowOptions::stop_codes` lists error codes that end any follower as
+`Stopped { code }` when they arrive as a failed open or a mid-stream error, before
+the Logical check. Without a listed code, a Logical error ends the follow with
+`Err` and any other class retries. A stop that arrives as a frame is never decided
+by this list.
+
+### What is terminal
+
+Only an item whose `Resumable::stop_code()` is `Some` ends a follow. The library
+never decides this from a frame's shape for a consumer type. The `ListenFrame`
+impl maps only `ListenFrame::Stop`. A per-topic stop is data: the consumer carries
+it as an item variant whose `stop_code()` is `None` and the follow continues. A
+frame whose `cursor()` is `Some` and `stop_code()` is `None` (a position frame)
+is delivered and advances the resume cursor.
 
 ### Printing to stdout
 

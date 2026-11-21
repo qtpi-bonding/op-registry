@@ -1,6 +1,6 @@
 //! Wire frames emitted by a listen stream.
 
-use crate::ListenCursor;
+use crate::{ListenCursor, Resumable};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[serde(
@@ -32,5 +32,26 @@ impl<S, I> ListenFrame<S, I> {
             Self::Snapshot { cursor, .. } | Self::Item { cursor, .. } => Some(*cursor),
             Self::Stop { .. } => None,
         }
+    }
+}
+
+/// A listen frame is resumable by its cursor. Only a `Stop` frame is terminal
+/// and only a resync `Snapshot` is a resync.
+impl<S, I> Resumable for ListenFrame<S, I> {
+    type Cursor = ListenCursor;
+
+    fn cursor(&self) -> Option<ListenCursor> {
+        ListenFrame::cursor(self)
+    }
+
+    fn stop_code(&self) -> Option<&str> {
+        match self {
+            Self::Stop { code, .. } => Some(code),
+            _ => None,
+        }
+    }
+
+    fn resync(&self) -> bool {
+        matches!(self, Self::Snapshot { resync: true, .. })
     }
 }
