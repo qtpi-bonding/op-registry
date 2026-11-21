@@ -171,7 +171,8 @@ enum Attempt {
 /// Mutable state carried across connections.
 struct State<C> {
     cursor: Option<C>,
-    connections: u64,
+    /// Connect attempts so far, failed opens included.
+    attempts: u64,
     backoff: Backoff,
     failures: u32,
 }
@@ -530,17 +531,20 @@ where
 {
     let mut state = State {
         cursor: opts.initial_cursor.clone(),
-        connections: 0,
+        attempts: 0,
         backoff: opts.backoff.clone(),
         failures: 0,
     };
     loop {
         let connect_cursor = state.cursor.clone().or_else(|| opts.initial_cursor.clone());
         let mut connected_at: Option<Instant> = None;
+        // Any attempt after the first makes the next delivered item the first
+        // of a reconnection, whether the earlier attempt failed to open, ended
+        // empty or served.
+        let reconnected = state.attempts > 0;
+        state.attempts += 1;
         let attempt = match connect(connect_cursor.clone()).await {
             Ok(stream) => {
-                let reconnected = state.connections > 0;
-                state.connections += 1;
                 connected_at = Some(Instant::now());
                 if config.opened {
                     match emit(&mut handle, Event::Opened) {

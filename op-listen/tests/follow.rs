@@ -381,7 +381,6 @@ mod stream_follow {
     #[tokio::test(start_paused = true)]
     async fn marker_before_first_frame_of_reconnection() {
         let (connect, connects) = scripted(vec![
-            Step::Frames(vec![Ok(item("a", "0:2")), Err(transient())]),
             Step::ConnectErr(transient()),
             Step::ConnectErr(transient()),
             frames(vec![
@@ -394,14 +393,34 @@ mod stream_follow {
         assert_eq!(
             out,
             vec![
-                item("a", "0:2"),
-                marker(json!("0:2"), true),
+                marker(Value::Null, true),
                 snap(true, "0:9"),
                 item("b", "0:10"),
                 stop("op_listen.revoked"),
             ]
         );
         assert_eq!(stopped_code(&err).as_deref(), Some("op_listen.revoked"));
+        assert_eq!(cursors(&connects), vec![None, None, None]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn marker_follows_a_served_connection_and_failed_opens() {
+        let (connect, connects) = scripted(vec![
+            Step::Frames(vec![Ok(item("a", "0:2")), Err(transient())]),
+            Step::ConnectErr(transient()),
+            Step::ConnectErr(transient()),
+            frames(vec![snap(true, "0:9"), stop("op_listen.revoked")]),
+        ]);
+        let (out, _) = run(follow_stream(connect, opts(), default_marker)).await;
+        assert_eq!(
+            out,
+            vec![
+                item("a", "0:2"),
+                marker(json!("0:2"), true),
+                snap(true, "0:9"),
+                stop("op_listen.revoked"),
+            ]
+        );
         assert_eq!(
             cursors(&connects),
             vec![None, Some(lc(0, 2)), Some(lc(0, 2)), Some(lc(0, 2))]
@@ -534,7 +553,14 @@ mod stream_follow {
         };
         let (connect, connects) = scripted(script());
         let (out, err) = run(follow_stream(connect, limited(Some(2)), default_marker)).await;
-        assert_eq!(out, vec![item("a", "0:1"), stop("op_listen.revoked")]);
+        assert_eq!(
+            out,
+            vec![
+                marker(Value::Null, false),
+                item("a", "0:1"),
+                stop("op_listen.revoked")
+            ]
+        );
         assert_eq!(stopped_code(&err).as_deref(), Some("op_listen.revoked"));
         assert_eq!(connects.lock().unwrap().len(), 3);
 
