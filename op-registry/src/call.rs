@@ -188,5 +188,30 @@ impl std::fmt::Debug for CallFailure {
     }
 }
 
+/// The code, class and overrides of the inner error.
+impl coded_error::CodedError for CallFailure {
+    fn code(&self) -> &'static str {
+        coded_error::facts_anyhow(&self.error).code
+    }
+
+    fn class(&self) -> coded_error::ErrorClass {
+        coded_error::facts_anyhow(&self.error).class
+    }
+
+    fn overrides(&self) -> coded_error::Overrides {
+        coded_error::facts_anyhow(&self.error).overrides
+    }
+}
+
+impl CallFailure {
+    /// An `anyhow::Error` that keeps the code and class and whose `Display`
+    /// is redacted. A plain `?` into `anyhow::Error` loses the code (the
+    /// source chain is empty on purpose): on a typed path, use
+    /// `.map_err(CallFailure::into_coded)?`.
+    pub fn into_coded(self) -> anyhow::Error {
+        coded_error::into_anyhow(self)
+    }
+}
+
 /// The source chain is left out: its messages are not redacted.
 impl std::error::Error for CallFailure {}

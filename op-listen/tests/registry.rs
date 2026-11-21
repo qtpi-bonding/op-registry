@@ -97,7 +97,7 @@ fn listen_entry_is_a_cli_only_streaming_op_and_absent_from_the_tool_list() {
             .await
             .err()
             .expect("bad cursor must fail");
-        assert_eq!(code_of(&err), "op_listen.bad_cursor");
+        assert_eq!(code_of(err.error()), "op_listen.bad_cursor");
 
         // A good cursor resumes after it.
         let s = registry

@@ -110,7 +110,10 @@ fn each_paths_set_reaches_exactly_its_surfaces() {
         ));
         match typed {
             Ok(out) => assert!(declared(Surface::Typed) && out.done, "{set:?}"),
-            Err(err) => assert!(!declared(Surface::Typed) && is_wrong_path(&err), "{set:?}"),
+            Err(err) => assert!(
+                !declared(Surface::Typed) && is_wrong_path(err.error()),
+                "{set:?}"
+            ),
         }
 
         let tool = futures_executor::block_on(call_tool(

@@ -256,7 +256,7 @@ fn missing_caller_is_refused_before_authorize_is_called() {
             .await
             .err()
             .expect("no caller must be refused");
-        let facts = coded_error::facts_anyhow(&err);
+        let facts = coded_error::facts_anyhow(err.error());
         assert_eq!(facts.code, "op_listen.no_caller");
         assert_eq!(facts.class, coded_error::ErrorClass::Logical);
         assert!(l.authorize_calls().is_empty(), "authorize must not run");

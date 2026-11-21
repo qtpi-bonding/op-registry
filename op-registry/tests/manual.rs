@@ -509,7 +509,7 @@ fn out_is_refused_off_the_command_line() {
     ))
     .unwrap_err();
     assert_eq!(
-        coded_error::facts_anyhow(&err).code,
+        coded_error::facts_anyhow(err.error()).code,
         "op_registry.usage.invalid"
     );
     assert!(!dir.exists(), "nothing is written off the command line");

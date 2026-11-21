@@ -3,9 +3,11 @@
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
+use op_registry::cli::{self, Io, NoHooks};
 use op_registry::{
-    Access, Audience, CallHook, CallInfo, CallOptions, CallPath, Caller, Notice, NoticeSink,
-    Notices, Op, OpParams, OpSpec, Paths, Registry, Surface, TraceParent,
+    Access, Audience, CallFailure, CallHook, CallInfo, CallOptions, CallPath, Caller, CliContext,
+    Notice, NoticeSink, Notices, Op, OpGlobals, OpParams, OpSpec, Paths, Registry, Surface,
+    TraceParent,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -14,6 +16,16 @@ use std::time::Duration;
 
 struct Ctx;
 impl op_registry::Resolve for Ctx {}
+
+#[derive(Debug, OpGlobals)]
+struct NoGlobals {}
+
+impl CliContext for Ctx {
+    type Globals = NoGlobals;
+    fn from_globals(_globals: &NoGlobals) -> anyhow::Result<Self> {
+        Ok(Ctx)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, OpParams)]
 struct Pick {
@@ -35,6 +47,63 @@ enum AppError {
     #[error("the app failed")]
     #[coded(code = "failed", class = Logical)]
     Failed,
+    #[error("mapped")]
+    #[coded(code = "mapped", class = Logical)]
+    Mapped,
+}
+
+/// Maps an `io::Error` to the app's coded error; everything else passes.
+fn map_io(err: anyhow::Error) -> anyhow::Error {
+    if err.downcast_ref::<std::io::Error>().is_some() {
+        coded_error::into_anyhow(AppError::Mapped)
+    } else {
+        err
+    }
+}
+
+/// Maps every error it sees.
+fn map_all(_err: anyhow::Error) -> anyhow::Error {
+    coded_error::into_anyhow(AppError::Mapped)
+}
+
+/// Maps every error to a different code than `map_io` does.
+fn map_other(_err: anyhow::Error) -> anyhow::Error {
+    coded_error::into_anyhow(AppError::Failed)
+}
+
+#[derive(Clone, OpParams)]
+struct Leaky {
+    #[op(secret)]
+    token: Option<String>,
+}
+
+struct IoFail;
+impl Op for IoFail {
+    type Ctx = Ctx;
+    type Params = Pick;
+    type Output = Out;
+    const NAME: &'static str = "io_fail";
+}
+struct Leak;
+impl Op for Leak {
+    type Ctx = Ctx;
+    type Params = Leaky;
+    type Output = Out;
+    const NAME: &'static str = "leak";
+}
+struct OpenFail;
+impl Op for OpenFail {
+    type Ctx = Ctx;
+    type Params = Pick;
+    type Output = Out;
+    const NAME: &'static str = "open_fail";
+}
+struct ItemFail;
+impl Op for ItemFail {
+    type Ctx = Ctx;
+    type Params = Leaky;
+    type Output = Out;
+    const NAME: &'static str = "item_fail";
 }
 
 struct Probe;
@@ -100,6 +169,40 @@ fn registry() -> Registry<Ctx> {
                 o.notices.notice("x");
                 o.notices.progress(1, Some(2), "l");
                 Ok(Out { ok: true })
+            })
+        },
+    );
+    r.push_op(
+        OpSpec::<Pick, Out>::new("io_fail", "Fails with io."),
+        |_c: &Ctx, _p: Pick, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Out>> {
+            Box::pin(async { Err(std::io::Error::other("disk gone").into()) })
+        },
+    );
+    r.push_op(
+        OpSpec::<Leaky, Out>::new("leak", "Leaks its secret."),
+        |_c: &Ctx, p: Leaky, _o: CallOptions| -> BoxFuture<'_, anyhow::Result<Out>> {
+            Box::pin(
+                async move { Err(anyhow::anyhow!("rejected {}", p.token.unwrap_or_default())) },
+            )
+        },
+    );
+    r.push_stream(
+        OpSpec::<Pick, Out>::new("open_fail", "Fails to open."),
+        |_c: &Ctx, _p: Pick, _cur, _o: CallOptions| {
+            Box::pin(async { Err(std::io::Error::other("no socket").into()) })
+        },
+    );
+    r.push_stream(
+        OpSpec::<Leaky, Out>::new("item_fail", "Fails on an item."),
+        |_c: &Ctx, p: Leaky, _cur, _o: CallOptions| {
+            let token = p.token.unwrap_or_default();
+            Box::pin(async move {
+                Ok(Box::pin(futures_util::stream::iter(vec![
+                    Ok(Out { ok: true }),
+                    Err(anyhow::Error::from(std::io::Error::other(format!(
+                        "dropped {token}"
+                    )))),
+                ])) as BoxStream<'_, anyhow::Result<Out>>)
             })
         },
     );
@@ -235,7 +338,7 @@ async fn typed_error_keeps_concrete_type() {
         .call_typed::<Boom>(&Ctx, pick(), CallOptions::default())
         .await
         .unwrap_err();
-    assert!(coded_error::downcast_ref::<AppError>(&err).is_some());
+    assert!(coded_error::downcast_ref::<AppError>(err.error()).is_some());
 }
 
 #[tokio::test]
@@ -253,7 +356,7 @@ async fn typed_path_runs_validate() {
         .await
         .unwrap_err();
     assert_eq!(
-        coded_error::facts_anyhow(&err).code,
+        coded_error::facts_anyhow(err.error()).code,
         "op_registry.usage.one_of"
     );
 }
@@ -283,7 +386,7 @@ async fn typed_type_mismatch_is_wrong_shape() {
         .await
         .unwrap_err();
     assert_eq!(
-        coded_error::facts_anyhow(&err).code,
+        coded_error::facts_anyhow(err.error()).code,
         "op_registry.call.wrong_shape"
     );
     let err = r
@@ -292,7 +395,7 @@ async fn typed_type_mismatch_is_wrong_shape() {
         .err()
         .unwrap();
     assert_eq!(
-        coded_error::facts_anyhow(&err).code,
+        coded_error::facts_anyhow(err.error()).code,
         "op_registry.call.wrong_shape"
     );
 }
@@ -320,7 +423,7 @@ async fn hook_dropping_call_is_error_not_hang() {
     .expect("no hang");
     let err = result.unwrap_err();
     assert!(err.to_string().contains("call hook did not run the call"));
-    assert_eq!(coded_error::facts_anyhow(&err).code, "unknown");
+    assert_eq!(coded_error::facts_anyhow(err.error()).code, "unknown");
     assert_eq!(ERRORS.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
@@ -419,7 +522,220 @@ async fn wrong_shape_is_checked_before_decoding() {
         .err()
         .unwrap();
     assert_eq!(
-        coded_error::facts_anyhow(&err).code,
+        coded_error::facts_anyhow(err.error()).code,
         "op_registry.call.wrong_shape"
     );
+}
+
+fn code_of(failure: &CallFailure) -> &'static str {
+    coded_error::facts_anyhow(failure.error()).code
+}
+
+fn run_cli(r: &Registry<Ctx>, args: &[&str]) -> (u8, String) {
+    let argv: Vec<std::ffi::OsString> = std::iter::once("app")
+        .chain(args.iter().copied())
+        .map(Into::into)
+        .collect();
+    let (io, cap) = Io::memory(b"", false, false);
+    let code = futures_executor::block_on(cli::run_with_io(r, argv, &NoHooks, io));
+    (code, cap.stderr())
+}
+
+#[tokio::test]
+async fn mapper_rewrites_io_error_on_every_surface() {
+    let mut r = registry();
+    r.set_error_mapper(map_io);
+    let (_, line) = run_cli(&r, &["io_fail", "--id", "a"]);
+    assert!(line.contains("test.app.mapped"), "{line}");
+    let err = r
+        .call("io_fail", json!({"id": "a"}), &Ctx, CallOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(code_of(&err), "test.app.mapped");
+    let err = op_registry::mcp::call_tool(
+        &r,
+        &Ctx,
+        Audience::Agent,
+        "io_fail",
+        json!({"id": "a"}),
+        CallOptions::default(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(code_of(&err), "test.app.mapped");
+    let err = r
+        .call_typed::<IoFail>(&Ctx, pick(), CallOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(code_of(&err), "test.app.mapped");
+}
+
+#[tokio::test]
+async fn hook_on_error_sees_mapped_error() {
+    let (mut r, rec) = hooked();
+    r.set_error_mapper(map_io);
+    r.call_typed::<IoFail>(&Ctx, pick(), CallOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(rec.errors.lock().unwrap().as_slice(), ["mapped"]);
+}
+
+#[tokio::test]
+async fn usage_error_not_mapped() {
+    let (mut r, rec) = hooked();
+    r.set_error_mapper(map_all);
+    let err = r
+        .call(
+            "probe",
+            json!({"id": "a", "name": "b"}),
+            &Ctx,
+            CallOptions::default(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(code_of(&err), "op_registry.usage.one_of");
+    let err = r
+        .call_typed::<Probe>(
+            &Ctx,
+            Pick {
+                id: None,
+                name: None,
+            },
+            CallOptions::default(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(code_of(&err), "op_registry.usage.one_of");
+    let (code, line) = run_cli(&r, &["probe", "--id", "a", "--name", "b"]);
+    assert_eq!(code, 2, "{line}");
+    assert!(rec.errors.lock().unwrap().is_empty());
+    // An op error is mapped.
+    let err = r
+        .call_typed::<Boom>(&Ctx, pick(), CallOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(code_of(&err), "test.app.mapped");
+}
+
+#[tokio::test]
+async fn merge_keeps_receiver_mapper() {
+    let mut receiver: Registry<Ctx> = Registry::new();
+    receiver.set_error_mapper(map_io);
+    let mut other = registry();
+    other.set_error_mapper(map_other);
+    receiver.merge(other);
+    let err = receiver
+        .call_typed::<IoFail>(&Ctx, pick(), CallOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(code_of(&err), "test.app.mapped");
+}
+
+#[tokio::test]
+async fn typed_error_redacts_secret_param() {
+    let r = registry();
+    let leaky = Leaky {
+        token: Some("hunter2".into()),
+    };
+    let err = r
+        .call_typed::<Leak>(&Ctx, leaky, CallOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(err.to_string(), "rejected <secret>");
+    assert!(!format!("{err:?}").contains("hunter2"));
+}
+
+#[tokio::test]
+async fn typed_failure_downcasts_to_op_error() {
+    let r = registry();
+    let err = r
+        .call_typed::<Boom>(&Ctx, pick(), CallOptions::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        coded_error::downcast_ref::<AppError>(err.error()),
+        Some(AppError::Failed)
+    ));
+}
+
+#[tokio::test]
+async fn into_coded_keeps_code() {
+    let r = registry();
+    let err = r
+        .call_typed::<Boom>(&Ctx, pick(), CallOptions::default())
+        .await
+        .unwrap_err();
+    let coded = err.into_coded();
+    assert_eq!(coded_error::facts_anyhow(&coded).code, "test.app.failed");
+    let leaky = Leaky {
+        token: Some("hunter2".into()),
+    };
+    let err = r
+        .call_typed::<Leak>(&Ctx, leaky, CallOptions::default())
+        .await
+        .unwrap_err();
+    assert!(!format!("{:#}", err.into_coded()).contains("hunter2"));
+}
+
+#[tokio::test]
+async fn stream_open_and_item_errors_are_call_failures() {
+    let r = registry();
+    let open: Result<BoxStream<'_, Result<serde_json::Value, CallFailure>>, CallFailure> = r
+        .call_stream(
+            "open_fail",
+            json!({"id": "a"}),
+            &Ctx,
+            CallOptions::default(),
+            None,
+        )
+        .await;
+    assert!(open.is_err());
+    let open = r
+        .call_stream_typed::<OpenFail>(&Ctx, pick(), CallOptions::default(), None)
+        .await;
+    assert!(open.is_err());
+    let leaky = || Leaky {
+        token: Some("hunter2".into()),
+    };
+    let items: Vec<_> = r
+        .call_stream_typed::<ItemFail>(&Ctx, leaky(), CallOptions::default(), None)
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    let err = items[1].as_ref().unwrap_err();
+    assert!(err.to_string().contains("dropped <secret>"), "{err}");
+    let items: Vec<_> = r
+        .call_stream(
+            "item_fail",
+            json!({"token": "hunter2"}),
+            &Ctx,
+            CallOptions::default(),
+            None,
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    let err = items[1].as_ref().unwrap_err();
+    assert!(err.to_string().contains("dropped <secret>"), "{err}");
+}
+
+#[tokio::test]
+async fn stream_item_errors_are_mapped() {
+    let mut r = registry();
+    r.set_error_mapper(map_io);
+    let items: Vec<_> = r
+        .call_stream_typed::<ItemFail>(&Ctx, Leaky { token: None }, CallOptions::default(), None)
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    assert_eq!(code_of(items[1].as_ref().unwrap_err()), "test.app.mapped");
+    let err = r
+        .call_stream_typed::<OpenFail>(&Ctx, pick(), CallOptions::default(), None)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(code_of(&err), "test.app.mapped");
 }

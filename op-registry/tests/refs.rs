@@ -292,7 +292,7 @@ async fn unknown_ref_is_apps_not_found_on_every_path() {
         .call_typed::<GetOp>(&ctx, p, CallOptions::default())
         .await
         .unwrap_err();
-    assert_eq!(code(&err), "fix.build.not_found");
+    assert_eq!(code(err.error()), "fix.build.not_found");
     // typed
     let err = r
         .call_typed::<GetOp>(
@@ -304,7 +304,7 @@ async fn unknown_ref_is_apps_not_found_on_every_path() {
         )
         .await
         .unwrap_err();
-    assert_eq!(code(&err), "fix.build.not_found");
+    assert_eq!(code(err.error()), "fix.build.not_found");
     // ambiguity propagates unchanged
     let err = r
         .call("get", json!({"id": "dup"}), &ctx, CallOptions::default())
@@ -395,7 +395,7 @@ async fn kind_ref_flag_resolves() {
         .call_typed::<WaitsOp>(&ctx, p, CallOptions::default())
         .await
         .unwrap_err();
-    assert_eq!(code(&err), "fix.build.not_found");
+    assert_eq!(code(err.error()), "fix.build.not_found");
     // Known values resolve, including the Vec.
     let out = r
         .call(
@@ -520,7 +520,7 @@ async fn resolution_failure_reaches_the_hook_on_every_path() {
         )
         .await
         .unwrap_err();
-    assert_eq!(code(&err), "fix.build.not_found");
+    assert_eq!(code(err.error()), "fix.build.not_found");
     assert_eq!(hook.arounds.lock().unwrap().as_slice(), ["get", "get"]);
     assert_eq!(
         hook.errors.lock().unwrap().as_slice(),
@@ -616,7 +616,7 @@ async fn non_utf8_path_in_scope_is_a_usage_error() {
         .call_typed::<DottedOp>(&ctx, dotted_typed(bad, None), CallOptions::default())
         .await
         .unwrap_err();
-    assert_eq!(code(&err), "op_registry.usage.invalid");
+    assert_eq!(code(err.error()), "op_registry.usage.invalid");
     assert!(ctx.seen_paths.lock().unwrap().is_empty());
 }
 
@@ -1102,7 +1102,7 @@ async fn malformed_id_is_usage_invalid_every_surface() {
         )
         .await
         .unwrap_err();
-    assert_eq!(code(&err), "op_registry.usage.invalid");
+    assert_eq!(code(err.error()), "op_registry.usage.invalid");
     // MCP
     let err = mcp::call_tool(
         &r,

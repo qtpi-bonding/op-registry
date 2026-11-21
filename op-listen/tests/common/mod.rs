@@ -339,9 +339,9 @@ impl Listener<Ctx> for StateListener {
 }
 
 /// Drain a frame stream into JSON values, panicking on stream errors.
-pub async fn frames_json<S>(mut s: S) -> Vec<serde_json::Value>
+pub async fn frames_json<S, E: std::fmt::Debug>(mut s: S) -> Vec<serde_json::Value>
 where
-    S: futures_util::Stream<Item = anyhow::Result<serde_json::Value>> + Unpin,
+    S: futures_util::Stream<Item = Result<serde_json::Value, E>> + Unpin,
 {
     let mut out = Vec::new();
     while let Some(v) = s.next().await {

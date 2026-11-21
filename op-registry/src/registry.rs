@@ -222,6 +222,10 @@ pub(crate) struct Group {
     pub summary: String,
 }
 
+/// Rewrites an error before any surface sees it (see
+/// [`Registry::set_error_mapper`]).
+pub(crate) type ErrorMapper = fn(anyhow::Error) -> anyhow::Error;
+
 /// A declaration-ordered collection of operations.
 pub struct Registry<C> {
     pub(crate) entries: Vec<Entry<C>>,
@@ -234,6 +238,8 @@ pub struct Registry<C> {
     /// Kinds the server resolves: the library passes their refs through raw.
     pub(crate) server_kinds: HashSet<&'static str>,
     pub(crate) hook: Arc<dyn CallHook>,
+    /// Rewrites the error of resolution or an op, once, in the pipeline.
+    pub(crate) error_mapper: Option<ErrorMapper>,
     /// Extra (non-op) commands, in declaration order.
     pub(crate) extras: Vec<crate::cli::Extra>,
     /// The root fallback, when there is one.
@@ -271,6 +277,7 @@ impl<C: Sync> Registry<C> {
             about: "",
             server_kinds: HashSet::new(),
             hook: Arc::new(NoHook),
+            error_mapper: None,
             extras: Vec::new(),
             fallback: None,
             #[cfg(feature = "testing")]
@@ -282,6 +289,15 @@ impl<C: Sync> Registry<C> {
     /// `merge` keeps the receiver's hook.
     pub fn set_call_hook(&mut self, hook: Arc<dyn CallHook>) {
         self.hook = hook;
+    }
+
+    /// Sets the error mapper. It runs once per error of resolution or of an
+    /// op (and per stream item error), before the hook's `on_error`, strict
+    /// codes, the CLI exit and every surface's output. It never sees decode,
+    /// validate or other `op_registry.usage.*` errors. `merge` keeps the
+    /// receiver's mapper.
+    pub fn set_error_mapper(&mut self, mapper: ErrorMapper) {
+        self.error_mapper = Some(mapper);
     }
 
     /// Names the pillar this registry belongs to.

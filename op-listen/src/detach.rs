@@ -5,7 +5,7 @@ use anyhow::Result;
 use futures_util::future::BoxFuture;
 use futures_util::stream::{self, BoxStream};
 use futures_util::StreamExt;
-use op_registry::{CallOptions, Registry};
+use op_registry::{CallFailure, CallOptions, Registry};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
@@ -48,7 +48,7 @@ where
                 {
                     Ok(stream) => stream,
                     Err(error) => {
-                        let _ = first_tx.send(Err(error));
+                        let _ = first_tx.send(Err(error.into_coded()));
                         return;
                     }
                 };
@@ -64,6 +64,9 @@ where
                         item = stream.next() => item,
                     };
                     let Some(item) = item else { return };
+                    // The class survives for the follower's decision and the
+                    // text stays redacted.
+                    let item = item.map_err(CallFailure::into_coded);
                     if tx.send(item).await.is_err() {
                         return;
                     }

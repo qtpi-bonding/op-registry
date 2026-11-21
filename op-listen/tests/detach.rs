@@ -478,3 +478,92 @@ fn runtime_shutdown_cancelling_the_task_just_ends_the_stream() {
     );
     assert!(futures_executor::block_on(s.next()).is_none());
 }
+
+#[derive(Debug, thiserror::Error, coded_error::CodedError)]
+#[coded(namespace = "test.leak")]
+enum Leaked {
+    #[error("rejected {0}")]
+    #[coded(code = "rejected", class = Logical)]
+    Rejected(String),
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, op_registry::OpParams)]
+struct SecretTopic {
+    topic: String,
+    #[op(secret)]
+    token: Option<String>,
+}
+
+/// Opens a source that yields one item, then a Logical error whose text
+/// holds the secret parameter.
+struct Leaky;
+
+impl Listener<Ctx> for Leaky {
+    type Params = SecretTopic;
+    type Snapshot = ();
+    type Item = String;
+
+    fn topic(&self, params: &Self::Params) -> String {
+        params.topic.clone()
+    }
+    fn epoch(&self) -> u64 {
+        0
+    }
+    fn authorize<'a>(
+        &'a self,
+        _ctx: &'a Ctx,
+        _caller: &'a Caller,
+        _topic: &'a str,
+    ) -> BoxFuture<'a, anyhow::Result<Grant>> {
+        async { Ok(Grant::default()) }.boxed()
+    }
+    fn open<'a>(
+        &'a self,
+        _ctx: &'a Ctx,
+        params: Self::Params,
+        _cursor: Option<ListenCursor>,
+        _floor: Option<ListenCursor>,
+    ) -> BoxFuture<'a, anyhow::Result<Opened<'a, Self::Snapshot, Self::Item>>> {
+        async move {
+            let token = params.token.unwrap_or_default();
+            let err = coded_error::into_anyhow(Leaked::Rejected(token));
+            Ok(Opened::replay(source(vec![ok(1, "a"), Err(err)])))
+        }
+        .boxed()
+    }
+}
+
+#[tokio::test]
+async fn detached_logical_item_error_ends_with_code_redacted() {
+    let mut registry: Registry<Ctx> = Registry::new();
+    registry.group("log", "Log.");
+    listen_entry(
+        &mut registry,
+        Arc::new(Leaky),
+        OpSpec::new("log listen", "listens to the log"),
+    );
+    let mut inner = detached_connect(
+        Arc::new(registry),
+        Arc::new(Ctx),
+        "log_listen".to_owned(),
+        json!({"topic": "t", "token": "hunter2"}),
+        caller("alice"),
+    );
+    let connects = Arc::new(AtomicUsize::new(0));
+    let counter = connects.clone();
+    let connect = move |cursor: Option<ListenCursor>| {
+        counter.fetch_add(1, Ordering::SeqCst);
+        inner(cursor)
+    };
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let err = follow(connect, sink_to(&lines), small_backoff())
+        .await
+        .err()
+        .expect("a logical item error ends follow");
+    assert_eq!(code_of(&err), "test.leak.rejected");
+    assert_eq!(connects.load(Ordering::SeqCst), 1);
+    let text = format!("{err:#}");
+    assert!(text.contains("<secret>"), "{text}");
+    assert!(!text.contains("hunter2"), "{text}");
+    assert!(!lines.lock().unwrap().iter().any(|l| l.contains("hunter2")));
+}

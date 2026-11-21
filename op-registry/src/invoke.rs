@@ -15,6 +15,7 @@ use crate::{
 use anyhow::Result;
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
+use futures_util::StreamExt;
 use serde_json::Value;
 use std::any::Any;
 use std::sync::{Arc, Mutex};
@@ -50,6 +51,43 @@ fn redactor_of(secrets: Vec<Vec<u8>>) -> Redactor {
         redactor.add(&secret);
     }
     redactor
+}
+
+/// Applies the registry's error mapper to an error, except a usage error
+/// (decode, validate or `check_id`), which is never mapped.
+fn map_error(
+    mapper: Option<fn(anyhow::Error) -> anyhow::Error>,
+    err: anyhow::Error,
+) -> anyhow::Error {
+    match mapper {
+        Some(mapper)
+            if !coded_error::facts_anyhow(&err)
+                .code
+                .starts_with("op_registry.usage.") =>
+        {
+            mapper(err)
+        }
+        _ => err,
+    }
+}
+
+/// Maps each error item of a stream with the registry's mapper.
+fn map_items<'a, T: Send + 'a>(
+    mapper: Option<fn(anyhow::Error) -> anyhow::Error>,
+    stream: BoxStream<'a, Result<T>>,
+) -> BoxStream<'a, Result<T>> {
+    match mapper {
+        Some(_) => Box::pin(stream.map(move |item| item.map_err(|err| map_error(mapper, err)))),
+        None => stream,
+    }
+}
+
+/// Wraps each error item of a stream in a [`CallFailure`] with `redactor`.
+fn failures<'a, T: Send + 'a>(
+    stream: BoxStream<'a, Result<T>>,
+    redactor: Redactor,
+) -> BoxStream<'a, std::result::Result<T, CallFailure>> {
+    Box::pin(stream.map(move |item| item.map_err(|err| CallFailure::new(err, redactor.clone()))))
 }
 
 fn wrong_shape(name: &str) -> anyhow::Error {
@@ -107,7 +145,8 @@ impl<C: Resolve> Registry<C> {
     }
 
     /// Calls a streaming operation by name with JSON arguments. The hook
-    /// wraps the opening of the stream only.
+    /// wraps the opening of the stream only. Every failure, the open's and
+    /// each item's, is a [`CallFailure`] carrying the call's redactor.
     pub async fn call_stream<'a>(
         &'a self,
         name: &str,
@@ -115,12 +154,20 @@ impl<C: Resolve> Registry<C> {
         ctx: &'a C,
         opts: CallOptions,
         cursor: Option<Cursor>,
-    ) -> Result<BoxStream<'a, Result<Value>>> {
+    ) -> std::result::Result<BoxStream<'a, std::result::Result<Value, CallFailure>>, CallFailure>
+    {
         let path = json_path(&opts);
-        let params = self.decode_json(name, args, &path, true)?;
-        self.call_stream_decoded(name, params, ctx, opts, cursor, path, Redactor::default())
-            .await
-            .result
+        let params = self
+            .decode_json(name, args, &path, true)
+            .map_err(CallFailure::plain)?;
+        let invocation = self
+            .call_stream_decoded(name, params, ctx, opts, cursor, path, Redactor::default())
+            .await;
+        let redactor = invocation.redactor;
+        match invocation.result {
+            Ok(stream) => Ok(failures(stream, redactor)),
+            Err(error) => Err(CallFailure::new(error, redactor)),
+        }
     }
 
     /// Decodes JSON arguments and opens a stream op on `path`. The kit's
@@ -254,6 +301,7 @@ impl<C: Resolve> Registry<C> {
         if let Err(err) = &result {
             self.strict(name, err);
         }
+        let result = result.map(|stream| map_items(self.error_mapper, stream));
         Invocation {
             result,
             redactor,
@@ -346,8 +394,9 @@ impl<C: Resolve> Registry<C> {
         });
         self.hook.around(&info, call).await;
         let taken = slot.lock().expect("the slot lock is never poisoned").take();
-        let outcome =
-            taken.unwrap_or_else(|| Err(anyhow::anyhow!("call hook did not run the call")));
+        let outcome = taken
+            .unwrap_or_else(|| Err(anyhow::anyhow!("call hook did not run the call")))
+            .map_err(|err| map_error(self.error_mapper, err));
         if let Err(err) = &outcome {
             self.hook.on_error(&info, err);
         }
@@ -362,15 +411,16 @@ impl<C: Resolve + 'static> Registry<C> {
         ctx: &C,
         mut params: O::Params,
         mut opts: CallOptions,
-    ) -> Result<O::Output> {
-        let entry = self.entry(O::NAME)?;
-        check_path(entry, O::NAME, Surface::Typed)?;
+    ) -> std::result::Result<O::Output, CallFailure> {
+        let entry = self.entry(O::NAME).map_err(CallFailure::plain)?;
+        check_path(entry, O::NAME, Surface::Typed).map_err(CallFailure::plain)?;
         let f = entry
             .typed
             .downcast_ref::<TypedUnary<C, O::Params, O::Output>>()
-            .ok_or_else(|| wrong_shape(O::NAME))?;
-        crate::OpParams::validate(&params)?;
+            .ok_or_else(|| CallFailure::plain(wrong_shape(O::NAME)))?;
         let redactor = redactor_of(params.secrets());
+        crate::OpParams::validate(&params)
+            .map_err(|error| CallFailure::new(error, redactor.clone()))?;
         opts.notices = opts.notices.redacting(&redactor);
         opts.path = Some(CallPath::Typed);
         let info = self.info(entry, &params, CallPath::Typed, &opts, &redactor);
@@ -385,7 +435,7 @@ impl<C: Resolve + 'static> Registry<C> {
         if let Err(err) = &result {
             self.strict(O::NAME, err);
         }
-        result
+        result.map_err(|error| CallFailure::new(error, redactor))
     }
 
     /// Opens the streaming operation `O::NAME` with typed parameters. The
@@ -396,15 +446,17 @@ impl<C: Resolve + 'static> Registry<C> {
         mut params: O::Params,
         mut opts: CallOptions,
         cursor: Option<Cursor>,
-    ) -> Result<BoxStream<'a, Result<O::Output>>> {
-        let entry = self.entry(O::NAME)?;
-        check_path(entry, O::NAME, Surface::Typed)?;
+    ) -> std::result::Result<BoxStream<'a, std::result::Result<O::Output, CallFailure>>, CallFailure>
+    {
+        let entry = self.entry(O::NAME).map_err(CallFailure::plain)?;
+        check_path(entry, O::NAME, Surface::Typed).map_err(CallFailure::plain)?;
         let f = entry
             .typed
             .downcast_ref::<TypedStream<C, O::Params, O::Output>>()
-            .ok_or_else(|| wrong_shape(O::NAME))?;
-        crate::OpParams::validate(&params)?;
+            .ok_or_else(|| CallFailure::plain(wrong_shape(O::NAME)))?;
         let redactor = redactor_of(params.secrets());
+        crate::OpParams::validate(&params)
+            .map_err(|error| CallFailure::new(error, redactor.clone()))?;
         opts.notices = opts.notices.redacting(&redactor);
         opts.path = Some(CallPath::Typed);
         let info = self.info(entry, &params, CallPath::Typed, &opts, &redactor);
@@ -419,7 +471,10 @@ impl<C: Resolve + 'static> Registry<C> {
         if let Err(err) = &result {
             self.strict(O::NAME, err);
         }
-        result
+        match result {
+            Ok(stream) => Ok(failures(map_items(self.error_mapper, stream), redactor)),
+            Err(error) => Err(CallFailure::new(error, redactor)),
+        }
     }
 }
 
