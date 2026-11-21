@@ -410,3 +410,129 @@ fn following_entry_lists_stopped_in_descriptor_and_manual() {
         "{manual}"
     );
 }
+
+/// A listener whose every open fails with `fail`, recording the cursor of each
+/// attempt, and whose `follow_options` come from the test.
+struct FailingOpen {
+    fail: fn() -> anyhow::Error,
+    opens: std::sync::Mutex<Vec<Option<op_listen::ListenCursor>>>,
+    options: op_listen::FollowOptions,
+}
+
+impl FailingOpen {
+    fn new(fail: fn() -> anyhow::Error, options: op_listen::FollowOptions) -> Arc<Self> {
+        Arc::new(Self {
+            fail,
+            opens: std::sync::Mutex::new(Vec::new()),
+            options,
+        })
+    }
+    fn opened_at(&self) -> Vec<Option<op_listen::ListenCursor>> {
+        self.opens.lock().unwrap().clone()
+    }
+}
+
+impl op_listen::Listener<CliCtx> for FailingOpen {
+    type Params = TopicParams;
+    type Snapshot = ();
+    type Item = String;
+
+    fn topic(&self, params: &TopicParams) -> String {
+        params.topic.clone()
+    }
+    fn epoch(&self) -> u64 {
+        0
+    }
+    fn authorize<'a>(
+        &'a self,
+        _ctx: &'a CliCtx,
+        _caller: &'a Caller,
+        _topic: &'a str,
+    ) -> futures_util::future::BoxFuture<'a, anyhow::Result<op_listen::Grant>> {
+        Box::pin(async { Ok(op_listen::Grant::default()) })
+    }
+    fn open<'a>(
+        &'a self,
+        _ctx: &'a CliCtx,
+        _params: TopicParams,
+        cursor: Option<op_listen::ListenCursor>,
+        _floor: Option<op_listen::ListenCursor>,
+    ) -> futures_util::future::BoxFuture<'a, anyhow::Result<op_listen::Opened<'a, (), String>>>
+    {
+        self.opens.lock().unwrap().push(cursor);
+        let error = (self.fail)();
+        Box::pin(async move { Err(error) })
+    }
+    fn follow_options(&self) -> op_listen::FollowOptions {
+        self.options.clone()
+    }
+}
+
+/// Runs `log_follow` on `listener` and returns the code the stream ends with.
+async fn follow_end_code(listener: Arc<FailingOpen>, opts: CallOptions) -> &'static str {
+    let mut registry = Registry::new();
+    registry.set_bin("app", "0.0.0", "toy");
+    registry.group("log", "Log.");
+    op_listen::listen_entry_following(
+        &mut registry,
+        listener,
+        OpSpec::new("log follow", "follows the log"),
+    );
+    let mut s = registry
+        .call_stream(
+            "log_follow",
+            json!({"topic": "t"}),
+            &CliCtx,
+            opts.with_caller(Caller("tester".to_owned())),
+            None,
+        )
+        .await
+        .unwrap();
+    let mut end = None;
+    while let Some(next) = futures_util::StreamExt::next(&mut s).await {
+        if let Err(e) = next {
+            end = Some(e);
+        }
+    }
+    code_of(end.expect("ends with an error").error())
+}
+
+fn fast_backoff() -> op_listen::Backoff {
+    op_listen::Backoff::new(
+        std::time::Duration::from_millis(1),
+        std::time::Duration::from_millis(1),
+    )
+}
+
+#[tokio::test(start_paused = true)]
+async fn following_entry_uses_listener_follow_options_unless_the_call_sets_them() {
+    let options = |stop: &[&str]| {
+        let mut o = op_listen::FollowOptions::default();
+        o.backoff = fast_backoff();
+        o.max_retries = Some(2);
+        o.initial_cursor = Some(lc(0, 1));
+        o.stop_codes = stop.iter().map(|c| (*c).to_owned()).collect();
+        o
+    };
+
+    // The listener's max_retries (2 retries, 3 attempts) and initial cursor
+    // apply when the call sets neither.
+    let listener = FailingOpen::new(transient, options(&[]));
+    let end = follow_end_code(listener.clone(), CallOptions::default()).await;
+    assert_eq!(end, "test.app.transient");
+    assert_eq!(listener.opened_at(), vec![Some(lc(0, 1)); 3]);
+
+    // A call that sets max_retries overrides the listener's.
+    let listener = FailingOpen::new(transient, options(&[]));
+    follow_end_code(listener.clone(), CallOptions::default().with_max_retries(0)).await;
+    assert_eq!(listener.opened_at(), vec![Some(lc(0, 1))]);
+
+    // The listener's stop_codes turn a failing open into `op_listen.stopped`;
+    // without them the error ends the follow as itself.
+    let listener = FailingOpen::new(denied, options(&["test.app.denied"]));
+    let end = follow_end_code(listener.clone(), CallOptions::default()).await;
+    assert_eq!(end, "op_listen.stopped");
+    let listener = FailingOpen::new(denied, options(&[]));
+    let end = follow_end_code(listener.clone(), CallOptions::default()).await;
+    assert_eq!(end, "test.app.denied");
+}
