@@ -132,6 +132,7 @@ pub enum OpKind {
 /// One way of reaching an operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Surface {
     /// The command line.
     Cli,
